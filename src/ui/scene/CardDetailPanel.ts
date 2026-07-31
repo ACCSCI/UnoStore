@@ -46,13 +46,16 @@ export class CardDetailPanel {
       const name = effect?.name ?? entry.hearth.effectId;
       const cost = effect?.cost ?? 0;
       const desc = effect?.description ?? '效果未知';
-      const art = hearthCardDataURL(entry.hearth);
-      this.el.innerHTML = `
-        <div class="detail-art"><img src="${art}" alt="${name}" /></div>
-        <div class="detail-cost">${cost}</div>
-        <div class="detail-name hearth">${name}</div>
-        <div class="detail-desc">${desc}</div>
-        <div class="detail-hint">点击打出</div>`;
+      // 插画异步加载完成后生成卡面 dataURL
+      void hearthCardDataURL(entry.hearth).then((art) => {
+        if (!this.el) return;
+        this.el.innerHTML = `
+          <div class="detail-art"><img src="${art}" alt="${name}" /></div>
+          <div class="detail-cost">${cost}</div>
+          <div class="detail-name hearth">${name}</div>
+          <div class="detail-desc">${desc}</div>
+          <div class="detail-hint">点击打出</div>`;
+      });
     } else if (entry.uno) {
       const c = entry.uno;
       let name: string;

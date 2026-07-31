@@ -11,12 +11,12 @@ import { createHearthCardMesh } from './HearthCardRenderer';
  * - 点击触发回调
  */
 
-const BASE_Y = 0.36;
-const HOVER_Y = 0.62;
+const BASE_Y = 0.4;
+const HOVER_Y = 0.68;
 const HOVER_SCALE = 1.25;
-const OVERLAP = 0.34; // 牌间错开距离（< 牌宽 0.55 → 堆叠效果）
-const ROW_Z = 4.35; // 手牌行距玩家侧
-const CARD_TILT = -0.22; // 微倾，牌面朝上偏玩家
+const OVERLAP = 0.46; // 牌间间距（接近牌宽 0.55，减少重叠）
+const ROW_Z = 3.6; // 手牌行上移，避免底部裁切
+const CARD_TILT = -0.28; // 微倾，牌面朝上偏玩家
 
 export interface HandCardEntry {
   id: string;

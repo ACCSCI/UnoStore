@@ -7,7 +7,16 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!dist", "!node_modules", "!docs", "!scripts/qa_test.mjs", "!screenshots"]
+    "includes": [
+      "**",
+      "!dist",
+      "!node_modules",
+      "!docs",
+      "!scripts/qa_test.mjs",
+      "!scripts/qa_test2.mjs",
+      "!scripts/qa_test3.mjs",
+      "!screenshots"
+    ]
   },
   "formatter": {
     "enabled": true,

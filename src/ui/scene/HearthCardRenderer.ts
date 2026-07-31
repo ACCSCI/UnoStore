@@ -249,7 +249,7 @@ export function createHearthCardMesh(card: HearthCard): THREE.Mesh {
 }
 
 /** 详情面板用卡面 dataURL（程序化底 + 插画叠加） */
-export function hearthCardDataURL(card: HearthCard): string {
+export function hearthCardDataURL(card: HearthCard): Promise<string> {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 352;
@@ -263,11 +263,16 @@ export function hearthCardDataURL(card: HearthCard): string {
     effect?.name ?? card.effectId,
     effect?.cost ?? 0
   );
-  // 插画叠加（加载完成时裁剪进插画窗并重绘）
-  const img = new Image();
-  img.onload = () => {
-    drawHearthArtInWindow(ctx, 256, 352, img);
-  };
-  img.src = `/assets/images/hearth/${card.effectId}.webp`;
-  return canvas.toDataURL('image/png');
+  return new Promise((resolve) => {
+    // 插画异步加载完成后画入并导出（避免空窗快照）
+    const img = new Image();
+    img.onload = () => {
+      drawHearthArtInWindow(ctx, 256, 352, img);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => {
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.src = `/assets/images/hearth/${card.effectId}.webp`;
+  });
 }

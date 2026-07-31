@@ -137,12 +137,14 @@ export class BattleScreen extends Screen {
     if (this.session?.phase !== 'playing') return;
     const r = storyDispatch(this.session, { type: 'drawUno', player: 0 });
     if (r.ok) this.afterAction();
+    else this.setStatus(`✗ ${r.error}`);
   }
 
   private endTurn(): void {
     if (this.session?.phase !== 'playing') return;
     const r = storyDispatch(this.session, { type: 'endTurn', player: 0 });
     if (r.ok) this.afterAction();
+    else this.setStatus(`✗ ${r.error}`);
   }
 
   /** 3D 卡牌点击：Uno 出牌 / 炉石出牌 */
@@ -177,8 +179,11 @@ export class BattleScreen extends Screen {
     const s = this.session.state;
     const p = s.players[0]!;
     const opp = s.players[1]!;
-    // 有质感的彩色状态栏：顶牌用颜色名 + 数值，水晶用图标
+    // 有质感的彩色状态栏：顶牌用颜色名 + 数值，万能牌显示所选颜色
     const top = s.topCard ? fmtCardFull(s.topCard) : '-';
+    const topColor = s.chosenColor
+      ? `<span class="stat color-chip" style="background:${COLOR_HEX[s.chosenColor]}">当前颜色</span>`
+      : '';
     const turnLabel = s.turn === 0 ? '🫵 你的回合' : `🤖 ${this.match.opponentName} 回合`;
     this.statusEl.innerHTML =
       `<span class="turn-tag ${s.turn === 0 ? 'mine' : 'opponent'}">${turnLabel}</span>` +
@@ -186,12 +191,19 @@ export class BattleScreen extends Screen {
       `<span class="stat" title="冻结中，下回合解冻">🧊 冻结 ${p.frozen}</span>` +
       `<span class="stat" title="本回合还能打几张 Uno 牌">🎯 行动 ${s.unoActionsLeft}</span>` +
       `<span class="stat">顶牌 ${top}</span>` +
+      topColor +
       `<span class="stat opponent-hand" title="${this.match.opponentName} 的手牌数">🂠 对手 ${opp.hand.length} 张</span>`;
     // 3D 手牌同步：Uno + 炉石，可打高亮（索引 → 卡牌 ID）
     const playableIdx = playerPlayableIndices(this.session);
     const playable = new Set(playableIdx.map((i) => p.hand[i]!.id));
     this.view?.syncHand(p.hand, p.hearthHand, playable);
     this.view?.syncTable(s.unoDraw.length, s.topCard);
+    // 按钮状态：抽牌仅在自己回合且无牌可打时可用；结束回合仅在自己回合可用
+    this.view?.setActionEnabled(
+      0,
+      s.turn === 0 && s.unoActionsLeft > 0 && playableIdx.length === 0
+    );
+    this.view?.setActionEnabled(1, s.turn === 0);
   }
 
   private setStatus(msg: string): void {
@@ -240,6 +252,13 @@ const COLOR_NAMES: Record<string, string> = {
   blue: '蓝',
 };
 
+const COLOR_HEX: Record<string, string> = {
+  red: '#e74c3c',
+  yellow: '#f1c40f',
+  green: '#2ecc71',
+  blue: '#3498db',
+};
+
 const ACTION_NAMES: Record<string, string> = {
   skip: '跳过',
   reverse: '反转',
@@ -250,6 +269,10 @@ const ACTION_NAMES: Record<string, string> = {
 };
 
 function fmtCardFull(c: { color: string | null; value: string }): string {
-  if (c.color === null) return ACTION_NAMES[c.value] ?? `*${c.value}`;
+  if (c.color === null) {
+    const action = ACTION_NAMES[c.value] ?? `*${c.value}`;
+    // 万能牌：显示所选颜色（chosenColor）
+    return action;
+  }
   return `${COLOR_NAMES[c.color] ?? c.color} ${c.value}`;
 }

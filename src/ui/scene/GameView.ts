@@ -107,6 +107,11 @@ export class GameView {
     this.tableCenter?.sync(deckCount, discardTop);
   }
 
+  /** 设置操作按钮可用/禁用 */
+  setActionEnabled(index: number, enabled: boolean): void {
+    this.actionBar?.setButtonEnabled(index, enabled);
+  }
+
   /** 出牌飞行动画：牌从手牌位置飞到弃牌堆（贝塞尔弧线） */
   playCardAnimation(from: THREE.Vector3): void {
     // 创建一个临时卡牌飞行
