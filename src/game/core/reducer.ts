@@ -11,7 +11,7 @@ import type { UnoAction, UnoCard } from '../uno/types';
 import type { ActionResult, GameEvent } from './events';
 import { beginTurn, canPlayAny, checkUnoAlert, drawPublic, nextActiveFrom } from './flow';
 import { Rng } from './rng';
-import type { GameAction, GameState, HearthCard, PlayerState } from './state';
+import type { BossRulesMap, GameAction, GameState, HearthCard, PlayerState } from './state';
 
 /**
  * 规则引擎核心：createGame 建局，dispatch 处理行动。
@@ -23,8 +23,14 @@ function buildHearthDeck(effectIds: string[], rng: Rng): HearthCard[] {
   return rng.shuffle(effectIds.map((id, i) => ({ id: `h-${i}`, effectId: id })));
 }
 
-/** 创建一局游戏：每人 7 Uno + 3 炉石；seed 决定整局（可复现） */
-export function createGame(playerCount: number, hearthEffectIds: string[], seed = 42): GameState {
+/** 创建一局游戏：每人 7 Uno + 3 炉石；seed 决定整局（可复现）。
+ *  bossRules[i] 为玩家 i 的特殊规则（剧情 Boss 用），索引对齐 players。 */
+export function createGame(
+  playerCount: number,
+  hearthEffectIds: string[],
+  seed = 42,
+  bossRules: BossRulesMap = {}
+): GameState {
   const rng = new Rng(seed);
   const players: PlayerState[] = [];
   for (let i = 0; i < playerCount; i++) {
@@ -50,6 +56,7 @@ export function createGame(playerCount: number, hearthEffectIds: string[], seed 
     players,
     unoDraw: unoDeck,
     unoDiscard: [top],
+    bossRules,
     turn: 0,
     direction: 1,
     phase: 'playUno',
@@ -69,7 +76,7 @@ export function createGame(playerCount: number, hearthEffectIds: string[], seed 
     }
   }
   state.pendingEvents.push({ type: 'gameStart' });
-  startTurn(state, rng, 0);
+  startTurn(state, rng, 0, bossRules);
   state.log.push(`对局开始：${playerCount} 人，seed=${seed}`);
   return state;
 }
@@ -263,12 +270,12 @@ function endTurnAction(
   state.pendingEvents.push(event);
   // 结束回合：先解冻水晶，再推进到下一位（skipQueue 在 beginTurn 消费）
   const next = beginTurn(state);
-  startTurn(state, rng, next);
+  startTurn(state, rng, next, state.bossRules);
   return { ok: true, events: [event] };
 }
 
-/** 开始某玩家回合：罚抽 → 抽 1 张炉石牌（私人牌组）→ 重置行动 */
-function startTurn(state: GameState, rng: Rng, player: number): void {
+/** 开始某玩家回合：罚抽 → 抽 1 张炉石牌（私人牌组）→ Boss 规则 → 重置行动 */
+function startTurn(state: GameState, rng: Rng, player: number, bossRules: BossRulesMap = {}): void {
   const p = state.players[player]!;
   if (p.pendingDraw > 0) {
     const drawn = drawPublic(state, rng, p.pendingDraw);
@@ -281,6 +288,12 @@ function startTurn(state: GameState, rng: Rng, player: number): void {
     });
     p.pendingDraw = 0;
   }
+  // Boss 特殊规则：额外水晶直接进 free（本回合可用）
+  const boss = bossRules[player];
+  if (boss?.bonusCrystalPerTurn) {
+    p.free += boss.bonusCrystalPerTurn;
+    state.log.push(`玩家 ${player} Boss 规则：+${boss.bonusCrystalPerTurn} 水晶`);
+  }
   const hearth = p.hearthDeck.pop();
   if (hearth) p.hearthHand.push(hearth);
   state.pendingEvents.push({
@@ -290,7 +303,7 @@ function startTurn(state: GameState, rng: Rng, player: number): void {
     drawHearth: hearth?.id ?? null,
   });
   state.turn = player;
-  state.unoActionsLeft = UNO_ACTIONS_PER_TURN;
+  state.unoActionsLeft = (boss?.extraUnoActions ?? 0) + UNO_ACTIONS_PER_TURN;
   state.massSkipUsed = false;
   state.phase = 'playUno';
   state.log.push(`玩家 ${player} 回合开始`);

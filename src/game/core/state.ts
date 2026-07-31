@@ -1,6 +1,16 @@
 import type { UnoCard } from '../uno/types';
 import type { GameEvent } from './events';
 
+/** Boss 特殊规则（剧情模式）：玩家 index → 规则 */
+export interface BossRules {
+  /** 每回合开始额外获得的水晶（直接进 free） */
+  bonusCrystalPerTurn?: number;
+  /** 每回合额外 Uno 行动 */
+  extraUnoActions?: number;
+}
+
+export type BossRulesMap = Record<number, BossRules>;
+
 /** 游戏阶段 */
 export type GamePhase = 'playUno' | 'playHearth' | 'gameOver';
 
@@ -37,6 +47,8 @@ export interface GameState {
   unoDraw: UnoCard[];
   /** 弃牌堆（顶在末尾） */
   unoDiscard: UnoCard[];
+  /** Boss 特殊规则（玩家 index → 规则，剧情模式用） */
+  bossRules: BossRulesMap;
   /** 当前行动玩家 index */
   turn: number;
   direction: 1 | -1;
