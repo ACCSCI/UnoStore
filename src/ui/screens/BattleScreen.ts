@@ -200,6 +200,7 @@ export class BattleScreen extends Screen {
     const playable = new Set(playableIdx.map((i) => p.hand[i]!.id));
     this.view?.syncHand(p.hand, p.hearthHand, playable);
     this.view?.syncTable(s.unoDraw.length, s.topCard);
+    this.view?.syncOpponentHand(opp.hand.length);
     // 按钮状态：抽牌仅在自己回合且无牌可打时可用；结束回合仅在自己回合可用
     this.view?.setActionEnabled(
       0,

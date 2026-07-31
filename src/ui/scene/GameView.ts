@@ -4,6 +4,7 @@ import type { UnoCard } from '../../game/uno/types';
 import { loadGameAssets } from '../assets/loader';
 import { CardDetailPanel } from './CardDetailPanel';
 import { HandRenderer } from './HandRenderer';
+import { OpponentHandRenderer } from './OpponentHandRenderer';
 import { TableCenterRenderer } from './TableCenter';
 import { UIActionBar } from './UIActionBar';
 
@@ -21,6 +22,7 @@ export class GameView {
   private rafId = 0;
   private readonly container: HTMLElement;
   private hand: HandRenderer | null = null;
+  private opponentHand: OpponentHandRenderer | null = null;
   private tableCenter: TableCenterRenderer | null = null;
   private detailPanel: CardDetailPanel = new CardDetailPanel(document.body);
   private actionBar: UIActionBar | null = null;
@@ -71,6 +73,7 @@ export class GameView {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.onResize);
     this.hand?.dispose();
+    this.opponentHand?.dispose();
     this.tableCenter?.dispose();
     this.actionBar?.remove();
     this.renderer.dispose();
@@ -90,6 +93,7 @@ export class GameView {
     );
     this.detailPanel = new CardDetailPanel(container);
     this.tableCenter = new TableCenterRenderer(this.scene);
+    this.opponentHand = new OpponentHandRenderer(this.scene);
     // UI 操作栏：抽牌 / 结束回合（右侧垂直居中，对齐）
     this.actionBar = new UIActionBar(container);
     this.actionBar.addButton('抽牌', () => this.onDrawClick(), 'primary');
@@ -105,6 +109,11 @@ export class GameView {
   /** 同步桌面中央（牌堆 + 弃牌堆） */
   syncTable(deckCount: number, discardTop: UnoCard | null): void {
     this.tableCenter?.sync(deckCount, discardTop);
+  }
+
+  /** 同步对手手牌（牌背数量） */
+  syncOpponentHand(count: number): void {
+    this.opponentHand?.sync(count);
   }
 
   /** 设置操作按钮可用/禁用 */
