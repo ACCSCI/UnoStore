@@ -107,6 +107,33 @@ export class GameView {
     this.tableCenter?.sync(deckCount, discardTop);
   }
 
+  /** 出牌飞行动画：牌从手牌位置飞到弃牌堆（贝塞尔弧线） */
+  playCardAnimation(from: THREE.Vector3): void {
+    // 创建一个临时卡牌飞行
+    const geo = new THREE.BoxGeometry(0.5, 0.03, 0.65);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.4 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(from);
+    this.scene.add(mesh);
+    const to = new THREE.Vector3(1.2, 0.36, 0);
+    const via = new THREE.Vector3((from.x + to.x) / 2, 2.0, (from.z + to.z) / 2);
+    const curve = new THREE.CubicBezierCurve3(from, via, via, to);
+    const start = performance.now();
+    const duration = 400;
+    const step = (): void => {
+      const t = Math.min((performance.now() - start) / duration, 1);
+      const e = 1 - (1 - t) ** 3; // easeOutCubic
+      mesh.position.copy(curve.getPoint(e));
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        this.scene.remove(mesh);
+        geo.dispose();
+      }
+    };
+    requestAnimationFrame(step);
+  }
+
   private onResize = (): void => {
     const w = this.container.clientWidth || 800;
     const h = this.container.clientHeight || 600;

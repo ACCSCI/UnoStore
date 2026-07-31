@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { StoryMatch, StorySession } from '../../game/story';
 import {
   completeChapter,
@@ -12,6 +13,7 @@ import {
   storyDispatch,
 } from '../../game/story';
 import { audio } from '../audio/AudioManager';
+import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import { Screen } from './Screen';
@@ -108,26 +110,26 @@ export class BattleScreen extends Screen {
     if (this.session?.phase === 'gameOver') this.finish();
   }
 
-  /** 玩家出牌（从 UI 按钮） */
+  /** 玩家出牌（从 3D 手牌点击）；Wild 类先弹颜色选择 */
   private playUno(idx: number): void {
     if (this.session?.phase !== 'playing') return;
     if (this.session.state.turn !== 0) return;
     const card = this.session.state.players[0]!.hand[idx]!;
-    const color =
-      card.color === null
-        ? ((prompt('选择颜色 (red/yellow/green/blue)') ?? undefined) as
-            | 'red'
-            | 'yellow'
-            | 'green'
-            | 'blue'
-            | undefined)
-        : undefined;
-    const r = storyDispatch(this.session, { type: 'playUno', player: 0, cardIdx: idx, color });
-    if (r.ok) {
-      audio.playSfx('/assets/audio/sfx/card_flip.mp3');
-      this.afterAction();
+    const doPlay = (color?: 'red' | 'yellow' | 'green' | 'blue'): void => {
+      if (!this.session) return;
+      const r = storyDispatch(this.session, { type: 'playUno', player: 0, cardIdx: idx, color });
+      if (r.ok) {
+        audio.playSfx('/assets/audio/sfx/card_flip.mp3');
+        this.view?.playCardAnimation(new THREE.Vector3(0, 0.6, 4.2));
+        this.afterAction();
+      } else {
+        this.setStatus(`✗ ${r.error}`);
+      }
+    };
+    if (card.color === null) {
+      void pickColor(this.root).then(doPlay);
     } else {
-      this.setStatus(`✗ ${r.error}`);
+      doPlay();
     }
   }
 
@@ -174,6 +176,7 @@ export class BattleScreen extends Screen {
     if (!(this.session && this.statusEl)) return;
     const s = this.session.state;
     const p = s.players[0]!;
+    const opp = s.players[1]!;
     // 有质感的彩色状态栏：顶牌用颜色名 + 数值，水晶用图标
     const top = s.topCard ? fmtCardFull(s.topCard) : '-';
     const turnLabel = s.turn === 0 ? '🫵 你的回合' : `🤖 ${this.match.opponentName} 回合`;
@@ -182,7 +185,8 @@ export class BattleScreen extends Screen {
       `<span class="stat" title="打出数字牌产出的可用水晶">💎 水晶 ${p.free}</span>` +
       `<span class="stat" title="冻结中，下回合解冻">🧊 冻结 ${p.frozen}</span>` +
       `<span class="stat" title="本回合还能打几张 Uno 牌">🎯 行动 ${s.unoActionsLeft}</span>` +
-      `<span class="stat">顶牌 ${top}</span>`;
+      `<span class="stat">顶牌 ${top}</span>` +
+      `<span class="stat opponent-hand" title="${this.match.opponentName} 的手牌数">🂠 对手 ${opp.hand.length} 张</span>`;
     // 3D 手牌同步：Uno + 炉石，可打高亮（索引 → 卡牌 ID）
     const playableIdx = playerPlayableIndices(this.session);
     const playable = new Set(playableIdx.map((i) => p.hand[i]!.id));
