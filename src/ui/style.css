@@ -452,6 +452,22 @@ body {
   background: #ffd700;
 }
 
+.tutorial-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.tutorial-btn.prev {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f0e6d2;
+}
+
+.tutorial-btn.prev:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── 结算 ── */
 .result-overlay {
   position: absolute;

@@ -49,15 +49,27 @@ export class TutorialOverlay {
   private renderStep(onDone: () => void): void {
     if (!this.el) return;
     const step = STEPS[this.step]!;
+    const isFirst = this.step === 0;
+    const isLast = this.step === STEPS.length - 1;
     this.el.innerHTML = `
       <div class="tutorial-card">
         <div class="tutorial-title">${step.title}</div>
         <div class="tutorial-desc">${step.desc}</div>
         <div class="tutorial-dots">${STEPS.map((_, i) => `<span class="dot${i === this.step ? ' active' : ''}"></span>`).join('')}</div>
-        <button class="btn tutorial-btn">${this.step < STEPS.length - 1 ? '下一步 →' : '开始游戏 🎮'}</button>
+        <div class="tutorial-actions">
+          <button class="btn tutorial-btn prev" ${isFirst ? 'disabled' : ''}>← 上一步</button>
+          <button class="btn tutorial-btn">${isLast ? '开始游戏 🎮' : '下一步 →'}</button>
+        </div>
       </div>`;
-    const btn = this.el.querySelector('.tutorial-btn') as HTMLButtonElement;
-    btn.addEventListener('click', () => {
+    const prevBtn = this.el.querySelector('.tutorial-btn.prev') as HTMLButtonElement | null;
+    prevBtn?.addEventListener('click', () => {
+      if (this.step > 0) {
+        this.step--;
+        this.renderStep(onDone);
+      }
+    });
+    const nextBtn = this.el.querySelector('.tutorial-btn:not(.prev)') as HTMLButtonElement;
+    nextBtn.addEventListener('click', () => {
       this.step++;
       if (this.step >= STEPS.length) {
         this.finish();
