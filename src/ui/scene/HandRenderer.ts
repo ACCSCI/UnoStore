@@ -32,8 +32,6 @@ export class HandRenderer {
   private hoverId: string | null = null;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
-  /** 金色流光状态（mesh → 相位） */
-  private glowTweens = new Map<THREE.Mesh, { phase: number }>();
 
   constructor(
     private scene: THREE.Scene,
@@ -83,59 +81,11 @@ export class HandRenderer {
     });
   }
 
-  /** 更新可打出状态（金色发光边框 = 可打） */
+  /** 更新可打出状态 */
   setPlayable(ids: Set<string>): void {
     for (const [id, mesh] of this.meshes) {
       const entry = mesh.userData.entry as HandCardEntry | undefined;
-      if (!entry) continue;
-      entry.playable = ids.has(id);
-      // 可打 → 添加金色流动边框
-      this.setGlow(mesh, entry.playable);
-    }
-  }
-
-  /** 给卡牌加/去金色流动边框（发光面片） */
-  private setGlow(mesh: THREE.Mesh, on: boolean): void {
-    if (on && !mesh.userData.glow) {
-      const glow = this.createGlow(mesh);
-      mesh.add(glow);
-      mesh.userData.glow = glow;
-      mesh.userData.glowStart = performance.now();
-    } else if (!on && mesh.userData.glow) {
-      mesh.remove(mesh.userData.glow);
-      mesh.userData.glow = undefined;
-    }
-  }
-
-  /** 创建金色流动边框（半透明面片，动画驱动旋转） */
-  private createGlow(mesh: THREE.Mesh): THREE.Mesh {
-    const w = 0.6;
-    const h = 0.78;
-    const geo = new THREE.PlaneGeometry(w, h);
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffd700,
-      transparent: true,
-      opacity: 0.65,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const glow = new THREE.Mesh(geo, mat);
-    glow.position.y = 0.02; // 略高于牌面
-    // 流光动画：每帧旋转金边上的亮点
-    if (!this.glowTweens.has(mesh)) {
-      this.glowTweens.set(mesh, { phase: Math.random() * Math.PI * 2 });
-    }
-    return glow;
-  }
-
-  /** 每帧驱动金色流动 */
-  updateGlows(now: number): void {
-    for (const [mesh, state] of this.glowTweens) {
-      const glow = mesh.userData.glow as THREE.Mesh | undefined;
-      if (!glow) continue;
-      const mat = glow.material as THREE.MeshBasicMaterial;
-      const pulse = 0.55 + Math.sin(now * 0.004 + state.phase) * 0.25;
-      mat.opacity = pulse;
+      if (entry) entry.playable = ids.has(id);
     }
   }
 
