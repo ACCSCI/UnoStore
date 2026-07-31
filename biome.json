@@ -34,7 +34,7 @@
         "noConfusingVoidType": "off"
       },
       "style": {
-        "noNonNullAssertion": "warn",
+        "noNonNullAssertion": "off",
         "useConst": "error",
         "useNamingConvention": "off",
         "noUnusedTemplateLiteral": "off"
