@@ -34,8 +34,8 @@ interface TweenState {
 
 export class Tween {
   private tweens: TweenState[] = [];
-  private readonly clock = new THREE.Clock();
   private running = false;
+  private lastTime = 0;
 
   /** 补间一个对象：props 形如 { 'position.x': 5, 'scale.y': 2 } */
   to(
@@ -53,11 +53,7 @@ export class Tween {
       end[key] = value;
     }
     this.tweens.push({ target, start, end, duration, elapsed: 0, ease, onComplete, done: false });
-    if (!this.running) {
-      this.running = true;
-      this.clock.start();
-      requestAnimationFrame(this.tick);
-    }
+    this.ensureRunning();
     return this;
   }
 
@@ -84,16 +80,23 @@ export class Tween {
       curve: new THREE.CubicBezierCurve3(from, via, via, to),
     };
     this.tweens.push(state);
-    if (!this.running) {
-      this.running = true;
-      this.clock.start();
-      requestAnimationFrame(this.tick);
-    }
+    this.ensureRunning();
     return this;
   }
 
+  /** 确保 rAF 循环运行 */
+  private ensureRunning(): void {
+    if (!this.running) {
+      this.running = true;
+      this.lastTime = performance.now();
+      requestAnimationFrame(this.tick);
+    }
+  }
+
   private tick = (): void => {
-    const dt = Math.min(this.clock.getDelta(), 0.05);
+    const now = performance.now();
+    const dt = Math.min((now - this.lastTime) / 1000, 0.05);
+    this.lastTime = now;
     let anyActive = false;
     for (const t of this.tweens) {
       if (t.done) continue;

@@ -22,7 +22,6 @@ import { Screen } from './Screen';
 export class BattleScreen extends Screen {
   private session: StorySession | null = null;
   private view: GameView | null = null;
-  private playerPanel: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
 
   private opponentTimer: number | null = null;
@@ -38,9 +37,16 @@ export class BattleScreen extends Screen {
     const canvasHost = this.el('div', 'battle-canvas');
     this.root.append(canvasHost);
     this.view = new GameView(canvasHost);
+    // 注入 3D 交互回调
+    this.view.bindCallbacks({
+      onCardClick: (id, isHearth) => this.onCardClicked(id, isHearth),
+      onDrawClick: () => this.drawUno(),
+      onEndClick: () => this.endTurn(),
+    });
     this.view.start();
+    this.view.setupScene();
 
-    // UI 面板
+    // 状态栏（仅信息显示）
     const panel = this.el('div', 'battle-panel');
     const header = this.el('div', 'battle-header');
     const opponent = this.el('span', 'opponent-name', `vs ${this.match.opponentName}`);
@@ -49,10 +55,8 @@ export class BattleScreen extends Screen {
     panel.append(header);
     this.root.append(panel);
 
-    // 会话（演示：UI 挂载 3D 但操作面板驱动故事会话）
+    // 会话
     this.session = createStorySession(this.match, 7);
-    this.playerPanel = this.el('div', 'player-panel');
-    this.root.append(this.playerPanel);
     this.refreshUI();
     this.showIntro();
   }
@@ -130,55 +134,46 @@ export class BattleScreen extends Screen {
     if (r.ok) this.afterAction();
   }
 
-  /** 刷新手牌按钮 + 状态栏 */
+  /** 3D 卡牌点击：Uno 出牌 / 炉石出牌 */
+  private onCardClicked(id: string, isHearth: boolean): void {
+    if (this.session?.phase !== 'playing') return;
+    if (this.session.state.turn !== 0) return;
+    if (isHearth) {
+      const idx = this.session.state.players[0]!.hearthHand.findIndex((c) => c.id === id);
+      if (idx < 0) return;
+      const r = storyDispatch(this.session, {
+        type: 'playHearth',
+        player: 0,
+        cardIdx: idx,
+        targets: [1],
+      });
+      if (r.ok) {
+        audio.playSfx('/assets/audio/sfx/card_flip.mp3');
+        this.afterAction();
+      } else {
+        this.setStatus(`✗ ${r.error}`);
+      }
+      return;
+    }
+    const idx = this.session.state.players[0]!.hand.findIndex((c) => c.id === id);
+    if (idx < 0) return;
+    this.playUno(idx);
+  }
+
+  /** 刷新手牌（3D）+ 状态栏 */
   private refreshUI(): void {
-    if (!(this.session && this.playerPanel && this.statusEl)) return;
-    const panel = this.playerPanel;
-    const status = this.statusEl;
+    if (!(this.session && this.statusEl)) return;
     const s = this.session.state;
     const p = s.players[0]!;
-    panel.innerHTML = '';
-    status.textContent =
+    this.statusEl.textContent =
       `回合: ${s.turn === 0 ? '你' : this.match.opponentName} | ` +
       `水晶(可用/冻结): ${p.free}/${p.frozen} | ` +
       `Uno行动: ${s.unoActionsLeft} | 顶牌: ${fmtCard(s.topCard)}`;
-    const handLabel = this.el('div', 'hand-label', `手牌 [${p.hand.length}]`);
-    panel.appendChild(handLabel);
-    const playable = new Set(playerPlayableIndices(this.session));
-    p.hand.forEach((c, i) => {
-      const b = this.btn(
-        fmtCard(c),
-        () => this.playUno(i),
-        'card-btn' + (playable.has(i) ? ' playable' : '')
-      );
-      panel.appendChild(b);
-    });
-    // 炉石手牌（简版按钮）
-    const hearthLabel = this.el('div', 'hand-label', `炉石手牌 [${p.hearthHand.length}]`);
-    panel.appendChild(hearthLabel);
-    p.hearthHand.forEach((c, i) => {
-      const b = this.btn(
-        `[炉] ${c.effectId}`,
-        () => {
-          const r = storyDispatch(this.session!, {
-            type: 'playHearth',
-            player: 0,
-            cardIdx: i,
-            targets: [1],
-          });
-          if (r.ok) this.afterAction();
-          else this.setStatus(`✗ ${r.error}`);
-        },
-        'card-btn hearth-btn'
-      );
-      panel.appendChild(b);
-    });
-    const actions = this.el('div', 'actions-row');
-    actions.append(
-      this.btn('抽牌', () => this.drawUno()),
-      this.btn('结束回合', () => this.endTurn())
-    );
-    panel.appendChild(actions);
+    // 3D 手牌同步：Uno + 炉石，可打高亮（索引 → 卡牌 ID）
+    const playableIdx = playerPlayableIndices(this.session);
+    const playable = new Set(playableIdx.map((i) => p.hand[i]!.id));
+    this.view?.syncHand(p.hand, p.hearthHand, playable);
+    this.view?.syncTable(s.unoDraw.length, s.topCard);
   }
 
   private setStatus(msg: string): void {
