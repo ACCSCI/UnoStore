@@ -4,9 +4,8 @@ import { getEffect } from '../../game/hearth/effects/registry';
 
 /**
  * 炉石牌渲染（炉石传说风格）：
- * - 卡面 = mmx 生成的插画（public/assets/images/hearth/<effectId>.png）
- * - 插画未加载完时用程序化占位（颜色 + 效果名）
- * - 顶部显示费用水晶（蓝色菱形），底部显示效果名
+ * - 卡面 = mmx 生成的插画（public/assets/images/hearth/<effectId>.webp）
+ * - 插画加载完成前用程序化占位（颜色 + 效果名），加载完成后自动替换材质
  */
 
 const CARD_W = 0.55;
@@ -53,7 +52,7 @@ function fallbackTexture(effectId: string, name: string): THREE.CanvasTexture {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(name.slice(0, 6), 64, 60);
-  // 费用角标
+  // 费用角标（蓝色菱形）
   ctx.fillStyle = '#4a90d9';
   ctx.beginPath();
   ctx.moveTo(18, 10);
@@ -66,37 +65,74 @@ function fallbackTexture(effectId: string, name: string): THREE.CanvasTexture {
   return tex;
 }
 
-/** 加载 mmx 卡面纹理（缓存 + 失败回退） */
+/**
+ * 纹理加载管理：返回 fallback 纹理 + 加载完成回调注册。
+ * 卡面 webp 加载完成后，替换该效果所有已创建材质的 map。
+ */
 const textureCache = new Map<string, THREE.Texture>();
+const loadListeners = new Map<string, Set<(tex: THREE.Texture) => void>>();
+const loadStarted = new Set<string>();
 const loadFailed = new Set<string>();
 
-function loadHearthTexture(effectId: string): THREE.Texture {
-  const cached = textureCache.get(effectId);
-  if (cached) return cached;
+function loadHearthTexture(effectId: string): {
+  fallback: THREE.Texture;
+  onLoad: (cb: (tex: THREE.Texture) => void) => void;
+} {
   const effect = getEffect(effectId);
   const name = effect?.name ?? effectId;
   const fallback = fallbackTexture(effectId, name);
   textureCache.set(effectId, fallback); // 先占位，加载成功替换
-  if (loadFailed.has(effectId)) return fallback;
-  const img = new Image();
-  img.onload = () => {
-    const tex = new THREE.Texture(img);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    textureCache.set(effectId, tex);
+  const onLoad = (cb: (tex: THREE.Texture) => void): void => {
+    const cached = textureCache.get(effectId);
+    if (cached && cached !== fallback) {
+      cb(cached); // 已加载完成
+      return;
+    }
+    let set = loadListeners.get(effectId);
+    if (!set) {
+      set = new Set();
+      loadListeners.set(effectId, set);
+    }
+    set.add(cb);
   };
-  img.onerror = () => {
-    loadFailed.add(effectId);
-  };
-  img.src = `/assets/images/hearth/${effectId}.webp`;
-  return fallback;
+  // 仅首次请求发起加载（防止重复请求）
+  if (!(loadStarted.has(effectId) || loadFailed.has(effectId))) {
+    loadStarted.add(effectId);
+    const img = new Image();
+    img.onload = () => {
+      const tex = new THREE.Texture(img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      textureCache.set(effectId, tex);
+      const listeners = loadListeners.get(effectId);
+      if (listeners) {
+        for (const cb of listeners) cb(tex);
+        listeners.clear();
+      }
+    };
+    img.onerror = () => {
+      loadFailed.add(effectId);
+      const listeners = loadListeners.get(effectId);
+      if (listeners) {
+        for (const cb of listeners) cb(fallback);
+        listeners.clear();
+      }
+    };
+    img.src = `/assets/images/hearth/${effectId}.webp`;
+  }
+  return { fallback, onLoad };
 }
 
 /** 创建炉石牌 3D mesh（正面 = mmx 卡面，+y 面朝上） */
 export function createHearthCardMesh(card: HearthCard): THREE.Mesh {
   const effect = getEffect(card.effectId);
-  const frontTex = loadHearthTexture(card.effectId);
-  const front = new THREE.MeshStandardMaterial({ map: frontTex, roughness: 0.4 });
+  const { fallback, onLoad } = loadHearthTexture(card.effectId);
+  const front = new THREE.MeshStandardMaterial({ map: fallback, roughness: 0.4 });
+  // 卡面加载完成 → 替换材质纹理
+  onLoad((tex) => {
+    front.map = tex;
+    front.needsUpdate = true;
+  });
   const back = new THREE.MeshStandardMaterial({ color: 0x2c1e3f, roughness: 0.5 });
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, CARD_T, CARD_H), [
     back,
@@ -111,5 +147,6 @@ export function createHearthCardMesh(card: HearthCard): THREE.Mesh {
   // 存储效果名供 UI 显示
   mesh.userData.effectName = effect?.name ?? card.effectId;
   mesh.userData.cost = effect?.cost ?? 0;
+  mesh.userData.description = effect?.description ?? '';
   return mesh;
 }

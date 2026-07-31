@@ -6,17 +6,17 @@ import { createHearthCardMesh } from './HearthCardRenderer';
 
 /**
  * 手牌区渲染（炉石传说风格）：
- * - Uno 牌在左、炉石牌在右，合成一个手持扇形（像手里拿的牌）
- * - 可点击出牌：hover 高亮抬升 + click 触发回调
- * - 渲染只消费快照，通过回调把操作交给上层
+ * - 默认：紧凑堆叠（错开露出一小条），牌面朝上（+y）
+ * - 悬停：该牌上浮 + 放大 + 与相邻牌拉开，其余牌不变
+ * - 点击触发回调
  */
 
 const BASE_Y = 0.36;
-const HOVER_Y = 0.5;
-const FAN_ANGLE = 0.5; // 紧凑扇形（微弧，像摊在桌上）
-const FAN_RADIUS = 4.6; // 玩家侧
-const SPREAD = 0.52; // 相邻牌间距（略重叠，炉石感）
-const CARD_TILT = -0.25; // 微倾，牌面朝上偏玩家
+const HOVER_Y = 0.62;
+const HOVER_SCALE = 1.25;
+const OVERLAP = 0.34; // 牌间错开距离（< 牌宽 0.55 → 堆叠效果）
+const ROW_Z = 4.35; // 手牌行距玩家侧
+const CARD_TILT = -0.22; // 微倾，牌面朝上偏玩家
 
 export interface HandCardEntry {
   id: string;
@@ -53,7 +53,7 @@ export class HandRenderer {
     this.scene.remove(this.group);
   }
 
-  /** 同步双牌手牌：uno 数组 + hearth 数组 → 合并扇形 */
+  /** 同步双牌手牌：uno 数组 + hearth 数组 → 堆叠排列 */
   sync(uno: UnoCard[], hearth: HearthCard[]): void {
     const entries: HandCardEntry[] = [
       ...uno.map((c) => ({ id: c.id, isHearth: false, uno: c, playable: true })),
@@ -67,7 +67,7 @@ export class HandRenderer {
         this.meshes.delete(id);
       }
     }
-    // 布局：Uno 在左、炉石在右的弧形
+    // 布局：紧凑错开堆叠（Uno 左、炉石右）
     const n = entries.length;
     entries.forEach((entry, i) => {
       let mesh = this.meshes.get(entry.id);
@@ -77,16 +77,7 @@ export class HandRenderer {
         this.meshes.set(entry.id, mesh);
         this.group.add(mesh);
       }
-      // 扇形参数：-FAN_ANGLE/2 → +FAN_ANGLE/2
-      // 紧凑扇形：牌面朝上平铺（微弧排列），像摊在桌上
-      const t = n <= 1 ? 0 : i / (n - 1) - 0.5;
-      const angle = t * FAN_ANGLE;
-      const x = t * SPREAD * (n - 1) + Math.sin(angle) * 0.4;
-      const z = FAN_RADIUS - Math.cos(angle) * 0.3;
-      const y = this.hoverId === entry.id ? HOVER_Y : BASE_Y;
-      mesh.position.set(x, y, z);
-      // 牌面朝上（+z 面），微倾面向玩家
-      mesh.rotation.set(CARD_TILT, -angle * 0.8, 0);
+      this.layoutCard(entry.id, i, n);
     });
   }
 
@@ -96,6 +87,19 @@ export class HandRenderer {
       const entry = mesh.userData.entry as HandCardEntry | undefined;
       if (entry) entry.playable = ids.has(id);
     }
+  }
+
+  private layoutCard(id: string, index: number, total: number): void {
+    const mesh = this.meshes.get(id);
+    if (!mesh) return;
+    const isHover = this.hoverId === id;
+    // 默认：紧凑堆叠；悬停：上浮 + 放大
+    const x = (index - (total - 1) / 2) * OVERLAP;
+    const y = isHover ? HOVER_Y : BASE_Y;
+    const scale = isHover ? HOVER_SCALE : 1;
+    mesh.position.set(x, y, ROW_Z);
+    mesh.scale.set(scale, scale, scale);
+    mesh.rotation.set(CARD_TILT, 0, 0);
   }
 
   private handleMove = (e: PointerEvent): void => {
@@ -111,8 +115,9 @@ export class HandRenderer {
       this.hoverId = id;
       const entry = id ? (this.meshes.get(id)?.userData.entry as HandCardEntry) : null;
       this.onHover?.(entry ?? null);
-      // 重排位置（hover 抬升）
-      this.reposition();
+      // 重排（悬停牌上浮放大）
+      const entries = [...this.meshes.values()].map((m) => m.userData.entry as HandCardEntry);
+      for (let i = 0; i < entries.length; i++) this.layoutCard(entries[i]!.id, i, entries.length);
     }
   };
 
@@ -124,22 +129,6 @@ export class HandRenderer {
       if (entry) this.onClick(entry);
     }
   };
-
-  private reposition(): void {
-    const entries = [...this.meshes.values()].map((m) => m.userData.entry as HandCardEntry);
-    const n = entries.length;
-    entries.forEach((entry, i) => {
-      const mesh = this.meshes.get(entry.id);
-      if (!mesh) return;
-      const t = n <= 1 ? 0 : i / (n - 1) - 0.5;
-      const angle = t * FAN_ANGLE;
-      const x = t * SPREAD * (n - 1) + Math.sin(angle) * 0.4;
-      const z = FAN_RADIUS - Math.cos(angle) * 0.3;
-      const y = this.hoverId === entry.id ? HOVER_Y : BASE_Y;
-      mesh.position.set(x, y, z);
-      mesh.rotation.set(CARD_TILT, -angle * 0.8, 0);
-    });
-  }
 
   clear(): void {
     for (const mesh of this.meshes.values()) this.group.remove(mesh);

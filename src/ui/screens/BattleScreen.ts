@@ -44,7 +44,7 @@ export class BattleScreen extends Screen {
       onEndClick: () => this.endTurn(),
     });
     this.view.start();
-    this.view.setupScene();
+    this.view.setupScene(this.root);
 
     // 状态栏（仅信息显示）
     const panel = this.el('div', 'battle-panel');

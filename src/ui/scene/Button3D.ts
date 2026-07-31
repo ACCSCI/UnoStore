@@ -5,9 +5,9 @@ import * as THREE from 'three';
  * 悬停抬升 + 点击回调，用 Raycaster 拾取。
  */
 
-const BTN_W = 1.5;
-const BTN_H = 0.5;
-const BTN_D = 0.08;
+const BTN_W = 1.1;
+const BTN_H = 0.38;
+const BTN_D = 0.06;
 
 export class Button3D {
   private group = new THREE.Group();
@@ -34,7 +34,7 @@ export class Button3D {
     this.group.add(this.mesh);
     // 文字（Canvas 纹理，Sprite 在按钮正上方）
     const textSprite = this.makeLabel(label);
-    textSprite.position.set(0, BTN_D / 2 + 0.08, 0);
+    textSprite.position.set(0, BTN_D / 2 + 0.06, 0);
     this.group.add(textSprite);
     this.scene.add(this.group);
   }

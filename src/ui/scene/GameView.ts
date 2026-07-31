@@ -3,6 +3,7 @@ import type { HearthCard } from '../../game/core/state';
 import type { UnoCard } from '../../game/uno/types';
 import { loadGameAssets } from '../assets/loader';
 import { Button3D } from './Button3D';
+import { CardDetailPanel } from './CardDetailPanel';
 import { HandRenderer } from './HandRenderer';
 import { TableCenterRenderer } from './TableCenter';
 
@@ -21,6 +22,7 @@ export class GameView {
   private readonly container: HTMLElement;
   private hand: HandRenderer | null = null;
   private tableCenter: TableCenterRenderer | null = null;
+  private detailPanel: CardDetailPanel = new CardDetailPanel(document.body);
   private drawBtn: Button3D | null = null;
   private endBtn: Button3D | null = null;
   private raycaster = new THREE.Raycaster();
@@ -80,23 +82,26 @@ export class GameView {
   }
 
   /** 初始化手牌 + 桌面中央 + 3D 按钮 */
-  setupScene(): void {
-    this.hand = new HandRenderer(this.scene, this.renderer, this.camera, (entry) => {
-      this.onCardClick(entry.id, entry.isHearth);
-    });
-    this.tableCenter = new TableCenterRenderer(this.scene);
-    // 3D 按钮（玩家手牌下方中央，像炉石的结束回合按钮）
-    this.drawBtn = new Button3D(
+  setupScene(container: HTMLElement): void {
+    this.hand = new HandRenderer(
       this.scene,
-      '抽牌',
-      new THREE.Vector3(-1.1, 0.45, 4.4),
-      0x2e86de,
-      () => this.onDrawClick()
+      this.renderer,
+      this.camera,
+      (entry) => {
+        this.onCardClick(entry.id, entry.isHearth);
+      },
+      (entry) => this.detailPanel.show(entry)
+    );
+    this.detailPanel = new CardDetailPanel(container);
+    this.tableCenter = new TableCenterRenderer(this.scene);
+    // 3D 按钮：屏幕右侧垂直居中（像炉石的法力/结束按钮侧栏）
+    this.drawBtn = new Button3D(this.scene, '抽牌', new THREE.Vector3(6.4, 1.2, 0), 0x2e86de, () =>
+      this.onDrawClick()
     );
     this.endBtn = new Button3D(
       this.scene,
       '结束回合',
-      new THREE.Vector3(0.6, 0.45, 4.4),
+      new THREE.Vector3(6.4, 0.4, 0),
       0xe67e22,
       () => this.onEndClick()
     );
