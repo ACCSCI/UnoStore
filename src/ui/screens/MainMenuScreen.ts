@@ -15,8 +15,8 @@ export class MainMenuScreen extends Screen {
         m.ChapterSelectScreen.prototype.enter.call(new m.ChapterSelectScreen())
       );
     });
-    const btnQuick = this.btn('⚡ 快速对战（开发中）', () => {
-      alert('快速对战将在联机阶段开放');
+    const btnQuick = this.btn('⚡ 多人对战', () => {
+      void import('./MultiplayerScreen').then((m) => new m.MultiplayerScreen().enter());
     });
     const btnMute = this.btn(audio.isMuted ? '🔇 取消静音' : '🔊 静音', () => {
       audio.toggleMute();

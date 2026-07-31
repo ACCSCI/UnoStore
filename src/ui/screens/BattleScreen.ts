@@ -16,6 +16,7 @@ import { audio } from '../audio/AudioManager';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
+import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
 /**
@@ -28,6 +29,7 @@ export class BattleScreen extends Screen {
   private statusEl: HTMLElement | null = null;
 
   private opponentTimer: number | null = null;
+  private pause: PauseMenu | null = null;
   private match: StoryMatch;
 
   constructor(match: StoryMatch) {
@@ -48,6 +50,12 @@ export class BattleScreen extends Screen {
     });
     this.view.start();
     this.view.setupScene(this.root);
+
+    // ESC 暂停菜单（退出对局）
+    this.pause = new PauseMenu(this.root, () => {
+      void import('./ChapterSelectScreen').then((m) => new m.ChapterSelectScreen().enter());
+    });
+    this.pause.bind();
 
     // 状态栏（仅信息显示）
     const panel = this.el('div', 'battle-panel');
@@ -70,6 +78,7 @@ export class BattleScreen extends Screen {
 
   override exit(): void {
     if (this.opponentTimer !== null) window.clearInterval(this.opponentTimer);
+    this.pause?.unbind();
     this.view?.dispose();
     super.exit();
   }

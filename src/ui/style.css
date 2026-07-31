@@ -536,6 +536,121 @@ body {
   padding: 8px 24px;
 }
 
+/* ── 房间大厅 / 等待室 ── */
+.lobby-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 48px;
+  gap: 16px;
+  background: radial-gradient(ellipse at center, #3a2f6e 0%, #1a1540 100%);
+  overflow-y: auto;
+}
+
+.lobby-actions {
+  display: flex;
+  gap: 14px;
+}
+
+.lobby-join {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.lobby-input {
+  padding: 10px 14px;
+  font-size: 15px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f0e6d2;
+  min-width: 200px;
+}
+
+.lobby-list {
+  width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #d8cfe8;
+}
+
+.lobby-room {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 10px 16px;
+}
+
+.room-players {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player-row {
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 15px;
+  color: #f0e6d2;
+}
+
+.host-tag {
+  font-size: 14px;
+  color: #ffd700;
+  font-weight: 700;
+}
+
+.room-hint {
+  font-size: 13px;
+  color: #d8cfe8;
+  opacity: 0.8;
+}
+
+.lobby-status {
+  font-size: 15px;
+  color: #d8cfe8;
+}
+
+/* ── 暂停菜单（ESC） ── */
+.pause-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 8, 30, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 35;
+}
+
+.pause-card {
+  background: linear-gradient(180deg, rgba(40, 30, 90, 0.98), rgba(24, 18, 58, 0.96));
+  border: 2px solid #ffd700;
+  border-radius: 20px;
+  padding: 32px 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 260px;
+  text-align: center;
+  animation: tutorial-in 0.25s ease-out;
+}
+
+.pause-title {
+  font-size: 24px;
+  font-weight: 800;
+  color: #ffd700;
+  margin-bottom: 8px;
+}
+
 /* ── 结算 ── */
 .result-overlay {
   position: absolute;
