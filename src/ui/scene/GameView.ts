@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import type { UnoCard } from '../../game/uno/types';
 import { loadGameAssets } from '../assets/loader';
-import { Button3D } from './Button3D';
 import { CardDetailPanel } from './CardDetailPanel';
 import { HandRenderer } from './HandRenderer';
 import { TableCenterRenderer } from './TableCenter';
+import { UIActionBar } from './UIActionBar';
 
 /**
  * 卡通风 3D 牌桌场景。
@@ -23,10 +23,7 @@ export class GameView {
   private hand: HandRenderer | null = null;
   private tableCenter: TableCenterRenderer | null = null;
   private detailPanel: CardDetailPanel = new CardDetailPanel(document.body);
-  private drawBtn: Button3D | null = null;
-  private endBtn: Button3D | null = null;
-  private raycaster = new THREE.Raycaster();
-  private pointer = new THREE.Vector2();
+  private actionBar: UIActionBar | null = null;
 
   // 回调（由 BattleScreen 注入）
   private onCardClick: (id: string, isHearth: boolean) => void = () => {};
@@ -75,13 +72,12 @@ export class GameView {
     window.removeEventListener('resize', this.onResize);
     this.hand?.dispose();
     this.tableCenter?.dispose();
-    this.drawBtn?.dispose();
-    this.endBtn?.dispose();
+    this.actionBar?.remove();
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
 
-  /** 初始化手牌 + 桌面中央 + 3D 按钮 */
+  /** 初始化手牌 + 桌面中央 + UI 操作栏（右侧垂直居中） */
   setupScene(container: HTMLElement): void {
     this.hand = new HandRenderer(
       this.scene,
@@ -94,17 +90,10 @@ export class GameView {
     );
     this.detailPanel = new CardDetailPanel(container);
     this.tableCenter = new TableCenterRenderer(this.scene);
-    // 3D 按钮：屏幕右侧垂直居中（像炉石的法力/结束按钮侧栏）
-    this.drawBtn = new Button3D(this.scene, '抽牌', new THREE.Vector3(6.4, 1.2, 0), 0x2e86de, () =>
-      this.onDrawClick()
-    );
-    this.endBtn = new Button3D(
-      this.scene,
-      '结束回合',
-      new THREE.Vector3(6.4, 0.4, 0),
-      0xe67e22,
-      () => this.onEndClick()
-    );
+    // UI 操作栏：抽牌 / 结束回合（右侧垂直居中，对齐）
+    this.actionBar = new UIActionBar(container);
+    this.actionBar.addButton('抽牌', () => this.onDrawClick(), 'primary');
+    this.actionBar.addButton('结束回合', () => this.onEndClick(), 'danger');
   }
 
   /** 同步手牌（Uno + 炉石） */
@@ -128,22 +117,8 @@ export class GameView {
 
   private animate = (): void => {
     this.rafId = requestAnimationFrame(this.animate);
-    this.updatePointer();
     this.renderer.render(this.scene, this.camera);
   };
-
-  /** 更新指针 + 按钮悬停 */
-  private updatePointer(): void {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((this.lastMouseX ?? 0) / rect.width) * 2 - 1;
-    this.pointer.y = -((this.lastMouseY ?? 0) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    this.drawBtn?.intersect(this.raycaster);
-    this.endBtn?.intersect(this.raycaster);
-  }
-
-  private lastMouseX = 0;
-  private lastMouseY = 0;
 
   private buildLights(): void {
     const ambient = new THREE.AmbientLight(0xffffff, 0.7);

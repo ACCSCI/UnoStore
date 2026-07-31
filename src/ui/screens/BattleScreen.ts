@@ -13,6 +13,7 @@ import {
 } from '../../game/story';
 import { audio } from '../audio/AudioManager';
 import { GameView } from '../scene/GameView';
+import { TutorialOverlay } from '../scene/TutorialOverlay';
 import { Screen } from './Screen';
 
 /**
@@ -59,6 +60,10 @@ export class BattleScreen extends Screen {
     this.session = createStorySession(this.match, 7);
     this.refreshUI();
     this.showIntro();
+    // 首次对局：玩法引导
+    if (TutorialOverlay.shouldShow()) {
+      new TutorialOverlay(this.root).show(() => {});
+    }
   }
 
   override exit(): void {

@@ -1,3 +1,5 @@
+import '../hearth/cards'; // 副作用导入：注册炉石 effect（所有入口必须经过）
+
 export {
   completeChapter,
   isChapterCompleted,

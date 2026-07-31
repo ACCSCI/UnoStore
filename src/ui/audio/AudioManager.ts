@@ -7,10 +7,22 @@ class AudioManager {
   private musicEl: HTMLAudioElement | null = null;
   private sfxEls: Map<string, HTMLAudioElement> = new Map();
   private muted = false;
+  /** 用户是否已交互（解锁自动播放） */
+  private userActivated = false;
 
   constructor() {
     const saved = localStorage.getItem('unostore_muted');
     this.muted = saved === '1';
+    // 首次用户交互 → 解锁音频（浏览器自动播放策略）
+    const unlock = (): void => {
+      this.userActivated = true;
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      // 尝试恢复挂起的音乐
+      if (this.musicEl?.paused) void this.musicEl.play().catch(() => {});
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
   }
 
   /** 播放背景音乐（切换时自动停止上一首） */
@@ -21,9 +33,10 @@ class AudioManager {
     audio.loop = true;
     audio.volume = 0.5;
     audio.muted = this.muted;
-    void audio.play().catch(() => {
-      /* 自动播放策略限制，用户交互后恢复 */
-    });
+    // 未交互前挂起播放，等首次点击解锁
+    if (this.userActivated) {
+      void audio.play().catch(() => {});
+    }
     this.musicEl = audio;
   }
 
@@ -33,9 +46,10 @@ class AudioManager {
     this.musicEl = null;
   }
 
-  /** 播放音效（缓存实例） */
+  /** 播放音效（缓存实例）；未交互前挂起 */
   playSfx(src: string): void {
     if (this.muted) return;
+    if (!this.userActivated) return;
     let audio = this.sfxEls.get(src);
     if (!audio) {
       audio = new Audio(src);
