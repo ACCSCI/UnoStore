@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Bun
+bun.lockb
+bun.lock
+
+# Build output
+dist/
+build/
+
+# Blender
+*.blend1
+*.blend2
+*.blend~
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+*.swp
+
+# Logs
+*.log

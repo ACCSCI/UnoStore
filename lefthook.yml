@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/evilmartians/lefthook/master/schema.json",
+  "pre-commit": {
+    "parallel": false,
+    "commands": {
+      "biome-check": {
+        "glob": "*.{js,jsx,ts,tsx,json}",
+        "run": "bunx @biomejs/biome check --staged --error-on-warnings {staged_files}",
+        "skip": ["merge", "rebase"]
+      },
+      "typecheck": {
+        "run": "bunx tsc --noEmit",
+        "skip": ["merge", "rebase"]
+      },
+      "test": {
+        "run": "bun test",
+        "skip": ["merge", "rebase"]
+      }
+    }
+  }
+}
