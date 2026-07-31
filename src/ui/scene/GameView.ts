@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { createDefaultGame, dispatch } from '../../game';
 import { Rng } from '../../game/core/rng';
 import type { GameState } from '../../game/core/state';
+import type { UnoCard } from '../../game/uno/types';
+import { SequenceDirector } from '../anim/SequenceDirector';
 import { loadGameAssets } from '../assets/loader';
 import { HandRenderer } from './HandRenderer';
 import { TableCenterRenderer } from './TableCenter';
@@ -20,8 +22,10 @@ export class GameView {
   private readonly container: HTMLElement;
   private hand: HandRenderer | null = null;
   private tableCenter: TableCenterRenderer | null = null;
+  private director: SequenceDirector | null = null;
   private gameState: GameState | null = null;
   private gameRng: Rng | null = null;
+  private lastEventCount = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -63,6 +67,8 @@ export class GameView {
     this.gameRng = new Rng(7);
     this.hand = new HandRenderer(this.scene);
     this.tableCenter = new TableCenterRenderer(this.scene);
+    this.director = new SequenceDirector(this.scene);
+    this.lastEventCount = this.gameState.pendingEvents.length;
     // AI 驱动：每 600ms 一步（模拟对局节奏）
     const timer = window.setInterval(() => {
       if (!this.gameState || this.gameState.phase === 'gameOver') {
@@ -71,7 +77,23 @@ export class GameView {
       }
       this.autoStep();
       this.syncRender();
+      this.playNewEvents();
     }, 600);
+  }
+
+  /** 消费新增事件并交给演出导演 */
+  private playNewEvents(): void {
+    const state = this.gameState!;
+    const events = state.pendingEvents.slice(this.lastEventCount);
+    this.lastEventCount = state.pendingEvents.length;
+    if (events.length > 0) {
+      const cardById = (id: string): UnoCard | null => {
+        const inHand = state.players.flatMap((p) => p.hand).find((c) => c.id === id);
+        if (inHand) return inHand;
+        return state.unoDiscard.find((c) => c.id === id) ?? null;
+      };
+      this.director?.play(events, cardById);
+    }
   }
 
   /** AI 自动一步（demo 用；正式由故事/AI 模块驱动） */

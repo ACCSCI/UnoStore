@@ -32,9 +32,9 @@ function runAiGame(
 }
 
 const strategies = [
-  { id: 'easy', ai: new EasyRandom() },
-  { id: 'normal', ai: new NormalHeuristic() },
-  { id: 'hard', ai: new HardCombo() },
+  { id: 'easy', ai: new EasyRandom(new Rng(42)) },
+  { id: 'normal', ai: new NormalHeuristic(new Rng(42)) },
+  { id: 'hard', ai: new HardCombo(new Rng(42)) },
 ];
 
 for (const { id, ai } of strategies) {
@@ -51,7 +51,7 @@ test('AI 从不打出非法牌（引擎校验兜底）', () => {
   const deck = getDeck('combo');
   const state = createGame(2, deck.cardIds, 7);
   const rng = new Rng(7);
-  const ai = new NormalHeuristic();
+  const ai = new NormalHeuristic(new Rng(42));
   let illegal = 0;
   let steps = 0;
   while (state.phase !== 'gameOver' && steps < 400) {
@@ -90,7 +90,7 @@ test('AI 会打炉石牌（水晶消耗）', () => {
   const deck = getDeck('combo');
   const state = createGame(2, deck.cardIds, 1);
   const rng = new Rng(1);
-  const ai = new NormalHeuristic();
+  const ai = new NormalHeuristic(new Rng(42));
   // 给玩家 0 大量免费水晶
   state.players[0]!.free = 100;
   let hearthPlayed = false;
@@ -111,7 +111,7 @@ test('炉石牌效果在 AI 对局中实际生效（伤害/抽牌）', () => {
   const deck = getDeck('combo');
   const state = createGame(2, deck.cardIds, 7);
   const rng = new Rng(7);
-  const ai = new HardCombo();
+  const ai = new HardCombo(new Rng(42));
   let steps = 0;
   let effectApplied = false;
   while (state.phase !== 'gameOver' && steps < 300) {

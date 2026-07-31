@@ -1,16 +1,12 @@
-import { GameView } from './scene/GameView';
+import { MainMenuScreen } from './screens/MainMenuScreen';
+import './style.css';
 
 /**
- * 浏览器入口：启动 3D 牌桌场景。
- * 规则引擎（src/game）纯逻辑，本文件只做渲染。
+ * 浏览器入口：启动主菜单（剧情/快速对战）。
+ * 3D 场景由 GameView 在 BattleScreen 内独立驱动（Canvas rAF）。
  */
 function main(): void {
-  const container = document.getElementById('app');
-  if (!container) throw new Error('缺少 #app 容器');
-  const view = new GameView(container);
-  view.start();
-  // 暴露调试句柄
-  (window as unknown as { unoView: GameView }).unoView = view;
+  void new MainMenuScreen().enter();
 }
 
 main();

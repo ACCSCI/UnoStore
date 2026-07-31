@@ -1,3 +1,4 @@
+import type { Rng } from '../core/rng';
 import type { GameAction, GameState } from '../core/state';
 import { getEffect } from '../hearth/effects/registry';
 import { canPlayOn } from '../uno/deck';
@@ -5,8 +6,8 @@ import type { AiStrategy, BossRules } from './types';
 
 const COLORS = ['red', 'yellow', 'green', 'blue'] as const;
 
-function randomColor(): (typeof COLORS)[number] {
-  return COLORS[Math.floor(Math.random() * COLORS.length)]!;
+function randomColor(rng: Rng): (typeof COLORS)[number] {
+  return COLORS[rng.int(COLORS.length)]!;
 }
 
 function playableUno(state: GameState, player: number) {
@@ -22,19 +23,24 @@ function affordableHearth(state: GameState, player: number) {
     .filter((x) => x.cost <= p.free);
 }
 
-/** 简单：随机会出 */
+/** 简单：随机会出（注入确定性 rng） */
 export class EasyRandom implements AiStrategy {
   readonly id = 'easy';
+  private rng: Rng;
+
+  constructor(rng: Rng) {
+    this.rng = rng;
+  }
 
   decide(state: GameState, player: number): GameAction | null {
     const playable = playableUno(state, player);
     if (playable.length > 0 && state.unoActionsLeft > 0) {
-      const pick = playable[Math.floor(Math.random() * playable.length)]!;
+      const pick = playable[this.rng.int(playable.length)]!;
       return {
         type: 'playUno',
         player,
         cardIdx: pick.i,
-        color: pick.c.color === null ? randomColor() : undefined,
+        color: pick.c.color === null ? randomColor(this.rng) : undefined,
       };
     }
     if (state.unoActionsLeft > 0) return { type: 'drawUno', player };
@@ -45,6 +51,11 @@ export class EasyRandom implements AiStrategy {
 /** 普通：规则优先 + 水晶管理 */
 export class NormalHeuristic implements AiStrategy {
   readonly id = 'normal';
+  private rng: Rng;
+
+  constructor(rng: Rng) {
+    this.rng = rng;
+  }
 
   decide(state: GameState, player: number): GameAction | null {
     // 1. 有水晶 → 打最贵的炉石牌（消费优先）
@@ -70,7 +81,7 @@ export class NormalHeuristic implements AiStrategy {
         type: 'playUno',
         player,
         cardIdx: pick.i,
-        color: pick.c.color === null ? randomColor() : undefined,
+        color: pick.c.color === null ? randomColor(this.rng) : undefined,
       };
     }
     // 3. 打不出 → 抽
@@ -82,6 +93,11 @@ export class NormalHeuristic implements AiStrategy {
 /** 困难：连击规划 + 对手干扰（针对手牌最多的玩家） */
 export class HardCombo implements AiStrategy {
   readonly id = 'hard';
+  private rng: Rng;
+
+  constructor(rng: Rng) {
+    this.rng = rng;
+  }
 
   decide(state: GameState, player: number): GameAction | null {
     // 1. 有水晶 → 打炉石：优先 penalize 类（对卡最多的对手），其次最贵
@@ -112,7 +128,7 @@ export class HardCombo implements AiStrategy {
         type: 'playUno',
         player,
         cardIdx: pick.i,
-        color: pick.c.color === null ? randomColor() : undefined,
+        color: pick.c.color === null ? randomColor(this.rng) : undefined,
       };
     }
     // 3. 打不出 → 抽

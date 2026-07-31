@@ -1,0 +1,239 @@
+/* UnoStore UI 基础样式（卡通风） */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #2a2350;
+  color: #f0e6d2;
+  overflow: hidden;
+  user-select: none;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+
+/* ── 菜单 ── */
+.menu-wrap,
+.chapter-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: radial-gradient(ellipse at center, #3a2f6e 0%, #1a1540 100%);
+}
+
+.menu-title {
+  font-size: 64px;
+  letter-spacing: 8px;
+  text-shadow: 0 4px 16px rgba(255, 200, 80, 0.4);
+  color: #ffd700;
+}
+
+.menu-sub {
+  font-size: 18px;
+  opacity: 0.8;
+  margin-bottom: 24px;
+}
+
+.btn {
+  padding: 12px 32px;
+  font-size: 18px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  background: #ffd700;
+  color: #2a2350;
+  font-weight: 700;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(255, 215, 0, 0.4);
+}
+
+.btn-link {
+  background: none;
+  color: #ffd700;
+  border: 1px solid #ffd700;
+  font-size: 14px;
+  padding: 6px 16px;
+}
+
+.screen-title {
+  font-size: 32px;
+  color: #ffd700;
+}
+
+/* ── 章节选择 ── */
+.chapter-wrap {
+  justify-content: flex-start;
+  padding-top: 48px;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.chapter-card {
+  width: 420px;
+  padding: 16px 24px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.chapter-card.locked {
+  opacity: 0.5;
+}
+
+.chapter-card h3 {
+  flex: 1;
+}
+
+.chapter-desc {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.chapter-portrait {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #ffd700;
+}
+
+.lock-hint {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+/* ── 对局 ── */
+.battle-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.battle-panel {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 24px;
+  background: rgba(20, 16, 48, 0.85);
+  padding: 8px 20px;
+  border-radius: 12px;
+  font-size: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.player-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: rgba(20, 16, 48, 0.9);
+  padding: 12px 20px;
+  border-radius: 16px;
+  max-width: 90vw;
+}
+
+.hand-label {
+  font-size: 12px;
+  opacity: 0.7;
+  align-self: flex-start;
+}
+
+.card-btn {
+  padding: 8px 14px;
+  margin: 0 3px;
+  font-size: 15px;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  background: #1e2759;
+  color: #fff;
+  cursor: pointer;
+  min-width: 48px;
+}
+
+.card-btn.playable {
+  border-color: #ffd700;
+  background: #2c3e8c;
+}
+
+.card-btn.hearth-btn {
+  background: #4a1d6e;
+}
+
+.actions-row {
+  display: flex;
+  gap: 12px;
+}
+
+/* ── 对话气泡 ── */
+.dialog-bubble {
+  position: absolute;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 60vw;
+  background: rgba(20, 16, 48, 0.92);
+  border: 2px solid #ffd700;
+  border-radius: 16px;
+  padding: 14px 24px;
+  font-size: 16px;
+  animation: bubble-in 0.3s ease-out;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* ── 结算 ── */
+.result-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.result-card {
+  background: #2a2350;
+  border: 2px solid #ffd700;
+  border-radius: 20px;
+  padding: 32px 48px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: bubble-in 0.35s ease-out;
+}
