@@ -528,6 +528,14 @@ body {
   box-shadow: 0 0 20px rgba(255, 255, 255, 0.35);
 }
 
+.color-cancel {
+  margin-top: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f0e6d2;
+  font-size: 14px;
+  padding: 8px 24px;
+}
+
 /* ── 结算 ── */
 .result-overlay {
   position: absolute;

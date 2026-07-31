@@ -127,7 +127,9 @@ export class BattleScreen extends Screen {
       }
     };
     if (card.color === null) {
-      void pickColor(this.root).then(doPlay);
+      void pickColor(this.root).then((color) => {
+        if (color) doPlay(color);
+      });
     } else {
       doPlay();
     }

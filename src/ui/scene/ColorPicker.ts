@@ -1,6 +1,6 @@
 /**
  * 颜色选择弹窗（打出 Wild/万能+4 时显示）。
- * 四个彩色圆按钮，点击返回所选颜色。
+ * 四个彩色圆按钮 + 取消按钮，点击返回所选颜色或 null（取消）。
  */
 
 const COLORS = [
@@ -10,7 +10,7 @@ const COLORS = [
   { id: 'blue', label: '蓝', hex: '#3498db' },
 ] as const;
 
-export function pickColor(root: HTMLElement): Promise<'red' | 'yellow' | 'green' | 'blue'> {
+export function pickColor(root: HTMLElement): Promise<'red' | 'yellow' | 'green' | 'blue' | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'color-picker-overlay';
@@ -33,7 +33,14 @@ export function pickColor(root: HTMLElement): Promise<'red' | 'yellow' | 'green'
       });
       row.appendChild(btn);
     }
-    card.append(title, row);
+    const cancel = document.createElement('button');
+    cancel.className = 'btn color-cancel';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => {
+      overlay.remove();
+      resolve(null);
+    });
+    card.append(title, row, cancel);
     overlay.appendChild(card);
     root.appendChild(overlay);
   });
