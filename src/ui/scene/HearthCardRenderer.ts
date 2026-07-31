@@ -88,7 +88,7 @@ function loadHearthTexture(effectId: string): THREE.Texture {
   img.onerror = () => {
     loadFailed.add(effectId);
   };
-  img.src = `/assets/images/hearth/${effectId}.png`;
+  img.src = `/assets/images/hearth/${effectId}.webp`;
   return fallback;
 }
 
