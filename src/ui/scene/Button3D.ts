@@ -23,17 +23,18 @@ export class Button3D {
     private onClick: () => void
   ) {
     this.baseY = position.y;
+    // group 定位到按钮位置，mesh/sprite 用局部坐标
+    this.group.position.copy(position);
     // 按钮主体
     const geo = new THREE.BoxGeometry(BTN_W, BTN_D, BTN_H);
     const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.1 });
     this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.position.copy(position);
     this.mesh.castShadow = true;
     this.mesh.userData.button = label;
     this.group.add(this.mesh);
-    // 文字（Canvas 纹理）
+    // 文字（Canvas 纹理，Sprite 在按钮正上方）
     const textSprite = this.makeLabel(label);
-    textSprite.position.set(0, BTN_D / 2 + 0.06, 0);
+    textSprite.position.set(0, BTN_D / 2 + 0.08, 0);
     this.group.add(textSprite);
     this.scene.add(this.group);
   }
@@ -47,11 +48,11 @@ export class Button3D {
     const hit = raycaster.intersectObject(this.mesh, false)[0];
     if (hit && !this.hovered) {
       this.hovered = true;
-      this.mesh.position.y = this.baseY + 0.1;
+      this.group.position.y = this.baseY + 0.1;
       (this.mesh.material as THREE.MeshStandardMaterial).emissive.setHex(0x333333);
     } else if (!hit && this.hovered) {
       this.hovered = false;
-      this.mesh.position.y = this.baseY;
+      this.group.position.y = this.baseY;
       (this.mesh.material as THREE.MeshStandardMaterial).emissive.setHex(0x000000);
     }
     return !!hit;

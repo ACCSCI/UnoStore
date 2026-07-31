@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!dist", "!node_modules", "!docs"]
+    "includes": ["**", "!dist", "!node_modules", "!docs", "!scripts/qa_test.mjs", "!screenshots"]
   },
   "formatter": {
     "enabled": true,

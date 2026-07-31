@@ -11,10 +11,12 @@ import { createHearthCardMesh } from './HearthCardRenderer';
  * - 渲染只消费快照，通过回调把操作交给上层
  */
 
-const BASE_Y = 0.5;
-const HOVER_Y = 0.95;
-const FAN_ANGLE = 0.7; // 扇形总角度
-const FAN_RADIUS = 5.6;
+const BASE_Y = 0.36;
+const HOVER_Y = 0.5;
+const FAN_ANGLE = 0.5; // 紧凑扇形（微弧，像摊在桌上）
+const FAN_RADIUS = 4.6; // 玩家侧
+const SPREAD = 0.52; // 相邻牌间距（略重叠，炉石感）
+const CARD_TILT = -0.25; // 微倾，牌面朝上偏玩家
 
 export interface HandCardEntry {
   id: string;
@@ -76,13 +78,15 @@ export class HandRenderer {
         this.group.add(mesh);
       }
       // 扇形参数：-FAN_ANGLE/2 → +FAN_ANGLE/2
+      // 紧凑扇形：牌面朝上平铺（微弧排列），像摊在桌上
       const t = n <= 1 ? 0 : i / (n - 1) - 0.5;
       const angle = t * FAN_ANGLE;
-      const x = Math.sin(angle) * FAN_RADIUS;
-      const z = Math.cos(angle) * FAN_RADIUS;
+      const x = t * SPREAD * (n - 1) + Math.sin(angle) * 0.4;
+      const z = FAN_RADIUS - Math.cos(angle) * 0.3;
       const y = this.hoverId === entry.id ? HOVER_Y : BASE_Y;
       mesh.position.set(x, y, z);
-      mesh.rotation.set(-0.4, -angle * 0.6, 0);
+      // 牌面朝上（+z 面），微倾面向玩家
+      mesh.rotation.set(CARD_TILT, -angle * 0.8, 0);
     });
   }
 
@@ -129,11 +133,11 @@ export class HandRenderer {
       if (!mesh) return;
       const t = n <= 1 ? 0 : i / (n - 1) - 0.5;
       const angle = t * FAN_ANGLE;
-      const x = Math.sin(angle) * FAN_RADIUS;
-      const z = Math.cos(angle) * FAN_RADIUS;
+      const x = t * SPREAD * (n - 1) + Math.sin(angle) * 0.4;
+      const z = FAN_RADIUS - Math.cos(angle) * 0.3;
       const y = this.hoverId === entry.id ? HOVER_Y : BASE_Y;
       mesh.position.set(x, y, z);
-      mesh.rotation.set(-0.4, -angle * 0.6, 0);
+      mesh.rotation.set(CARD_TILT, -angle * 0.8, 0);
     });
   }
 

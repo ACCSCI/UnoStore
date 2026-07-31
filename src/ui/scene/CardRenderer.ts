@@ -77,12 +77,15 @@ function cardBackTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** 创建一张 3D 卡牌 mesh（正面可换） */
+/** 创建一张 3D 卡牌 mesh（正面可换）
+ *  BoxGeometry(宽0.55, 厚0.03, 高0.72)：
+ *  面序 0:+x 1:-x 2:+y 3:-y 4:+z 5:-z
+ *  卡片平放 → 朝上的是 +y 面（index 2）= 正面；其余为牌背 */
 export function createCardMesh(card: UnoCard): THREE.Mesh {
   const geo = new THREE.BoxGeometry(CARD_W, CARD_T, CARD_H);
   const front = new THREE.MeshStandardMaterial({ map: cardFaceTexture(card), roughness: 0.35 });
   const back = new THREE.MeshStandardMaterial({ map: cardBackTexture(), roughness: 0.4 });
-  const mesh = new THREE.Mesh(geo, [front, back, back, back, back, back]);
+  const mesh = new THREE.Mesh(geo, [back, back, front, back, back, back]);
   mesh.castShadow = true;
   mesh.name = `card-${card.id}`;
   return mesh;

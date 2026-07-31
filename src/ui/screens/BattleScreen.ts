@@ -169,10 +169,15 @@ export class BattleScreen extends Screen {
     if (!(this.session && this.statusEl)) return;
     const s = this.session.state;
     const p = s.players[0]!;
-    this.statusEl.textContent =
-      `回合: ${s.turn === 0 ? '你' : this.match.opponentName} | ` +
-      `水晶(可用/冻结): ${p.free}/${p.frozen} | ` +
-      `Uno行动: ${s.unoActionsLeft} | 顶牌: ${fmtCard(s.topCard)}`;
+    // 有质感的彩色状态栏：顶牌用颜色名 + 数值，水晶用图标
+    const top = s.topCard ? fmtCardFull(s.topCard) : '-';
+    const turnLabel = s.turn === 0 ? '🫵 你的回合' : `🤖 ${this.match.opponentName} 回合`;
+    this.statusEl.innerHTML =
+      `<span class="turn-tag ${s.turn === 0 ? 'mine' : 'opponent'}">${turnLabel}</span>` +
+      `<span class="stat" title="打出数字牌产出的可用水晶">💎 水晶 ${p.free}</span>` +
+      `<span class="stat" title="冻结中，下回合解冻">🧊 冻结 ${p.frozen}</span>` +
+      `<span class="stat" title="本回合还能打几张 Uno 牌">🎯 行动 ${s.unoActionsLeft}</span>` +
+      `<span class="stat">顶牌 ${top}</span>`;
     // 3D 手牌同步：Uno + 炉石，可打高亮（索引 → 卡牌 ID）
     const playableIdx = playerPlayableIndices(this.session);
     const playable = new Set(playableIdx.map((i) => p.hand[i]!.id));
@@ -218,9 +223,24 @@ export class BattleScreen extends Screen {
   }
 }
 
-/** 卡牌显示：R5 / +2 / *wild */
-function fmtCard(c: { color: string | null; value: string }): string {
-  if (c.color === null) return `*${c.value}`;
-  const colorChar = c.color[0]?.toUpperCase() ?? '?';
-  return `${colorChar}${c.value}`;
+/** 完整卡牌名（中文）：红 4 / 跳过 / 万能+4 */
+const COLOR_NAMES: Record<string, string> = {
+  red: '红',
+  yellow: '黄',
+  green: '绿',
+  blue: '蓝',
+};
+
+const ACTION_NAMES: Record<string, string> = {
+  skip: '跳过',
+  reverse: '反转',
+  draw2: '+2',
+  wild: '万能',
+  wildDraw4: '万能+4',
+  massSkip: '全员跳过',
+};
+
+function fmtCardFull(c: { color: string | null; value: string }): string {
+  if (c.color === null) return ACTION_NAMES[c.value] ?? `*${c.value}`;
+  return `${COLOR_NAMES[c.color] ?? c.color} ${c.value}`;
 }

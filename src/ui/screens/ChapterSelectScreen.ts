@@ -33,7 +33,7 @@ export class ChapterSelectScreen extends Screen {
   private chapterCard(ch: StoryChapter, data: ReturnType<typeof loadSave>): HTMLElement {
     const unlocked = isChapterUnlocked(data, ch.id);
     const completed = isChapterCompleted(data, ch.id);
-    const card = this.el('div', 'chapter-card' + (unlocked ? '' : ' locked'));
+    const card = this.el('div', `chapter-card${unlocked ? '' : ' locked'}`);
     const title = this.el('h3', undefined, `${completed ? '✅ ' : ''}${ch.title}`);
     const desc = this.el('p', 'chapter-desc', ch.description);
     const opponent = STORY_CHARACTERS.find((c) => c.id === ch.matches[0]!.opponent);

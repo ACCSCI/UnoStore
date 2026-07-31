@@ -92,16 +92,16 @@ function loadHearthTexture(effectId: string): THREE.Texture {
   return fallback;
 }
 
-/** 创建炉石牌 3D mesh（正面 = mmx 卡面） */
+/** 创建炉石牌 3D mesh（正面 = mmx 卡面，+y 面朝上） */
 export function createHearthCardMesh(card: HearthCard): THREE.Mesh {
   const effect = getEffect(card.effectId);
   const frontTex = loadHearthTexture(card.effectId);
   const front = new THREE.MeshStandardMaterial({ map: frontTex, roughness: 0.4 });
   const back = new THREE.MeshStandardMaterial({ color: 0x2c1e3f, roughness: 0.5 });
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, CARD_T, CARD_H), [
+    back,
+    back,
     front,
-    back,
-    back,
     back,
     back,
     back,

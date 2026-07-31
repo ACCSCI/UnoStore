@@ -85,18 +85,18 @@ export class GameView {
       this.onCardClick(entry.id, entry.isHearth);
     });
     this.tableCenter = new TableCenterRenderer(this.scene);
-    // 3D 按钮（玩家侧下方）
+    // 3D 按钮（玩家手牌下方中央，像炉石的结束回合按钮）
     this.drawBtn = new Button3D(
       this.scene,
       '抽牌',
-      new THREE.Vector3(-2.6, 0.35, 4.0),
+      new THREE.Vector3(-1.1, 0.45, 4.4),
       0x2e86de,
       () => this.onDrawClick()
     );
     this.endBtn = new Button3D(
       this.scene,
       '结束回合',
-      new THREE.Vector3(-0.9, 0.35, 4.0),
+      new THREE.Vector3(0.6, 0.45, 4.4),
       0xe67e22,
       () => this.onEndClick()
     );

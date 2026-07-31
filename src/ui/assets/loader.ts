@@ -24,11 +24,21 @@ export function loadGameAssets(): Promise<GameAssets> {
     const draco = new DRACOLoader();
     draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
     loader.setDRACOLoader(draco);
+    // 5 秒超时兜底：wasm 解码器卡住时也走占位模型，避免场景永远空白
+    const timeout = window.setTimeout(() => {
+      reject(new Error('GLB 加载超时（5s）'));
+    }, 5000);
     loader.load(
       '/assets/table.compressed.glb',
-      (gltf) => resolve({ table: gltf.scene }),
+      (gltf) => {
+        window.clearTimeout(timeout);
+        resolve({ table: gltf.scene });
+      },
       undefined,
-      (err) => reject(err)
+      (err) => {
+        window.clearTimeout(timeout);
+        reject(err);
+      }
     );
   });
   return loaderCache;

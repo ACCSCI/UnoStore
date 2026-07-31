@@ -42,7 +42,9 @@ body {
 
 .menu-sub {
   font-size: 18px;
-  opacity: 0.8;
+  opacity: 0.9;
+  color: #ffd700;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
   margin-bottom: 24px;
 }
 
@@ -97,17 +99,25 @@ body {
   gap: 16px;
 }
 
-.chapter-card.locked {
-  opacity: 0.5;
-}
-
 .chapter-card h3 {
   flex: 1;
+}
+
+.chapter-card.locked {
+  opacity: 0.85;
 }
 
 .chapter-desc {
   font-size: 13px;
   opacity: 0.7;
+}
+
+.chapter-card.locked h3 {
+  opacity: 0.6;
+}
+
+.chapter-card.locked .chapter-desc {
+  opacity: 0.5;
 }
 
 .chapter-portrait {
@@ -135,12 +145,48 @@ body {
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 24px;
-  background: rgba(20, 16, 48, 0.85);
-  padding: 8px 20px;
-  border-radius: 12px;
+  gap: 16px;
+  align-items: center;
+  background: linear-gradient(180deg, rgba(30, 22, 70, 0.95), rgba(20, 16, 48, 0.9));
+  padding: 10px 22px;
+  border-radius: 14px;
   font-size: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 215, 0, 0.3);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+}
+
+.battle-status {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.turn-tag {
+  font-weight: 800;
+  padding: 4px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.turn-tag.mine {
+  background: rgba(46, 204, 113, 0.25);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.5);
+}
+
+.turn-tag.opponent {
+  background: rgba(231, 76, 60, 0.25);
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.5);
+}
+
+.stat {
+  color: #d8cfe8;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 4px 10px;
+  border-radius: 8px;
 }
 
 .player-panel {
