@@ -1,8 +1,8 @@
-import { DRAW_PER_TURN, DRAW_WHEN_STUCK } from '../uno/constants';
+import { DRAW_WHEN_STUCK } from '../uno/constants';
 import { canPlayOn } from '../uno/deck';
 import type { UnoCard } from '../uno/types';
 import type { GameEvent } from './events';
-import type { GameState, HearthCard } from './state';
+import type { GameState } from './state';
 
 /**
  * 回合流程辅助：抽牌、推进、报牌。
@@ -17,6 +17,7 @@ export function drawPublic(
 ): UnoCard[] {
   const out: UnoCard[] = [];
   for (let i = 0; i < n; i++) {
+    // 牌堆耗尽时：把弃牌堆（除顶牌）洗回牌堆
     if (state.unoDraw.length === 0 && state.unoDiscard.length > 1) {
       const top = state.unoDiscard.pop()!;
       state.unoDraw.push(...rng.shuffle(state.unoDiscard));
@@ -43,8 +44,13 @@ export function nextActive(state: GameState): number {
   return nextActiveFrom(state, state.turn);
 }
 
-/** 推进 turn 到下一活跃玩家，消费 skipQueue */
+/** 推进 turn 到下一活跃玩家（skipQueue 由 beginTurn 在回合开始前消费） */
 export function advanceTurn(state: GameState): number {
+  return nextActive(state);
+}
+
+/** 回合开始前消费 skipQueue：每张 skip 跳过一个玩家（最多全部玩家） */
+export function beginTurn(state: GameState): number {
   let next = nextActive(state);
   while (state.skipQueue.length > 0) {
     state.skipQueue.shift();
@@ -65,20 +71,6 @@ export function checkUnoAlert(state: GameState, player: number, events: GameEven
 /** 手牌有任意可出的牌 */
 export function canPlayAny(state: GameState, player: number): boolean {
   return state.players[player]!.hand.some((c) => canPlayOn(c, state.topCard, state.chosenColor));
-}
-
-/** 为指定玩家抽 1 张 Uno + 1 张炉石（私人牌组打空则无） */
-export function drawTurnCards(
-  state: GameState,
-  rng: { shuffle<T>(arr: T[]): T[] },
-  player: number
-): { uno: string[]; hearth: HearthCard | null } {
-  const uno = drawPublic(state, rng, DRAW_PER_TURN);
-  const p = state.players[player]!;
-  p.hand.push(...uno);
-  const hearth = p.hearthDeck.pop();
-  if (hearth) p.hearthHand.push(hearth);
-  return { uno: uno.map((c) => c.id), hearth: hearth ?? null };
 }
 
 /** 打不出时抽 1 即止 */

@@ -174,10 +174,10 @@ test('+2 罚抽在目标回合开始生效并叠加', () => {
   ]);
   dispatch(s, rng, { type: 'playUno', player: 0, cardIdx: 0 });
   expect(s.players[1]!.pendingDraw).toBe(2);
-  // 结束回合 → 1 号玩家开始，罚抽 2 张（7 初始 + 2 罚 + 1 回合抽 = 10）
+  // 结束回合 → 1 号玩家开始，罚抽 2 张（7 初始 + 2 罚 = 9，回合开始不再抽 Uno）
   dispatch(s, rng, { type: 'endTurn', player: 0 });
   expect(s.turn).toBe(1);
-  expect(s.players[1]!.hand.length).toBe(10);
+  expect(s.players[1]!.hand.length).toBe(9);
 });
 
 test('打不出时抽 1 即止，抽后不能打出', () => {

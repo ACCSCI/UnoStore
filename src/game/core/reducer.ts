@@ -9,14 +9,7 @@ import {
 import { canPlayOn, createUnoDeck } from '../uno/deck';
 import type { UnoAction, UnoCard } from '../uno/types';
 import type { ActionResult, GameEvent } from './events';
-import {
-  advanceTurn,
-  canPlayAny,
-  checkUnoAlert,
-  drawPublic,
-  drawTurnCards,
-  nextActiveFrom,
-} from './flow';
+import { beginTurn, canPlayAny, checkUnoAlert, drawPublic, nextActiveFrom } from './flow';
 import { Rng } from './rng';
 import type { GameAction, GameState, HearthCard, PlayerState } from './state';
 
@@ -268,12 +261,13 @@ function endTurnAction(
   p.shield = 0;
   const event: GameEvent = { type: 'endTurn', player: action.player };
   state.pendingEvents.push(event);
-  const next = advanceTurn(state);
+  // 结束回合：先解冻水晶，再推进到下一位（skipQueue 在 beginTurn 消费）
+  const next = beginTurn(state);
   startTurn(state, rng, next);
   return { ok: true, events: [event] };
 }
 
-/** 开始某玩家回合：罚抽 → 抽 1 Uno + 1 炉石 → 重置行动 */
+/** 开始某玩家回合：罚抽 → 抽 1 张炉石牌（私人牌组）→ 重置行动 */
 function startTurn(state: GameState, rng: Rng, player: number): void {
   const p = state.players[player]!;
   if (p.pendingDraw > 0) {
@@ -287,11 +281,12 @@ function startTurn(state: GameState, rng: Rng, player: number): void {
     });
     p.pendingDraw = 0;
   }
-  const { uno, hearth } = drawTurnCards(state, rng, player);
+  const hearth = p.hearthDeck.pop();
+  if (hearth) p.hearthHand.push(hearth);
   state.pendingEvents.push({
     type: 'turnStart',
     player,
-    drawUno: uno.join(','),
+    drawUno: '',
     drawHearth: hearth?.id ?? null,
   });
   state.turn = player;
