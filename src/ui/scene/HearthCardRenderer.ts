@@ -79,6 +79,11 @@ export function drawHearthCardFace(
   artGrad.addColorStop(1, shade(tint, -70));
   ctx.fillStyle = artGrad;
   ctx.fill();
+  // 插画窗金色包边（拟物感）
+  roundRect(ctx, w * 0.09, h * 0.1, w * 0.82, h * 0.62, w * 0.05);
+  ctx.strokeStyle = 'rgba(240, 200, 100, 0.85)';
+  ctx.lineWidth = Math.max(w * 0.012, 1.5);
+  ctx.stroke();
   // 效果名（插画窗下方）
   ctx.fillStyle = '#f5e9c8';
   ctx.textAlign = 'center';
@@ -106,7 +111,7 @@ export function drawHearthCardFace(
   ctx.fillText(String(cost), w * 0.13, h * 0.12 + h * 0.005);
 }
 
-/** 在插画窗内绘制插画（裁剪，不铺满整卡 → 避免套娃） */
+/** 在插画窗内绘制插画（裁剪，不铺满整卡 → 避免套娃），绘制后重描金边 */
 export function drawHearthArtInWindow(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -124,6 +129,11 @@ export function drawHearthArtInWindow(
   const dh = img.height * scale;
   ctx.drawImage(img, w * 0.09 + (aw - dw) / 2, h * 0.1 + (ah - dh) / 2, dw, dh);
   ctx.restore();
+  // 金边重描（覆盖插画边缘）
+  roundRect(ctx, w * 0.09, h * 0.1, w * 0.82, h * 0.62, w * 0.05);
+  ctx.strokeStyle = 'rgba(240, 200, 100, 0.85)';
+  ctx.lineWidth = Math.max(w * 0.012, 1.5);
+  ctx.stroke();
 }
 
 /** 加载插画（异步），替换到指定 canvas */
@@ -232,20 +242,20 @@ export function hearthCardDataURL(card: HearthCard): string {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 352;
+  const ctx = canvas.getContext('2d')!;
   const effect = getEffect(card.effectId);
   drawHearthCardFace(
-    canvas.getContext('2d')!,
+    ctx,
     256,
     352,
     card.effectId,
     effect?.name ?? card.effectId,
     effect?.cost ?? 0
   );
-  // 插画叠加（加载完成时重绘）
+  // 插画叠加（加载完成时裁剪进插画窗并重绘）
   const img = new Image();
   img.onload = () => {
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 256 * 0.09, 256 * 0.1, 256 * 0.82, 256 * 0.62);
+    drawHearthArtInWindow(ctx, 256, 352, img);
   };
   img.src = `/assets/images/hearth/${card.effectId}.webp`;
   return canvas.toDataURL('image/png');

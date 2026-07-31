@@ -117,6 +117,8 @@ export class GameView {
 
   private animate = (): void => {
     this.rafId = requestAnimationFrame(this.animate);
+    // 驱动金色流光边框
+    this.hand?.updateGlows(performance.now());
     this.renderer.render(this.scene, this.camera);
   };
 
