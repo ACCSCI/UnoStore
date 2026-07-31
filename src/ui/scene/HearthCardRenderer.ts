@@ -146,17 +146,29 @@ export function drawHearthArt(canvas: HTMLCanvasElement, effectId: string): void
   img.src = `/assets/images/hearth/${effectId}.webp`;
 }
 
-function fallbackTexture(effectId: string, name: string, cost: number): THREE.CanvasTexture {
+/** 合成卡面：卡框 + 插画裁剪进窗（含金边）。所有纹理都走这里，避免套娃 */
+function composeCardFace(
+  effectId: string,
+  name: string,
+  cost: number,
+  art?: HTMLImageElement | null
+): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 176;
-  drawHearthCardFace(canvas.getContext('2d')!, 128, 176, effectId, name, cost);
+  const ctx = canvas.getContext('2d')!;
+  drawHearthCardFace(ctx, 128, 176, effectId, name, cost);
+  if (art) drawHearthArtInWindow(ctx, 128, 176, art);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
-/** 加载插画纹理（成功时替换到已创建材质） */
+function fallbackTexture(effectId: string, name: string, cost: number): THREE.CanvasTexture {
+  return composeCardFace(effectId, name, cost);
+}
+
+/** 加载插画（成功时合成完整卡面替换到已创建材质） */
 const loadListeners = new Map<string, Set<(tex: THREE.Texture) => void>>();
 const loadStarted = new Set<string>();
 
@@ -173,9 +185,8 @@ function requestArt(effectId: string): (cb: (tex: THREE.Texture) => void) => voi
     loadStarted.add(effectId);
     const img = new Image();
     img.onload = () => {
-      const tex = new THREE.Texture(img);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.needsUpdate = true;
+      const effect = getEffect(effectId);
+      const tex = composeCardFace(effectId, effect?.name ?? effectId, effect?.cost ?? 0, img);
       const listeners = loadListeners.get(effectId);
       if (listeners) {
         for (const cb of listeners) cb(tex);
