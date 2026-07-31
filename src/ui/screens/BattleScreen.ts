@@ -93,9 +93,13 @@ export class BattleScreen extends Screen {
     }, 800);
   }
 
-  /** 玩家操作后刷新 UI + 检查胜负 */
+  /** 玩家操作后刷新 UI + 检查胜负 + 报牌音效 */
   private afterAction(): void {
     this.refreshUI();
+    // 玩家剩 1 张 → UNO 报牌音效
+    if (this.session && this.session.state.players[0]!.hand.length === 1) {
+      audio.playSfx('/assets/audio/sfx/uno_cheer.mp3');
+    }
     if (this.session?.phase === 'gameOver') this.finish();
   }
 
