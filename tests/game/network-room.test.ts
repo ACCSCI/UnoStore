@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { getDeck } from '../../src/game/hearth/decks';
+import { parseBattleLoadout } from '../../src/game/loadout';
 import {
   areRoomPlayersReady,
   gameplayPeers,
@@ -136,6 +138,35 @@ describe('VibeHub 房间席位', () => {
     expect([...harness.net.playerIdentities.keys()]).toEqual([0, 1]);
     expect(harness.net.playerIdentity(1)?.id).toBe('guest-user');
   });
+
+  test('房主校验并按玩家身份保存构筑，重复提交会重复 ACK', () => {
+    const guestPeer = peer('guest-peer');
+    const harness = networkHarness([guestPeer]);
+    harness.internal.handlePeerEvent({ type: 'join', id: guestPeer.id });
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人', image: null } },
+      guestPeer.id
+    );
+    const loadout = {
+      heroId: 'thug' as const,
+      deckCardIds: getDeck('combo').cardIds.slice(0, 10),
+    };
+
+    harness.internal.handleMessage(
+      { type: 'loadout', requestId: 'loadout-1', loadout },
+      guestPeer.id
+    );
+    harness.internal.handleMessage(
+      { type: 'loadout', requestId: 'loadout-1', loadout },
+      guestPeer.id
+    );
+
+    expect(harness.net.playerLoadout(1)).toEqual(loadout);
+    expect(harness.net.isPlayerLoadoutReady(1)).toBe(true);
+    expect(
+      harness.sent.filter(({ message, to }) => message.type === 'loadoutAck' && to === guestPeer.id)
+    ).toHaveLength(2);
+  });
 });
 
 function peer(id: string): VibeHubSDK.PeerInfo {
@@ -206,4 +237,69 @@ test('联机房间只有所有真人准备后才能开始，机器人视为自�
   expect(areRoomPlayersReady(identities, new Set(['host']), 3)).toBe(false);
   expect(areRoomPlayersReady(identities, new Set(['host', 'guest']), 3)).toBe(true);
   expect(areRoomPlayersReady(identities.slice(0, 2), new Set(['host', 'guest']), 3)).toBe(false);
+});
+
+test('联机构筑拒绝不存在的牌、超量同名牌与非法英雄', () => {
+  const valid = getDeck('combo').cardIds.slice(0, 10);
+  expect(parseBattleLoadout({ heroId: 'inspector', deckCardIds: valid })).toEqual({
+    heroId: 'inspector',
+    deckCardIds: valid,
+  });
+  expect(
+    parseBattleLoadout({
+      heroId: 'inspector',
+      deckCardIds: Array.from({ length: 10 }, () => 'draw2'),
+    })
+  ).toBeNull();
+  expect(parseBattleLoadout({ heroId: 'unknown', deckCardIds: valid })).toBeNull();
+  expect(
+    parseBattleLoadout({ heroId: 'thug', deckCardIds: [...valid, 'missing-card'] })
+  ).toBeNull();
+});
+
+test('客人会持续重传同一构筑请求，只有匹配的房主 ACK 才停止', () => {
+  const sent: Array<{ message: Record<string, unknown>; to?: string }> = [];
+  const room = {
+    isHost: false,
+    peerId: 'guest-peer',
+    hostId: 'host-peer',
+    send: (message: Record<string, unknown>, to?: string) => sent.push({ message, to }),
+  } as unknown as VibeHubSDK.Room;
+  const net = new NetworkLayer();
+  const loadout = {
+    heroId: 'cardMaster' as const,
+    deckCardIds: getDeck('combo').cardIds.slice(0, 10),
+  };
+  const internal = net as unknown as {
+    room: VibeHubSDK.Room;
+    api: VibeHubSDK.Client;
+    playerIndex: number;
+    pendingLoadout: { requestId: string; fingerprint: string; loadout: typeof loadout } | null;
+    sendPendingLoadout(): void;
+    handleMessage(message: unknown, fromId: string): void;
+  };
+  internal.room = room;
+  internal.api = {
+    user: { id: 'guest-user', name: '客人', image: null },
+  } as VibeHubSDK.Client;
+  internal.playerIndex = 1;
+  internal.pendingLoadout = { requestId: 'request-current', fingerprint: 'current', loadout };
+
+  internal.sendPendingLoadout();
+  internal.sendPendingLoadout();
+  internal.handleMessage(
+    { type: 'loadoutAck', requestId: 'request-old', userId: 'guest-user', player: 1 },
+    'host-peer'
+  );
+  internal.sendPendingLoadout();
+  expect(sent).toHaveLength(3);
+  expect(net.isLocalLoadoutConfirmed).toBe(false);
+
+  internal.handleMessage(
+    { type: 'loadoutAck', requestId: 'request-current', userId: 'guest-user', player: 1 },
+    'host-peer'
+  );
+  internal.sendPendingLoadout();
+  expect(sent).toHaveLength(3);
+  expect(net.isLocalLoadoutConfirmed).toBe(true);
 });
