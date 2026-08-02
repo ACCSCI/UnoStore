@@ -27,10 +27,37 @@ jobs:
       - name: Install verified VibeHub CLI
         if: github.event_name == 'push'
         run: |
-          installer="$(mktemp)"
-          curl -fsSL --retry 3 https://vibe.lumigrav.space/downloads/vibehub-cli/install.sh -o "$installer"
-          sh "$installer"
-          rm -f "$installer"
+          set -euo pipefail
+          install_script="$(mktemp)"
+          # 官方安装器优先；Runner 直连偶发被 CDN 拒绝时按顺序回退：
+          # 1) curl 官方安装器  2) wget 官方安装器（不同 TLS/UA）  3) 直接下载 manifest+二进制并做同等校验
+          if curl -4 -fsSL --retry 3 https://vibe.lumigrav.space/downloads/vibehub-cli/install.sh -o "$install_script" 2>/dev/null; then
+            sh "$install_script"
+          elif wget -4 -q -T 20 -O "$install_script" https://vibe.lumigrav.space/downloads/vibehub-cli/install.sh 2>/dev/null; then
+            sh "$install_script"
+          else
+            case "$(uname -m)" in
+              x86_64|amd64) release_arch="linux-x64" ;;
+              aarch64|arm64) release_arch="linux-arm64" ;;
+              *) echo "VibeHub CLI 仅支持 Linux x64 和 Linux ARM64。" >&2; exit 1 ;;
+            esac
+            release_root="https://vibe.lumigrav.space/downloads/vibehub-cli/latest"
+            manifest="$(mktemp)"
+            binary="$(mktemp)"
+            curl -4 -fsSL --retry 3 "$release_root/$release_arch/manifest.json" -o "$manifest"
+            file_name="$(sed -n 's/^[[:space:]]*"fileName":[[:space:]]*"\([^"]*\)".*$/\1/p' "$manifest" | head -n 1)"
+            expected_sha="$(sed -n 's/^[[:space:]]*"sha256":[[:space:]]*"\([^"]*\)".*$/\1/p' "$manifest" | head -n 1)"
+            expected_size="$(sed -n 's/^[[:space:]]*"size":[[:space:]]*\([0-9][0-9]*\).*$/\1/p' "$manifest" | head -n 1)"
+            [ "${#expected_sha}" -eq 64 ] || { echo "发布清单 SHA-256 无效" >&2; exit 1; }
+            [ -n "$expected_size" ] || { echo "发布清单文件大小无效" >&2; exit 1; }
+            curl -4 -fsSL --retry 3 "$release_root/$release_arch/$file_name" -o "$binary"
+            [ "$(wc -c < "$binary")" = "$expected_size" ] || { echo "VibeHub CLI 文件大小校验失败" >&2; exit 1; }
+            [ "$(sha256sum "$binary" | awk '{print $1}')" = "$expected_sha" ] || { echo "VibeHub CLI SHA-256 校验失败" >&2; exit 1; }
+            mkdir -p "$HOME/.local/bin"
+            install -m 0755 "$binary" "$HOME/.local/bin/vibehub"
+            echo "VibeHub CLI 安装成功：$HOME/.local/bin/vibehub"
+          fi
+          rm -f "$install_script"
 
       - name: Create concise release note
         if: github.event_name == 'push'
