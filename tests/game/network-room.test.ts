@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   areRoomPlayersReady,
   gameplayPeers,
+  NetworkLayer,
   vibeHubErrorMessage,
 } from '../../src/net/NetworkLayer';
 
@@ -65,12 +66,129 @@ describe('VibeHub 房间席位', () => {
         reconnecting: false,
         role: 'candidate' as const,
       },
+      {
+        id: 'closed-old-peer',
+        open: false,
+        latency: 0,
+        jitter: 0,
+        relay: false,
+        realtime: false,
+        reconnecting: false,
+      },
+      {
+        id: 'reconnecting-old-peer',
+        open: true,
+        latency: 0,
+        jitter: 0,
+        relay: false,
+        realtime: false,
+        reconnecting: true,
+      },
     ];
     const room = { peerId: 'self-peer', peers: () => peers };
 
-    expect(gameplayPeers(room)).toEqual([peers[1]!]);
+    expect(gameplayPeers(room)).toEqual([peers[0]!]);
+    expect(gameplayPeers(room, new Set(['human-peer']))).toEqual([]);
+  });
+
+  test('客人身份早于 join 到达时先缓存，座位建立后会自动绑定', () => {
+    const guestPeer = peer('guest-peer');
+    const harness = networkHarness([]);
+
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人', image: null } },
+      guestPeer.id
+    );
+    expect(harness.net.playerIdentity(1)).toBeNull();
+
+    harness.setPeers([guestPeer]);
+    harness.internal.handlePeerEvent({ type: 'join', id: guestPeer.id });
+
+    expect(harness.net.playerCount).toBe(2);
+    expect(harness.net.playerIdentity(1)).toEqual({
+      seat: 1,
+      id: 'guest-user',
+      name: '客人',
+      image: null,
+    });
+    expect(harness.sent.some(({ message }) => message.type === 'roomState')).toBe(true);
+  });
+
+  test('客人退出重进时，即使旧 peer 尚在列表中也不会多算一个人', () => {
+    const oldPeer = peer('guest-old');
+    const newPeer = peer('guest-new');
+    const harness = networkHarness([oldPeer]);
+    harness.internal.handlePeerEvent({ type: 'join', id: oldPeer.id });
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人', image: null } },
+      oldPeer.id
+    );
+
+    harness.setPeers([oldPeer, newPeer]);
+    harness.internal.handlePeerEvent({ type: 'leave', id: oldPeer.id });
+    harness.internal.handlePeerEvent({ type: 'join', id: newPeer.id });
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人', image: null } },
+      newPeer.id
+    );
+
+    expect(harness.net.playerCount).toBe(2);
+    expect([...harness.net.playerIdentities.keys()]).toEqual([0, 1]);
+    expect(harness.net.playerIdentity(1)?.id).toBe('guest-user');
   });
 });
+
+function peer(id: string): VibeHubSDK.PeerInfo {
+  return {
+    id,
+    open: true,
+    latency: 20,
+    jitter: 1,
+    relay: false,
+    realtime: false,
+    reconnecting: false,
+  };
+}
+
+function networkHarness(initialPeers: VibeHubSDK.PeerInfo[]): {
+  net: NetworkLayer;
+  internal: {
+    handleMessage(message: unknown, fromId: string): void;
+    handlePeerEvent(event: VibeHubSDK.PeerEvent): void;
+  };
+  sent: Array<{ message: Record<string, unknown>; to?: string }>;
+  setPeers(peers: VibeHubSDK.PeerInfo[]): void;
+} {
+  let peers = initialPeers;
+  const sent: Array<{ message: Record<string, unknown>; to?: string }> = [];
+  const room = {
+    isHost: true,
+    peerId: 'host-peer',
+    hostId: 'host-peer',
+    peers: () => peers,
+    send: (message: Record<string, unknown>, to?: string) => sent.push({ message, to }),
+    announce: async () => ({ ok: true as const }),
+  } as unknown as VibeHubSDK.Room;
+  const net = new NetworkLayer();
+  const mutable = net as unknown as {
+    room: VibeHubSDK.Room;
+    api: VibeHubSDK.Client;
+    handleMessage(message: unknown, fromId: string): void;
+    handlePeerEvent(event: VibeHubSDK.PeerEvent): void;
+  };
+  mutable.room = room;
+  mutable.api = {
+    user: { id: 'host-user', name: '房主', image: null },
+  } as VibeHubSDK.Client;
+  return {
+    net,
+    internal: mutable,
+    sent,
+    setPeers(next) {
+      peers = next;
+    },
+  };
+}
 
 test('VibeHub Failed to fetch 会提示代理 Fake-IP 与本地网络权限，而不是裸错误', () => {
   const message = vibeHubErrorMessage(new TypeError('Failed to fetch'));

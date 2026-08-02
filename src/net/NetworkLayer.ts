@@ -38,12 +38,31 @@ export function vibeHubErrorMessage(error: unknown): string {
  * Beta SDK 的 peers() 同时返回真实玩家连接和 VibeNet relay 路径。
  * relay 项带有 role，绝不能计入游戏席位，否则两名真人在启用中继时会被显示成三人或更多。
  */
-export function gameplayPeers(room: Pick<RoomHandle, 'peerId' | 'peers'>): VibeHubSDK.PeerInfo[] {
+export function gameplayPeers(
+  room: Pick<RoomHandle, 'peerId' | 'peers'>,
+  departedPeerIds: ReadonlySet<string> = new Set()
+): VibeHubSDK.PeerInfo[] {
   const players = room
     .peers()
-    .filter((peer) => peer.role === undefined && peer.id !== room.peerId)
+    .filter(
+      (peer) =>
+        peer.role === undefined &&
+        peer.id !== room.peerId &&
+        peer.open &&
+        !peer.reconnecting &&
+        !departedPeerIds.has(peer.id)
+    )
     .map((peer) => [peer.id, peer] as const);
   return [...new Map(players).values()];
+}
+
+function parseVibeUser(value: unknown): VibeUser | null {
+  if (!value || typeof value !== 'object') return null;
+  const user = value as Partial<VibeUser>;
+  if (typeof user.id !== 'string' || !user.id.trim()) return null;
+  if (!(typeof user.name === 'string' || user.name === null)) return null;
+  if (!(typeof user.image === 'string' || user.image === null)) return null;
+  return { id: user.id, name: user.name, image: user.image };
 }
 
 export function areRoomPlayersReady(
@@ -87,6 +106,7 @@ export class NetworkLayer {
   private readonly peerUsers = new Map<string, VibeUser>();
   private readonly seatUsers = new Map<number, RoomPlayerIdentity>();
   private readonly readyUserIds = new Set<string>();
+  private readonly departedPeerIds = new Set<string>();
   private initPromise: Promise<void> | null = null;
   private humanCount = 0;
   private botCount = 0;
@@ -202,17 +222,18 @@ export class NetworkLayer {
     this.peerUsers.clear();
     this.seatUsers.clear();
     this.readyUserIds.clear();
+    this.departedPeerIds.clear();
     this.playerIndex = this.room.isHost ? 0 : -1;
     if (this.room.isHost && this.api.user) this.rememberSeatUser(0, this.api.user);
     this.room.onMessage((message, fromId) => this.handleMessage(message, fromId));
     this.room.onPeer((event) => this.handlePeerEvent(event));
-    this.humanCount = gameplayPeers(this.room).length + 1;
+    this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
     this.botCount = 0;
     this.playerCount = this.humanCount;
     if (this.room.isHost) this.rebuildSeatsAndIdentities();
     if (!this.room.isHost) {
-      this.room.send({ type: 'hello', user: this.api.user }, this.room.hostId ?? undefined);
-      this.room.send({ type: 'snapshotRequest' }, this.room.hostId ?? undefined);
+      this.sendGuestIdentity();
+      this.requestSnapshot();
     }
     return this.room;
   }
@@ -287,7 +308,7 @@ export class NetworkLayer {
     if (userId) this.readyUserIds.delete(userId);
     if (this.room.isHost) {
       this.gameStarted = false;
-      this.humanCount = gameplayPeers(this.room).length + 1;
+      this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
       this.botCount = Math.min(this.botCount, Math.max(0, this.roomMax - this.humanCount));
       this.rebuildSeatsAndIdentities();
       this.readyUserIds.clear();
@@ -348,6 +369,9 @@ export class NetworkLayer {
   private handlePeerEvent(event: VibeHubSDK.PeerEvent): void {
     if ('id' in event && event.type === 'leave') {
       this.peerUsers.delete(event.id);
+      this.departedPeerIds.add(event.id);
+    } else if ('id' in event && event.type === 'join') {
+      this.departedPeerIds.delete(event.id);
     }
     if (this.room?.isHost && (event.type === 'join' || event.type === 'leave')) {
       if (this.gameStarted) {
@@ -360,12 +384,16 @@ export class NetworkLayer {
         this.onPeerChange?.(event);
         return;
       }
-      this.humanCount = gameplayPeers(this.room).length + 1;
+      this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
       this.botCount = Math.min(this.botCount, Math.max(0, this.roomMax - this.humanCount));
       this.rebuildSeatsAndIdentities();
       this.broadcastRoomState();
       this.onRoomUpdate?.(this.playerCount);
       void this.refreshLobbyAnnouncement();
+    }
+    if (!this.room?.isHost && event.type === 'join') {
+      this.sendGuestIdentity();
+      this.requestSnapshot();
     }
     this.onPeerChange?.(event);
   }
@@ -377,7 +405,7 @@ export class NetworkLayer {
 
   private rebuildSeatsAndIdentities(): void {
     if (!this.room?.isHost) return;
-    const peers = gameplayPeers(this.room).map((peer) => peer.id);
+    const peers = gameplayPeers(this.room, this.departedPeerIds).map((peer) => peer.id);
     this.peerSeats.clear();
     this.seatPeers.clear();
     this.seatUsers.clear();
@@ -450,6 +478,8 @@ export class NetworkLayer {
       if (Number.isInteger(player) && player >= 1 && player < MAX_ROOM_PLAYERS) {
         this.playerIndex = player;
         if (this.api?.user) this.rememberSeatUser(player, this.api.user);
+        this.sendGuestIdentity();
+        this.requestSnapshot();
       }
       return;
     }
@@ -499,21 +529,32 @@ export class NetworkLayer {
             }
           }
         }
+        if (this.playerIndex >= 1 && this.api?.user && !this.seatUsers.has(this.playerIndex)) {
+          this.rememberSeatUser(this.playerIndex, this.api.user);
+        }
         this.onRoomUpdate?.(count);
       }
       return;
     }
     if (!this.room?.isHost) return;
+    if (msg.type === 'hello') {
+      const user = parseVibeUser(msg.user);
+      if (!user) return;
+      // hello 可能早于 onPeer(join) 或 peers() 列表更新；先缓存，座位建立后再绑定。
+      this.peerUsers.set(fromId, user);
+      this.assignSeat(fromId);
+      const player = this.peerSeats.get(fromId);
+      if (player !== undefined) {
+        this.rememberSeatUser(player, user);
+        this.broadcastRoomState();
+        this.onRoomUpdate?.(this.playerCount);
+      }
+      return;
+    }
     this.assignSeat(fromId);
     const authoritativePlayer = this.peerSeats.get(fromId);
     if (authoritativePlayer === undefined) return;
-    if (msg.type === 'hello' && msg.user && typeof msg.user === 'object') {
-      const user = msg.user as VibeUser;
-      this.peerUsers.set(fromId, user);
-      this.rememberSeatUser(authoritativePlayer, user);
-      this.broadcastRoomState();
-      this.onRoomUpdate?.(this.playerCount);
-    } else if (msg.type === 'snapshotRequest') {
+    if (msg.type === 'snapshotRequest') {
       this.onSnapshotRequested?.(authoritativePlayer);
     } else if (msg.type === 'ready' && typeof msg.ready === 'boolean') {
       const identity = this.seatUsers.get(authoritativePlayer);
@@ -542,6 +583,7 @@ export class NetworkLayer {
     this.peerUsers.clear();
     this.seatUsers.clear();
     this.readyUserIds.clear();
+    this.departedPeerIds.clear();
   }
 
   async closeRoom(): Promise<void> {
@@ -620,6 +662,11 @@ export class NetworkLayer {
 
   get allPlayersReady(): boolean {
     return areRoomPlayersReady(this.seatUsers.values(), this.readyUserIds, this.playerCount);
+  }
+
+  private sendGuestIdentity(): void {
+    if (!this.room || this.room.isHost || !this.room.hostId || !this.api?.user) return;
+    this.room.send({ type: 'hello', user: this.api.user }, this.room.hostId);
   }
 
   private async refreshLobbyAnnouncement(): Promise<void> {
