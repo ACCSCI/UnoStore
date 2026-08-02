@@ -5,6 +5,7 @@
  */
 
 const SAVE_KEY = 'unostore_save_v1';
+const UPDATED_KEY = 'unostore_save_updated_at';
 
 export interface SaveData {
   completedChapters: string[];
@@ -24,15 +25,34 @@ export function loadSave(): SaveData {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return { ...EMPTY_SAVE };
-    return { ...EMPTY_SAVE, ...(JSON.parse(raw) as Partial<SaveData>) };
+    return sanitizeStoryProgress({
+      ...EMPTY_SAVE,
+      ...(JSON.parse(raw) as Partial<SaveData>),
+    });
   } catch {
     return { ...EMPTY_SAVE };
   }
 }
 
+/** 修复旧版本“失败也解锁”的脏数据：下一章只能由前一章的完成记录推导。 */
+export function sanitizeStoryProgress(data: SaveData): SaveData {
+  const completed = new Set(data.completedChapters);
+  const unlocked = ['ch1'];
+  for (let chapter = 1; chapter < 4; chapter++) {
+    const required = Array.from({ length: chapter }, (_, index) => `ch${index + 1}`);
+    if (required.every((id) => completed.has(id))) unlocked.push(`ch${chapter + 1}`);
+  }
+  return { ...data, unlockedChapters: unlocked };
+}
+
 export function saveProgress(data: SaveData): void {
   try {
+    const updatedAt = Date.now();
     localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    localStorage.setItem(UPDATED_KEY, String(updatedAt));
+    void import('../../net/cloudSave')
+      .then(({ mirrorStorySave }) => mirrorStorySave(data, updatedAt))
+      .catch((error: unknown) => console.warn('VibeHub 剧情存档同步失败', error));
   } catch {
     console.warn('存档失败（localStorage 不可用）');
   }
@@ -59,6 +79,17 @@ export function recordResult(data: SaveData, won: boolean): SaveData {
   return won
     ? { ...data, totalWins: data.totalWins + 1 }
     : { ...data, totalLosses: data.totalLosses + 1 };
+}
+
+/** 一局剧情的唯一结算入口：失败只记败场，胜利才完成并解锁下一章。 */
+export function recordStoryMatchResult(
+  data: SaveData,
+  won: boolean,
+  chapterId: string | null,
+  nextChapterId: string | null
+): SaveData {
+  const recorded = recordResult(data, won);
+  return won && chapterId ? completeChapter(recorded, chapterId, nextChapterId) : recorded;
 }
 
 export function isChapterUnlocked(data: SaveData, chapterId: string): boolean {

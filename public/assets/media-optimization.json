@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-02T08:46:04.9642206Z",
+  "image": {
+    "format": "WebP",
+    "quality": 78,
+    "maxDimension": 1280,
+    "optimized": 0
+  },
+  "audio": {
+    "music": "-18 LUFS / 96 kbps",
+    "voice": "-16 LUFS / 48 kbps mono",
+    "sfx": "-14 LUFS / 64 kbps",
+    "truePeak": "-1.5 dBTP",
+    "optimized": 3
+  },
+  "beforeBytes": 16403308.0,
+  "afterBytes": 16378273.0
+}

@@ -1,150 +1,1823 @@
+import * as THREE from 'three';
 import { createGame, dispatch } from '../../game';
+import { NormalHeuristic } from '../../game/ai/strategies';
+import type { GameEvent } from '../../game/core/events';
+import { heroPowerCost, playerCapabilities } from '../../game/core/reducer';
 import { Rng } from '../../game/core/rng';
-import type { GameState } from '../../game/core/state';
-import { getDeck } from '../../game/hearth/decks';
+import type { GameAction, GameState, HearthCard, MinionState } from '../../game/core/state';
+import {
+  formatTurnClock,
+  remainingTurnSeconds,
+  TURN_TIMEOUT_MS,
+} from '../../game/core/turnTimeout';
+import {
+  getEffect,
+  type HearthTargeting,
+  requiredOwnUnoCardCount,
+} from '../../game/hearth/effects/registry';
+import { getHero, HERO_EMOTES } from '../../game/heroes';
+import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
+import type { UnoCard } from '../../game/uno/types';
 import { getNet } from '../../net';
+import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS } from '../../net/NetworkLayer';
+import { assetUrl } from '../assets/url';
+import { audio } from '../audio/AudioManager';
+import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
+import { unoCardDataURL } from '../scene/CardRenderer';
+import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { formatActivity } from './ActivityFormatter';
+import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
-/**
- * 多人对局（host-authority）：
- * - 房主：本地 createGame(2-8人) → 收玩家输入 → 演算 → 广播权威状态
- * - 客户端：收房主状态快照 → 渲染（本地不演算，防作弊）
- * - 座位：玩家在房间内的 index = 座位
- */
+interface PublicPlayerState {
+  userId: string;
+  userName: string;
+  unoCount: number;
+  hearthCount: number;
+  free: number;
+  frozen: number;
+  pendingDraw: number;
+  active: boolean;
+  heroId: string;
+  board: MinionState[];
+}
+
+interface PrivatePlayerState {
+  hand: UnoCard[];
+  hearthHand: HearthCard[];
+  roulettePending: boolean;
+  rouletteDrawer: number | null;
+}
+
+interface MultiplayerSnapshot {
+  sequence: number;
+  turnSerial: number;
+  viewer: number;
+  turn: number;
+  turnDeadline: number;
+  direction: 1 | -1;
+  phase: GameState['phase'];
+  topCard: UnoCard;
+  chosenColor: UnoCard['color'];
+  deckCount: number;
+  players: PublicPlayerState[];
+  mine: PrivatePlayerState;
+  playableIds: string[];
+  readyMinionIds: string[];
+  heroPowerUsable: boolean;
+  heroPowerCost: number;
+  mustResolveRoulette: boolean;
+  events: GameEvent[];
+  winner: number | null;
+  gameOverReason: 'unoEmpty' | 'lastStanding' | null;
+  error?: string;
+}
+
+interface NetworkAction {
+  type: GameAction['type'];
+  cardId?: string;
+  color?: string | null;
+  targetPlayer?: number;
+  targets?: number[];
+  targetMinionId?: string;
+  unoCardIds?: string[];
+  cardIds?: string[];
+  emoteId?: string;
+  takeCardId?: string;
+  discardCardId?: string;
+  attackerId?: string;
+}
+
+interface HearthSelection {
+  cardId: string;
+  effectId: string;
+  selectedCardIds: Set<string>;
+  selectedPlayerIds: Set<number>;
+}
+
+/** 房主权威多人战；规则只在房主结算，所有客户端本地重放同一公开事件流。 */
 export class MultiplayerBattleScreen extends Screen {
   private view: GameView | null = null;
   private hostState: GameState | null = null;
+  private hostRng: Rng | null = null;
+  private snapshot: MultiplayerSnapshot | null = null;
   private statusEl: HTMLElement | null = null;
-  private timer: number | null = null;
+  private turnTimerEl: HTMLElement | null = null;
+  private rosterEl: HTMLOListElement | null = null;
+  private routeEl: HTMLElement | null = null;
+  private targetingHudEl: HTMLElement | null = null;
+  private heroPowerEl: HTMLButtonElement | null = null;
+  private emoteMenuEl: HTMLElement | null = null;
+  private playerHeroPortraitEl: HTMLButtonElement | null = null;
+  private playerHeroImageEl: HTMLImageElement | null = null;
+  private playerHeroNameEl: HTMLElement | null = null;
+  private playerHeroIdEl: HTMLElement | null = null;
+  private playerCrystalEl: HTMLElement | null = null;
+  private playerFrozenEl: HTMLElement | null = null;
+  private handSummaryEl: HTMLElement | null = null;
   private pause: PauseMenu | null = null;
+  private sequence = 0;
+  private lastReceivedSequence = -1;
+  private presentationQueue: Promise<void> = Promise.resolve();
+  private actionAnimating = false;
+  private roulettePromptOpen = false;
+  private selectedAttackerId: string | null = null;
+  private unoTargetCardId: string | null = null;
+  private hearthSelection: HearthSelection | null = null;
+  private heroTargetSelection: Set<number> | null = null;
+  private exited = false;
+  private hostTurnSerial = -1;
+  private hostTurnDeadline = 0;
+  private timeoutInterval: number | null = null;
+  private botInterval: number | null = null;
+  private hostTimeoutResolving = false;
+  private hostBotResolving = false;
+  private botStrategy: NormalHeuristic | null = null;
+  private hostGameResult: {
+    winner: number;
+    reason: 'unoEmpty' | 'lastStanding';
+  } | null = null;
+  private resultOverlay: HTMLElement | null = null;
+  private activityLedgerEl: HTMLOListElement | null = null;
+  private readonly activityEntries: string[] = [];
+  private readonly animationHandDeltas = new Map<number, HandCountDelta>();
+  private turnNoticeEl: HTMLElement | null = null;
+  private turnNoticeTimer: number | null = null;
+  private workDoneTimer: number | null = null;
+  private workDoneAnnouncedTurn = -1;
 
   override async render(): Promise<void> {
     const net = getNet();
-    // 3D 场景
+    this.root.classList.remove('local-battle');
+    this.root.classList.add('multiplayer-battle');
     const canvasHost = this.el('div', 'battle-canvas');
     this.root.append(canvasHost);
     this.view = new GameView(canvasHost);
     this.view.bindCallbacks({
-      onCardClick: (id, isHearth) => this.onCardClicked(id, isHearth),
-      onDrawClick: () => this.sendAction({ type: 'drawUno', player: this.mySeat() }),
-      onEndClick: () => this.sendAction({ type: 'endTurn', player: this.mySeat() }),
+      onCardClick: (id, isHearth) => void this.onCardClicked(id, isHearth),
+      onEndClick: () => this.endTurn(),
+      onSelectAttacker: (id) => this.selectAttacker(id),
+      onAttackMinion: (id) => this.targetMinion(id),
     });
     this.view.start();
     this.view.setupScene(this.root);
 
-    // 状态栏
+    this.rosterEl = this.el('ol', 'table-seat-ring multiplayer-seat-ring');
+    this.rosterEl.setAttribute('aria-label', '围桌玩家公开状态与可选目标');
+    this.rosterEl.setAttribute('role', 'list');
     const panel = this.el('div', 'battle-panel');
-    this.statusEl = this.el('div', 'battle-status', '连接中…');
+    this.statusEl = this.el('div', 'battle-status', '正在等待权威状态…');
+    this.statusEl.setAttribute('role', 'status');
+    this.statusEl.setAttribute('aria-live', 'polite');
     panel.append(this.statusEl);
-    this.root.append(panel);
+    this.routeEl = this.el('div', 'turn-route');
+    this.routeEl.setAttribute('role', 'status');
+    this.routeEl.setAttribute('aria-live', 'polite');
+    this.turnTimerEl = this.el('div', 'turn-timer', '回合 2:00');
+    this.turnTimerEl.setAttribute('role', 'timer');
+    this.turnTimerEl.setAttribute('aria-label', '当前回合剩余时间');
+    this.targetingHudEl = this.el('div', 'targeting-hud');
+    this.targetingHudEl.setAttribute('role', 'status');
+    this.targetingHudEl.setAttribute('aria-live', 'polite');
+    const ledger = document.createElement('details');
+    ledger.className = 'battle-ledger multiplayer-battle-ledger';
+    ledger.setAttribute('aria-label', '联机对局记录');
+    const ledgerSummary = document.createElement('summary');
+    ledgerSummary.textContent = '对局记录';
+    const activitySection = this.el('section', 'activity-ledger');
+    this.activityLedgerEl = document.createElement('ol');
+    this.activityLedgerEl.setAttribute('aria-live', 'polite');
+    activitySection.append(this.activityLedgerEl);
+    ledger.append(ledgerSummary, activitySection);
+    this.turnNoticeEl = this.el('div', 'turn-notice');
+    this.turnNoticeEl.setAttribute('role', 'status');
+    this.turnNoticeEl.setAttribute('aria-live', 'polite');
+    this.buildHeroControls();
+    this.root.append(
+      this.rosterEl,
+      panel,
+      this.routeEl,
+      this.turnTimerEl,
+      this.targetingHudEl,
+      ledger,
+      this.turnNoticeEl
+    );
+    this.timeoutInterval = window.setInterval(() => {
+      this.refreshTurnTimer();
+      if (getNet().isHost) this.expireHostTurnIfNeeded();
+    }, 250);
 
-    // ESC 暂停菜单（退出对局/离开房间）
+    window.addEventListener('keydown', this.handleEscape);
     this.pause = new PauseMenu(this.root, () => {
-      void net
-        .leaveRoom()
-        .then(() => import('./LobbyScreen'))
-        .then((m) => new m.LobbyScreen().enter());
+      net.leaveRoom();
+      void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
     });
     this.pause.bind();
 
-    if (net.isHost) {
-      this.initHost();
-    } else {
-      this.initClient();
+    net.onStateReceived = (state) => this.applySnapshot(state);
+    if (net.isHost) this.initHost();
+    else {
+      net.requestSnapshot();
+      this.setStatus(`已连接房主 · 座位 ${Math.max(1, net.playerIndex + 1)}`);
     }
   }
 
-  private mySeat(): number {
-    const net = getNet();
-    // 座位 = 房间内 peers 中自己的 index（房主 = 0）
-    if (net.isHost) return 0;
-    return 1; // 简化：非房主 = 座位 1（多座位映射后续完善）
+  private buildHeroControls(): void {
+    const profile = loadLoadoutProfile();
+    const hero = getHero(profile.activeHeroId);
+    const frame = this.el('aside', 'hero-frame player-hero multiplayer-player-hero');
+    this.playerHeroPortraitEl = this.btn(
+      '',
+      () => {
+        if (
+          this.snapshot &&
+          (this.heroTargetSelection ||
+            this.effectTargeting(getEffect(this.hearthSelection?.effectId ?? ''))?.type ===
+              'players')
+        )
+          this.choosePlayerTarget(this.snapshot.viewer);
+      },
+      'hero-portrait player-crest'
+    );
+    this.playerHeroPortraitEl.setAttribute('aria-label', `${hero.name}头像；点击或右键发送语音`);
+    this.playerHeroPortraitEl.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      this.openHeroEmoteMenu();
+    });
+    this.playerHeroImageEl = new Image();
+    this.playerHeroImageEl.src = assetUrl(hero.portrait);
+    this.playerHeroImageEl.alt = '';
+    this.playerHeroPortraitEl.append(this.playerHeroImageEl);
+
+    const copy = this.el('div', 'hero-copy');
+    this.playerHeroNameEl = this.el('strong', 'hero-name', getNet().user?.name ?? hero.name);
+    this.playerHeroIdEl = this.el('small', 'hero-subtitle', `ID ${getNet().user?.id ?? '—'}`);
+    copy.append(this.playerHeroNameEl, this.playerHeroIdEl);
+
+    const resources = this.el('div', 'hero-resources');
+    const crystal = this.el('span', 'resource-orb crystal');
+    crystal.append(this.el('small', undefined, '水晶'));
+    this.playerCrystalEl = this.el('strong', undefined, '0');
+    crystal.append(this.playerCrystalEl);
+    const frozen = this.el('span', 'resource-orb frozen');
+    frozen.append(this.el('small', undefined, '冻结'));
+    this.playerFrozenEl = this.el('strong', undefined, '0');
+    frozen.append(this.playerFrozenEl);
+    resources.append(crystal, frozen);
+
+    this.heroPowerEl = this.btn(
+      `${hero.powerName} · 2`,
+      () => void this.useHeroPower(),
+      'hero-power-button'
+    );
+    frame.append(this.playerHeroPortraitEl, copy, resources, this.heroPowerEl);
+    this.root.append(frame);
+
+    this.emoteMenuEl = this.el('div', 'hero-emote-popover');
+    this.emoteMenuEl.setAttribute('popover', 'auto');
+    this.emoteMenuEl.setAttribute('aria-label', '英雄预设语音');
+    this.emoteMenuEl.append(this.el('strong', undefined, '发送英雄语音'));
+    const emoteGrid = this.el('div', 'hero-emote-grid');
+    for (const item of HERO_EMOTES) {
+      emoteGrid.append(
+        this.btn(`${item.label} · ${item.text}`, () => {
+          this.emoteMenuEl?.hidePopover();
+          this.sendAction({ type: 'heroEmote', emoteId: item.id });
+        })
+      );
+    }
+    this.emoteMenuEl.append(emoteGrid);
+    this.root.append(this.emoteMenuEl);
+    this.handSummaryEl = this.el('div', 'player-hand-summary', 'UNO 5 / 25 张淘汰 · 炉石 3');
+    this.root.append(this.handSummaryEl);
   }
 
-  /** 房主：建局 + 收输入演算 + 广播 */
+  private openHeroEmoteMenu(): void {
+    if (!(this.emoteMenuEl && this.playerHeroPortraitEl)) return;
+    const portrait = this.playerHeroPortraitEl.getBoundingClientRect();
+    const menuWidth = Math.min(704, window.innerWidth - 16);
+    const centered = portrait.left + portrait.width / 2;
+    const safeCenter = Math.max(
+      menuWidth / 2 + 8,
+      Math.min(window.innerWidth - menuWidth / 2 - 8, centered)
+    );
+    this.emoteMenuEl.style.setProperty('--emote-x', `${safeCenter}px`);
+    this.emoteMenuEl.style.setProperty(
+      '--emote-bottom',
+      `${Math.max(8, window.innerHeight - portrait.top + 8)}px`
+    );
+    this.emoteMenuEl.showPopover();
+  }
+
   private initHost(): void {
     const net = getNet();
-    const count = Math.max(2, Math.min(net.playerCount, 8));
-    this.hostState = createGame(count, getDeck('combo').cardIds, Date.now() % 100000);
-    // 收输入（来自客户端）
-    net.onInputReceived = (action, player) => {
-      void player;
-      if (!this.hostState) return;
-      const r = dispatch(this.hostState, new Rng(1), action as never);
-      if (r.ok) {
-        // 广播权威状态
-        net.hostBroadcast({
-          turn: this.hostState.turn,
-          players: this.hostState.players.map((p) => ({
-            handCount: p.hand.length,
-            hearthHand: p.hearthHand,
-            free: p.free,
-            frozen: p.frozen,
-          })),
-          topCard: this.hostState.topCard,
-          phase: this.hostState.phase,
+    const count = Math.max(MIN_ROOM_PLAYERS, Math.min(net.playerCount, MAX_ROOM_PLAYERS));
+    const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
+    const profile = loadLoadoutProfile();
+    const deck = activeDeck(profile).cardIds;
+    this.hostState = createGame(
+      count,
+      Array.from({ length: count }, () => deck),
+      seed,
+      {},
+      Array.from({ length: count }, () => profile.activeHeroId)
+    );
+    this.hostRng = new Rng(seed);
+    this.botStrategy = new NormalHeuristic(this.hostRng);
+    this.syncHostDeadline();
+    net.onInputReceived = (input, player) => this.resolveInput(input, player);
+    net.onSnapshotRequested = (player) => this.sendSnapshot(player, []);
+    this.broadcastSnapshots([]);
+    this.botInterval = window.setInterval(() => this.advanceHostBot(), 850);
+  }
+
+  private advanceHostBot(): void {
+    const net = getNet();
+    if (
+      this.hostBotResolving ||
+      this.hostTimeoutResolving ||
+      this.actionAnimating ||
+      !this.hostState ||
+      !this.hostRng ||
+      !this.botStrategy ||
+      this.hostState.phase === 'gameOver' ||
+      !net.isBotSeat(this.hostState.turn)
+    )
+      return;
+    this.hostBotResolving = true;
+    try {
+      const player = this.hostState.turn;
+      const action =
+        this.botStrategy.decide(this.hostState, player) ?? ({ type: 'endTurn', player } as const);
+      const result = dispatch(this.hostState, this.hostRng, action);
+      if (result.ok) this.broadcastSnapshots(result.events);
+      else {
+        const fallback = dispatch(this.hostState, this.hostRng, { type: 'endTurn', player });
+        if (fallback.ok) this.broadcastSnapshots(fallback.events);
+      }
+    } finally {
+      this.hostBotResolving = false;
+    }
+  }
+
+  private resolveInput(input: unknown, player: number): void {
+    if (!(this.hostState && this.hostRng)) return;
+    const action = this.normalizeAction(input, player);
+    if (!action) {
+      this.sendSnapshot(player, [], '无效或过期的操作');
+      return;
+    }
+    const result = dispatch(this.hostState, this.hostRng, action);
+    if (!result.ok) {
+      this.sendSnapshot(player, [], result.error);
+      return;
+    }
+    this.broadcastSnapshots(result.events);
+  }
+
+  private normalizeAction(input: unknown, player: number): GameAction | null {
+    if (!(this.hostState && input) || typeof input !== 'object') return null;
+    const request = input as NetworkAction;
+    const own = this.hostState.players[player];
+    if (!own) return null;
+    if (request.type === 'playUno') {
+      const cardIdx = own.hand.findIndex((card) => card.id === request.cardId);
+      return cardIdx < 0
+        ? null
+        : {
+            type: 'playUno',
+            player,
+            cardIdx,
+            color: request.color as UnoCard['color'],
+            targetPlayer: request.targetPlayer,
+          };
+    }
+    if (request.type === 'playHearth') {
+      const cardIdx = own.hearthHand.findIndex((card) => card.id === request.cardId);
+      return cardIdx < 0
+        ? null
+        : {
+            type: 'playHearth',
+            player,
+            cardIdx,
+            targets: request.targets,
+            targetMinionId: request.targetMinionId,
+            unoCardIds: request.unoCardIds,
+            cardIds: request.cardIds,
+            color: request.color,
+          };
+    }
+    if (request.type === 'endTurn') return { type: 'endTurn', player };
+    if (request.type === 'useHeroPower')
+      return { type: 'useHeroPower', player, targets: request.targets };
+    if (request.type === 'heroEmote' && request.emoteId)
+      return { type: 'heroEmote', player, emoteId: request.emoteId };
+    if (request.type === 'resolveRoulette' && request.color)
+      return {
+        type: 'resolveRoulette',
+        player,
+        color: request.color as NonNullable<UnoCard['color']>,
+      };
+    if (request.type === 'resolveOracle' && request.takeCardId && request.discardCardId)
+      return {
+        type: 'resolveOracle',
+        player,
+        takeCardId: request.takeCardId,
+        discardCardId: request.discardCardId,
+      };
+    if (request.type === 'attackMinion' && request.attackerId && request.targetPlayer !== undefined)
+      return {
+        type: 'attackMinion',
+        player,
+        attackerId: request.attackerId,
+        targetPlayer: request.targetPlayer,
+        targetMinionId: request.targetMinionId,
+      };
+    return null;
+  }
+
+  private broadcastSnapshots(events: GameEvent[]): void {
+    if (!this.hostState) return;
+    const gameOver = events.find(
+      (event): event is Extract<GameEvent, { type: 'gameOver' }> => event.type === 'gameOver'
+    );
+    if (gameOver) this.hostGameResult = { winner: gameOver.winner, reason: gameOver.reason };
+    this.syncHostDeadline();
+    for (let player = 0; player < this.hostState.players.length; player++) {
+      this.sendSnapshot(player, events);
+    }
+  }
+
+  private sendSnapshot(player: number, events: GameEvent[], error?: string): void {
+    if (!this.hostState) return;
+    const capabilities = playerCapabilities(this.hostState, player);
+    const mine = this.hostState.players[player]!;
+    const playableIds = [
+      ...capabilities.playableUnoIndices.map((index) => mine.hand[index]!.id),
+      ...capabilities.playableHearthIndices.map((index) => mine.hearthHand[index]!.id),
+    ];
+    const snapshot: MultiplayerSnapshot = {
+      sequence: ++this.sequence,
+      turnSerial: this.hostState.turnSerial,
+      viewer: player,
+      turn: this.hostState.turn,
+      turnDeadline: this.hostTurnDeadline,
+      direction: this.hostState.direction,
+      phase: this.hostState.phase,
+      topCard: this.hostState.topCard,
+      chosenColor: this.hostState.chosenColor,
+      deckCount: this.hostState.unoDraw.length,
+      players: this.hostState.players.map((entry, seat) => ({
+        userId: getNet().playerIdentity(seat)?.id ?? `seat-${seat + 1}`,
+        userName: getNet().playerIdentity(seat)?.name ?? `玩家 ${seat + 1}`,
+        unoCount: entry.hand.length,
+        hearthCount: entry.hearthHand.length,
+        free: entry.free,
+        frozen: entry.frozen,
+        pendingDraw: entry.pendingDrawMin > 0 ? entry.pendingDraw : 0,
+        active: entry.active,
+        heroId: entry.heroId,
+        board: entry.board,
+      })),
+      mine: {
+        hand: mine.hand,
+        hearthHand: mine.hearthHand,
+        roulettePending: mine.roulettePending,
+        rouletteDrawer: mine.rouletteDrawer,
+      },
+      playableIds,
+      readyMinionIds: capabilities.readyMinionIds,
+      heroPowerUsable: capabilities.heroPowerUsable,
+      heroPowerCost: heroPowerCost(this.hostState, player),
+      mustResolveRoulette: capabilities.mustResolveRoulette,
+      events: events.filter((event) => event.type !== 'handRevealed' || event.player === player),
+      winner: this.hostGameResult?.winner ?? null,
+      gameOverReason: this.hostGameResult?.reason ?? null,
+      error,
+    };
+    getNet().hostSendState(snapshot, player);
+  }
+
+  /** 快照按到达顺序排队；先播事件，再显示该次结算后的状态。 */
+  private applySnapshot(raw: unknown): void {
+    if (!this.isSnapshot(raw) || raw.sequence <= this.lastReceivedSequence) return;
+    this.lastReceivedSequence = raw.sequence;
+    const socialEvents = raw.events.filter(
+      (event): event is Extract<GameEvent, { type: 'heroEmote' }> => event.type === 'heroEmote'
+    );
+    for (const event of socialEvents) this.playHeroEmoteSideChannel(event, raw);
+    const blockingEvents = raw.events.filter((event) => event.type !== 'heroEmote');
+    const queuedSnapshot = { ...raw, events: blockingEvents };
+    if (blockingEvents.length === 0) {
+      this.snapshot = raw;
+      if (!this.actionAnimating) this.renderSnapshot(raw);
+      if (!this.actionAnimating) this.showGameResult(raw);
+      return;
+    }
+    this.presentationQueue = this.presentationQueue
+      .then(() => this.consumeSnapshot(queuedSnapshot))
+      .catch((error) => {
+        console.error('联机演出队列失败', error);
+        this.renderSnapshot(queuedSnapshot);
+      });
+  }
+
+  private playHeroEmoteSideChannel(
+    event: Extract<GameEvent, { type: 'heroEmote' }>,
+    snapshot: MultiplayerSnapshot
+  ): void {
+    this.recordActivity(event, snapshot);
+    audio.playSfx(`/assets/audio/voice/heroes/emotes/${event.heroId}_${event.emoteId}.mp3`, 1);
+    void this.showHeroEmote(
+      this.visualSeat(event.player, snapshot),
+      event.text,
+      snapshot.players.length
+    );
+  }
+
+  private async consumeSnapshot(snapshot: MultiplayerSnapshot): Promise<void> {
+    if (this.exited) return;
+    this.snapshot = snapshot;
+    this.clearAnimationHandDeltas();
+    this.actionAnimating = snapshot.events.length > 0;
+    if (this.actionAnimating) {
+      this.view?.setActionEnabled(0, false);
+      this.view?.clearHandInteraction();
+      await this.playEventAnimations(snapshot.events, snapshot);
+    }
+    if (this.exited) return;
+    this.actionAnimating = false;
+    this.clearAnimationHandDeltas();
+    this.renderSnapshot(snapshot);
+    this.showGameResult(snapshot);
+    if (snapshot.mustResolveRoulette) this.promptRoulette();
+  }
+
+  private showGameResult(snapshot: MultiplayerSnapshot): void {
+    if (snapshot.phase !== 'gameOver' || snapshot.winner === null || this.resultOverlay) return;
+    const winner = snapshot.players[snapshot.winner];
+    const won = snapshot.winner === snapshot.viewer;
+    audio.playMusic(won ? '/assets/audio/music/victory.mp3' : '/assets/audio/music/defeat.mp3');
+    const overlay = this.el('section', 'result-overlay multiplayer-result-overlay');
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'multiplayer-result-title');
+    const card = this.el('div', 'result-card multiplayer-result-card');
+    const title = this.el(
+      'h2',
+      undefined,
+      won ? '🎉 你赢得了对局！' : `🏆 ${winner?.userName ?? `玩家 ${snapshot.winner + 1}`} 获胜`
+    );
+    title.id = 'multiplayer-result-title';
+    const reason =
+      snapshot.gameOverReason === 'lastStanding'
+        ? `${winner?.userName ?? `玩家 ${snapshot.winner + 1}`} 是最后一名未被淘汰的玩家。`
+        : `${winner?.userName ?? `玩家 ${snapshot.winner + 1}`} 率先清空了 UNO 手牌。`;
+    const identity = winner
+      ? `VibeHub ID ${winner.userId} · UNO ${winner.unoCount} · 炉石 ${winner.hearthCount}`
+      : `席位 ${snapshot.winner + 1}`;
+    const returnButton = this.btn(
+      '关闭结算并返回房间',
+      () => this.returnToRoom(),
+      'btn btn-primary'
+    );
+    card.append(
+      title,
+      this.el('p', 'result-reason', reason),
+      this.el('small', 'result-winner-id', identity),
+      this.el(
+        'p',
+        'result-room-hint',
+        '返回后需要重新准备；所有真人玩家准备后，房主才能开始下一局。'
+      ),
+      returnButton
+    );
+    overlay.append(card);
+    this.root.append(overlay);
+    this.resultOverlay = overlay;
+    returnButton.focus();
+  }
+
+  private returnToRoom(): void {
+    const net = getNet();
+    const roomId = net.roomId;
+    if (!roomId) {
+      void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
+      return;
+    }
+    net.returnToRoom();
+    void import('./RoomScreen').then(({ RoomScreen }) => new RoomScreen(roomId).enter());
+  }
+
+  private renderSnapshot(snapshot: MultiplayerSnapshot): void {
+    const mine = snapshot.players[snapshot.viewer];
+    if (!mine) return;
+    if (snapshot.turn !== snapshot.viewer || !mine.active) {
+      this.hearthSelection = null;
+      this.selectedAttackerId = null;
+      this.unoTargetCardId = null;
+      this.heroTargetSelection = null;
+    } else if (
+      this.unoTargetCardId &&
+      !snapshot.mine.hand.some((card) => card.id === this.unoTargetCardId)
+    ) {
+      this.unoTargetCardId = null;
+    }
+    if (this.activityEntries.length === 0) {
+      this.activityEntries.push(`对局开始 · ${snapshot.players.length} 人`);
+      this.renderActivityLedger();
+    }
+    const selection = this.hearthSelection;
+    const effect = selection ? getEffect(selection.effectId) : null;
+    const targeting = effect ? this.effectTargeting(effect) : null;
+    let playable = new Set(snapshot.playableIds);
+    if (selection && targeting?.type === 'ownUnoCards') {
+      playable = new Set(snapshot.mine.hand.map((card) => card.id));
+    } else if (selection && targeting?.type === 'giveCards') {
+      playable = new Set([
+        ...snapshot.mine.hand.map((card) => card.id),
+        ...snapshot.mine.hearthHand
+          .filter((card) => card.id !== selection.cardId)
+          .map((card) => card.id),
+      ]);
+    } else if (this.unoTargetCardId) {
+      playable = new Set([this.unoTargetCardId]);
+    }
+    const selectedCardIds = new Set(selection?.selectedCardIds ?? []);
+    if (selection) selectedCardIds.add(selection.cardId);
+    if (this.unoTargetCardId) selectedCardIds.add(this.unoTargetCardId);
+    this.view?.syncHand(snapshot.mine.hand, snapshot.mine.hearthHand, playable, selectedCardIds);
+    this.view?.syncTable(snapshot.deckCount, snapshot.topCard, snapshot.chosenColor);
+    // 圆桌席位已经按实际手牌数渲染牌背，不再保留旧的正前方重复手牌。
+    this.view?.syncOpponentHand(0);
+    const enemies = snapshot.players.flatMap((entry, index) =>
+      index === snapshot.viewer
+        ? []
+        : entry.board.map((minion) => ({
+            ...minion,
+            owner: this.visualSeat(index, snapshot),
+          }))
+    );
+    this.view?.syncMinions(
+      mine.board,
+      enemies,
+      this.selectedAttackerId,
+      snapshot.turn === snapshot.viewer && !this.actionAnimating,
+      snapshot.players.length,
+      targeting?.type === 'minion' ? targeting.side : null
+    );
+    const canAct =
+      snapshot.turn === snapshot.viewer &&
+      snapshot.phase !== 'gameOver' &&
+      mine.active &&
+      !this.actionAnimating &&
+      !snapshot.mustResolveRoulette;
+    const hasAnyAction =
+      snapshot.playableIds.length > 0 ||
+      snapshot.readyMinionIds.length > 0 ||
+      snapshot.heroPowerUsable;
+    const shouldPromptEnd =
+      canAct &&
+      !hasAnyAction &&
+      !(
+        this.hearthSelection ||
+        this.selectedAttackerId ||
+        this.unoTargetCardId ||
+        this.heroTargetSelection
+      );
+    this.view?.setActionEnabled(0, canAct);
+    this.view?.setActionAttention(0, shouldPromptEnd);
+    this.view?.setActionHint(
+      0,
+      snapshot.mustResolveRoulette
+        ? '请先结算颜色轮盘'
+        : canAct
+          ? '结束回合并结算补牌'
+          : `等待玩家 ${snapshot.turn + 1}`
+    );
+    if (this.heroPowerEl) {
+      const hero = getHero(mine.heroId);
+      this.heroPowerEl.textContent = `${hero.powerName} · ${snapshot.heroPowerCost}`;
+      this.heroPowerEl.title = hero.description;
+      this.heroPowerEl.disabled = !snapshot.heroPowerUsable || this.actionAnimating;
+      this.heroPowerEl.classList.toggle('actionable-highlight', snapshot.heroPowerUsable);
+      if (this.playerHeroImageEl) this.playerHeroImageEl.src = assetUrl(hero.portrait);
+      if (this.playerHeroNameEl) this.playerHeroNameEl.textContent = mine.userName;
+      if (this.playerHeroIdEl) this.playerHeroIdEl.textContent = `ID ${mine.userId} · ${hero.name}`;
+    }
+    if (this.playerHeroPortraitEl) {
+      const ownTargetable = this.isPlayerTargetable(snapshot.viewer, snapshot);
+      this.playerHeroPortraitEl.classList.toggle('legal-target', ownTargetable);
+      this.playerHeroPortraitEl.classList.toggle(
+        'selected-target',
+        Boolean(
+          this.heroTargetSelection?.has(snapshot.viewer) ||
+            this.hearthSelection?.selectedPlayerIds.has(snapshot.viewer)
+        )
+      );
+      this.playerHeroPortraitEl.setAttribute('aria-disabled', String(!ownTargetable));
+    }
+    if (this.playerCrystalEl) this.playerCrystalEl.textContent = String(mine.free);
+    if (this.playerFrozenEl) this.playerFrozenEl.textContent = String(mine.frozen);
+    if (this.handSummaryEl)
+      this.handSummaryEl.textContent = mine.active
+        ? `UNO ${mine.unoCount} / 25 张淘汰 · 炉石 ${mine.hearthCount}`
+        : '已淘汰 · UNO 0 · 炉石 0';
+    this.renderRoster(snapshot);
+    this.renderTargetingHud();
+    const direction = snapshot.direction === 1 ? '↻ 顺时针' : '↺ 逆时针';
+    const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
+    if (this.routeEl) {
+      const directionEl = this.el('strong', 'route-direction', direction);
+      const current = this.el('span');
+      current.append(
+        this.el('small', undefined, '当前'),
+        document.createTextNode(
+          snapshot.players[snapshot.turn]?.userName ?? `玩家 ${snapshot.turn + 1}`
+        )
+      );
+      const arrow = this.el('b', undefined, '→');
+      arrow.setAttribute('aria-hidden', 'true');
+      const next = this.el('span', 'route-next');
+      next.append(
+        this.el('small', undefined, '下一位'),
+        document.createTextNode(snapshot.players[nextPlayer]?.userName ?? `玩家 ${nextPlayer + 1}`)
+      );
+      this.routeEl.replaceChildren(directionEl, current, arrow, next);
+      this.routeEl.dataset.direction = String(snapshot.direction);
+    }
+    this.renderBattleStatus(snapshot, canAct, direction);
+    this.scheduleWorkDone(snapshot, shouldPromptEnd);
+    this.refreshTurnTimer();
+  }
+
+  private renderBattleStatus(
+    snapshot: MultiplayerSnapshot,
+    canAct: boolean,
+    direction: string
+  ): void {
+    if (!this.statusEl) return;
+    if (snapshot.error) {
+      this.setStatus(snapshot.error, true);
+      return;
+    }
+    this.statusEl.classList.remove('error');
+    const activeColor = snapshot.topCard.color ?? snapshot.chosenColor;
+    const colorLabel = activeColor ? COLOR_NAMES[activeColor] : '四色';
+    const top = this.el('span', `stat top-card ${activeColor ? `is-${activeColor}` : 'is-wild'}`);
+    top.title = `当前颜色：${colorLabel}`;
+    const swatch = this.el('i', 'top-card-swatch');
+    swatch.setAttribute('aria-hidden', 'true');
+    top.append(
+      this.el('small', undefined, '当前牌'),
+      swatch,
+      this.el(
+        'strong',
+        undefined,
+        `${colorLabel} ${ACTION_NAMES[snapshot.topCard.value] ?? snapshot.topCard.value}`
+      )
+    );
+    const turn = this.el(
+      'span',
+      `turn-tag ${canAct ? 'mine' : 'opponent'}`,
+      snapshot.mustResolveRoulette
+        ? `颜色轮盘：由你为玩家 ${(snapshot.mine.rouletteDrawer ?? 0) + 1} 选色`
+        : canAct
+          ? `你的回合 · ${direction}`
+          : `${snapshot.players[snapshot.turn]?.userName ?? `玩家 ${snapshot.turn + 1}`}的回合`
+    );
+    const mine = snapshot.players[snapshot.viewer]!;
+    const hand = this.el('span', 'stat');
+    hand.append(
+      this.el('small', undefined, '手牌'),
+      this.el('strong', undefined, `UNO ${mine.unoCount} · 炉石 ${mine.hearthCount}`)
+    );
+    this.statusEl.replaceChildren(top, turn, hand);
+  }
+
+  private scheduleWorkDone(snapshot: MultiplayerSnapshot, shouldPromptEnd: boolean): void {
+    if (!shouldPromptEnd) {
+      if (this.workDoneTimer !== null) window.clearTimeout(this.workDoneTimer);
+      this.workDoneTimer = null;
+      return;
+    }
+    if (this.workDoneAnnouncedTurn === snapshot.turnSerial || this.workDoneTimer !== null) return;
+    const scheduledTurn = snapshot.turnSerial;
+    this.workDoneTimer = window.setTimeout(() => {
+      this.workDoneTimer = null;
+      const latest = this.snapshot;
+      if (
+        !latest ||
+        this.actionAnimating ||
+        latest.turnSerial !== scheduledTurn ||
+        latest.turn !== latest.viewer ||
+        latest.playableIds.length > 0 ||
+        latest.readyMinionIds.length > 0 ||
+        latest.heroPowerUsable ||
+        this.hearthSelection ||
+        this.selectedAttackerId ||
+        this.unoTargetCardId ||
+        this.heroTargetSelection
+      )
+        return;
+      this.workDoneAnnouncedTurn = scheduledTurn;
+      audio.playSfx('/assets/audio/voice/work_done.mp3', 1);
+      this.setStatus('收工了！当前已无可执行操作，请结束回合');
+    }, 260);
+  }
+
+  private syncHostDeadline(): void {
+    if (!this.hostState) return;
+    if (this.hostState.phase === 'gameOver') {
+      this.hostTurnDeadline = 0;
+      return;
+    }
+    if (this.hostTurnSerial !== this.hostState.turnSerial || this.hostTurnDeadline === 0) {
+      this.hostTurnSerial = this.hostState.turnSerial;
+      this.hostTurnDeadline = Date.now() + TURN_TIMEOUT_MS;
+    }
+  }
+
+  /** 只有房主能执行超时；客户端时钟只是显示房主下发的绝对截止时间。 */
+  private expireHostTurnIfNeeded(): void {
+    if (
+      this.hostTimeoutResolving ||
+      !this.hostState ||
+      !this.hostRng ||
+      this.hostState.phase === 'gameOver' ||
+      Date.now() < this.hostTurnDeadline
+    )
+      return;
+    this.hostTimeoutResolving = true;
+    const events: GameEvent[] = [];
+    try {
+      const current = this.hostState.turn;
+      const player = this.hostState.players[current]!;
+      if (player.roulettePending) {
+        const colors = ['red', 'yellow', 'green', 'blue'] as const;
+        const roulette = dispatch(this.hostState, this.hostRng, {
+          type: 'resolveRoulette',
+          player: current,
+          color: colors[this.hostRng.int(colors.length)]!,
         });
-        this.refreshHostUI();
+        if (roulette.ok) events.push(...roulette.events);
       }
-    };
-    // 房主自己的输入
-    net.sendInput = undefined as never; // 房主走本地
-    this.refreshHostUI();
-  }
-
-  private refreshHostUI(): void {
-    if (!(this.hostState && this.statusEl)) return;
-    const s = this.hostState;
-    const p = s.players[0]!;
-    this.statusEl.textContent = `房主视角 回合: 玩家 ${s.turn} | 水晶 ${p.free}/${p.frozen} | 顶牌: ${s.topCard.value}`;
-  }
-
-  /** 客户端：收房主状态 → 渲染 */
-  private initClient(): void {
-    const net = getNet();
-    net.onStateReceived = (state) => {
-      const s = state as { turn: number; topCard: { value: string }; players: unknown[] };
-      if (this.statusEl) {
-        this.statusEl.textContent = `回合: 玩家 ${s.turn} | 顶牌: ${s.topCard.value}`;
+      const pending = this.hostState.oraclePending;
+      if (pending?.source === this.hostState.turn && pending.cardIds.length >= 2) {
+        const oracle = dispatch(this.hostState, this.hostRng, {
+          type: 'resolveOracle',
+          player: pending.source,
+          takeCardId: pending.cardIds[0]!,
+          discardCardId: pending.cardIds[1]!,
+        });
+        if (oracle.ok) events.push(...oracle.events);
       }
-    };
-  }
-
-  private sendAction(action: {
-    type: string;
-    player: number;
-    cardIdx?: number;
-    color?: string;
-  }): void {
-    const net = getNet();
-    if (net.isHost) {
-      net.onInputReceived?.(action, this.mySeat());
-    } else {
-      net.sendInput(action);
+      if (!events.some((event) => event.type === 'gameOver')) {
+        const timeoutPlayer = this.hostState.turn;
+        const ended = dispatch(this.hostState, this.hostRng, {
+          type: 'endTurn',
+          player: timeoutPlayer,
+        });
+        if (ended.ok) events.push(...ended.events);
+      }
+      this.syncHostDeadline();
+      this.broadcastSnapshots(events);
+    } finally {
+      this.hostTimeoutResolving = false;
     }
   }
 
-  private onCardClicked(id: string, isHearth: boolean): void {
-    if (isHearth) return; // 炉石牌多人简化：V1 只处理 Uno
-    const net = getNet();
-    const seat = this.mySeat();
-    if (net.isHost && this.hostState) {
-      const idx = this.hostState.players[seat]!.hand.findIndex((c) => c.id === id);
-      if (idx >= 0) this.sendAction({ type: 'playUno', player: seat, cardIdx: idx });
-    } else {
-      // 客户端：需要知道手牌索引 → 简化 V1：客户端不发手牌操作（由房主全权驱动）
-      this.sendAction({ type: 'playUno', player: seat, cardIdx: 0 });
+  private refreshTurnTimer(): void {
+    if (!(this.turnTimerEl && this.snapshot)) return;
+    if (!this.snapshot.turnDeadline || this.snapshot.phase === 'gameOver') {
+      this.turnTimerEl.textContent = '对局结束';
+      return;
+    }
+    const seconds = remainingTurnSeconds(this.snapshot.turnDeadline);
+    this.turnTimerEl.textContent = `回合 ${formatTurnClock(seconds)}`;
+    this.turnTimerEl.classList.toggle('urgent', seconds <= 15);
+  }
+
+  private renderRoster(snapshot: MultiplayerSnapshot): void {
+    if (!this.rosterEl) return;
+    this.rosterEl.replaceChildren();
+    const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
+    snapshot.players.forEach((player, index) => {
+      const visualSeat = this.visualSeat(index, snapshot);
+      const angle = Math.PI / 2 + (Math.PI * 2 * visualSeat) / snapshot.players.length;
+      const item = this.el('li', 'table-seat multiplayer-table-seat');
+      item.dataset.seat = String(visualSeat);
+      item.dataset.player = String(index);
+      item.style.setProperty('--seat-x', `${50 + Math.cos(angle) * 50}%`);
+      item.style.setProperty('--seat-y', `${50 + Math.sin(angle) * 50}%`);
+      item.classList.toggle('active', snapshot.turn === index);
+      item.classList.toggle('next', nextPlayer === index && snapshot.turn !== index);
+      item.classList.toggle('eliminated', !player.active);
+      const targetable = this.isPlayerTargetable(index, snapshot);
+      const target = this.btn('', () => this.choosePlayerTarget(index), 'seat-target-button');
+      target.classList.toggle('legal-target', targetable);
+      target.classList.toggle(
+        'selected-target',
+        Boolean(
+          this.heroTargetSelection?.has(index) || this.hearthSelection?.selectedPlayerIds.has(index)
+        )
+      );
+      target.setAttribute(
+        'aria-label',
+        `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}`
+      );
+      if (targetable) {
+        target.tabIndex = 0;
+      } else {
+        target.tabIndex = -1;
+      }
+      const hero = getHero(player.heroId);
+      const fan = this.el('span', 'seat-hand-fan');
+      const visibleBacks = player.active ? player.unoCount + player.hearthCount : 0;
+      const spacing = Math.min(0.55, 4.8 / Math.max(1, visibleBacks - 1));
+      for (let card = 0; card < visibleBacks; card++) {
+        const back = document.createElement('i');
+        const offset = card - (visibleBacks - 1) / 2;
+        back.style.setProperty('--fan-x', `${offset * spacing}rem`);
+        back.style.setProperty(
+          '--fan-angle',
+          `${offset * Math.min(7, 36 / Math.max(1, visibleBacks - 1))}deg`
+        );
+        fan.append(back);
+      }
+      target.append(
+        this.el('span', 'seat-index', String(index + 1)),
+        this.el('strong', undefined, `${player.userName} · ${hero.name}`),
+        this.el('small', 'seat-player-id', `ID ${player.userId}`),
+        this.el(
+          'small',
+          'seat-card-count',
+          player.active
+            ? `UNO ${player.unoCount} · 炉石 ${player.hearthCount}`
+            : '已淘汰 · UNO 0 · 炉石 0'
+        ),
+        this.el(
+          'small',
+          'seat-crystal-count',
+          `💎 ${player.active ? player.free : 0}${player.frozen ? ` · ❄ ${player.frozen}` : ''}${player.pendingDraw ? ` · 罚抽 ${player.pendingDraw}` : ''}`
+        ),
+        fan
+      );
+      item.append(target);
+      this.rosterEl?.append(item);
+    });
+  }
+
+  private nextActiveSeat(snapshot: MultiplayerSnapshot, from: number): number {
+    for (let step = 1; step <= snapshot.players.length; step++) {
+      const candidate =
+        (from + snapshot.direction * step + snapshot.players.length * 2) % snapshot.players.length;
+      if (snapshot.players[candidate]?.active) return candidate;
+    }
+    return from;
+  }
+
+  private isPlayerTargetable(player: number, snapshot: MultiplayerSnapshot): boolean {
+    if (!snapshot.players[player]?.active) return false;
+    if (this.heroTargetSelection) return true;
+    if (this.selectedAttackerId)
+      return (
+        player !== snapshot.viewer &&
+        !snapshot.players[player]!.board.some((minion) => getEffect(minion.effectId)?.taunt)
+      );
+    if (this.unoTargetCardId) return player !== snapshot.viewer;
+    if (!this.hearthSelection) return false;
+    const targeting = this.effectTargeting(getEffect(this.hearthSelection.effectId));
+    if (targeting?.type === 'players') {
+      return (
+        (targeting.includeSelf || player !== snapshot.viewer) &&
+        (!targeting.requireMinions || snapshot.players[player]!.board.length > 0)
+      );
+    }
+    return (
+      player !== snapshot.viewer &&
+      (targeting?.type === 'enemyPlayer' || targeting?.type === 'giveCards')
+    );
+  }
+
+  private async onCardClicked(id: string, isHearth: boolean): Promise<void> {
+    const snapshot = this.snapshot;
+    if (!snapshot || this.actionAnimating || snapshot.turn !== snapshot.viewer) return;
+    if (this.hearthSelection && id !== this.hearthSelection.cardId) {
+      const targeting = this.effectTargeting(getEffect(this.hearthSelection.effectId));
+      const candidate =
+        targeting?.type === 'giveCards' || (targeting?.type === 'ownUnoCards' && !isHearth);
+      if (!candidate) return;
+      const max =
+        targeting?.type === 'ownUnoCards'
+          ? requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length)
+          : (targeting?.count ?? 0);
+      if (this.hearthSelection.selectedCardIds.has(id))
+        this.hearthSelection.selectedCardIds.delete(id);
+      else if (this.hearthSelection.selectedCardIds.size < max)
+        this.hearthSelection.selectedCardIds.add(id);
+      this.renderSnapshot(snapshot);
+      return;
+    }
+    if (isHearth) {
+      if (!snapshot.playableIds.includes(id)) return;
+      if (this.hearthSelection?.cardId === id) {
+        this.cancelTargeting();
+        return;
+      }
+      const card = snapshot.mine.hearthHand.find((entry) => entry.id === id);
+      const effect = card ? getEffect(card.effectId) : null;
+      if (!(card && effect)) return;
+      const targeting = this.effectTargeting(effect);
+      if (targeting) {
+        if (
+          targeting.type === 'ownUnoCards' &&
+          requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length) === 0
+        ) {
+          this.sendAction({ type: 'playHearth', cardId: id });
+          return;
+        }
+        this.selectedAttackerId = null;
+        this.heroTargetSelection = null;
+        this.hearthSelection = {
+          cardId: id,
+          effectId: card.effectId,
+          selectedCardIds: new Set(),
+          selectedPlayerIds: new Set(),
+        };
+        this.renderSnapshot(snapshot);
+        return;
+      }
+      if (effect.requiresColor) {
+        const color = await pickColor(this.root, { title: `${effect.name}：选择颜色` });
+        if (color) this.sendAction({ type: 'playHearth', cardId: id, color });
+        return;
+      }
+      this.sendAction({ type: 'playHearth', cardId: id });
+      return;
+    }
+    if (!snapshot.playableIds.includes(id)) return;
+    const card = snapshot.mine.hand.find((entry) => entry.id === id);
+    if (!card) return;
+    if (card.value === '7') {
+      this.hearthSelection = null;
+      this.selectedAttackerId = null;
+      this.heroTargetSelection = null;
+      this.unoTargetCardId = this.unoTargetCardId === id ? null : id;
+      this.renderSnapshot(snapshot);
+      this.setStatus(
+        this.unoTargetCardId
+          ? '数字 7：直接点击桌上发光的对手席位，交换双方全部手牌'
+          : '已取消数字 7 的换牌目标选择'
+      );
+      return;
+    }
+    if (card.color === null && card.value !== 'wildColorRoulette') {
+      const color = await pickColor(this.root);
+      if (color) this.sendAction({ type: 'playUno', cardId: id, color });
+      return;
+    }
+    this.sendAction({ type: 'playUno', cardId: id });
+  }
+
+  private effectTargeting(effect: ReturnType<typeof getEffect>): HearthTargeting | null {
+    if (!effect) return null;
+    return effect.targeting ?? (effect.requiresTarget ? { type: 'enemyPlayer', count: 1 } : null);
+  }
+
+  private selectAttacker(id: string): void {
+    const snapshot = this.snapshot;
+    if (!snapshot || this.actionAnimating || snapshot.turn !== snapshot.viewer) return;
+    if (!snapshot.readyMinionIds.includes(id)) return;
+    this.hearthSelection = null;
+    this.heroTargetSelection = null;
+    this.unoTargetCardId = null;
+    this.selectedAttackerId = this.selectedAttackerId === id ? null : id;
+    if (this.selectedAttackerId) {
+      const minion = snapshot.players[snapshot.viewer]?.board.find((entry) => entry.id === id);
+      if (minion) audio.playSfx(`/assets/audio/voice/minions/${minion.effectId}_select.mp3`, 0.95);
+    }
+    this.renderSnapshot(snapshot);
+  }
+
+  private targetMinion(targetMinionId: string): void {
+    const snapshot = this.snapshot;
+    if (!snapshot || this.actionAnimating) return;
+    if (this.hearthSelection) {
+      const targeting = this.effectTargeting(getEffect(this.hearthSelection.effectId));
+      if (targeting?.type === 'minion') {
+        this.sendAction({
+          type: 'playHearth',
+          cardId: this.hearthSelection.cardId,
+          targetMinionId,
+        });
+        this.cancelTargeting(false);
+      }
+      return;
+    }
+    if (!this.selectedAttackerId) return;
+    const targetPlayer = snapshot.players.findIndex((player) =>
+      player.board.some((minion) => minion.id === targetMinionId)
+    );
+    if (targetPlayer < 0 || targetPlayer === snapshot.viewer) return;
+    this.sendAction({
+      type: 'attackMinion',
+      attackerId: this.selectedAttackerId,
+      targetPlayer,
+      targetMinionId,
+    });
+    this.cancelTargeting(false);
+  }
+
+  private choosePlayerTarget(player: number): void {
+    const snapshot = this.snapshot;
+    if (!(snapshot && this.isPlayerTargetable(player, snapshot))) return;
+    if (this.unoTargetCardId) {
+      this.sendAction({ type: 'playUno', cardId: this.unoTargetCardId, targetPlayer: player });
+      this.cancelTargeting(false);
+      return;
+    }
+    if (this.heroTargetSelection) {
+      if (this.heroTargetSelection.has(player)) this.heroTargetSelection.delete(player);
+      else if (this.heroTargetSelection.size < 2) this.heroTargetSelection.add(player);
+      this.renderSnapshot(snapshot);
+      return;
+    }
+    if (this.selectedAttackerId) {
+      this.sendAction({
+        type: 'attackMinion',
+        attackerId: this.selectedAttackerId,
+        targetPlayer: player,
+      });
+      this.cancelTargeting(false);
+      return;
+    }
+    if (!this.hearthSelection) return;
+    const targeting = this.effectTargeting(getEffect(this.hearthSelection.effectId));
+    if (targeting?.type === 'players') {
+      if (this.hearthSelection.selectedPlayerIds.has(player)) {
+        this.hearthSelection.selectedPlayerIds.delete(player);
+      } else if (this.hearthSelection.selectedPlayerIds.size < targeting.count) {
+        this.hearthSelection.selectedPlayerIds.add(player);
+      }
+      this.renderSnapshot(snapshot);
+      return;
+    }
+    if (
+      targeting?.type === 'giveCards' &&
+      this.hearthSelection.selectedCardIds.size !== targeting.count
+    ) {
+      this.setStatus(`请先选择 ${targeting.count} 张要赠送的牌`, true);
+      return;
+    }
+    this.sendAction({
+      type: 'playHearth',
+      cardId: this.hearthSelection.cardId,
+      targets: [player],
+      cardIds: [...this.hearthSelection.selectedCardIds],
+    });
+    this.cancelTargeting(false);
+  }
+
+  private renderTargetingHud(): void {
+    if (!this.targetingHudEl) return;
+    this.targetingHudEl.replaceChildren();
+    const snapshot = this.snapshot;
+    if (
+      !(
+        snapshot &&
+        (this.hearthSelection ||
+          this.selectedAttackerId ||
+          this.unoTargetCardId ||
+          this.heroTargetSelection)
+      )
+    ) {
+      this.targetingHudEl.classList.remove('visible');
+      return;
+    }
+    if (this.unoTargetCardId) {
+      this.targetingHudEl.append(
+        this.el(
+          'span',
+          undefined,
+          '数字 7 · 全手牌交换：直接点击桌上发光的对手席位（UNO 与炉石全部交换）'
+        ),
+        this.btn('取消', () => this.cancelTargeting())
+      );
+    } else if (this.heroTargetSelection) {
+      const confirm = this.btn('确认重新分配', () => this.confirmHeroTargets());
+      confirm.disabled = this.heroTargetSelection.size !== 2;
+      this.targetingHudEl.append(
+        this.el(
+          'span',
+          undefined,
+          `检察官 · 洗牌审讯：在桌上选择两名玩家（可以包含自己） ${this.heroTargetSelection.size}/2`
+        ),
+        confirm,
+        this.btn('取消', () => this.cancelTargeting())
+      );
+    } else if (this.selectedAttackerId) {
+      this.targetingHudEl.append(
+        this.el('span', undefined, '已选择攻击者：点击发光的敌方随从或英雄'),
+        this.btn('取消', () => this.cancelTargeting())
+      );
+    } else if (this.hearthSelection) {
+      const effect = getEffect(this.hearthSelection.effectId);
+      const targeting = this.effectTargeting(effect);
+      const selected = this.hearthSelection.selectedCardIds.size;
+      if (targeting?.type === 'ownUnoCards') {
+        const required = requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length);
+        this.targetingHudEl.append(
+          this.el('span', undefined, `${effect?.name}：选择己方 UNO ${selected}/${required}`),
+          this.btn('确认施放', () => {
+            if (selected !== required) return;
+            this.sendAction({
+              type: 'playHearth',
+              cardId: this.hearthSelection!.cardId,
+              unoCardIds: [...this.hearthSelection!.selectedCardIds],
+            });
+            this.cancelTargeting(false);
+          })
+        );
+      } else if (targeting?.type === 'giveCards') {
+        this.targetingHudEl.append(
+          this.el(
+            'span',
+            undefined,
+            `${effect?.name}：选择手牌 ${selected}/${targeting.count}，再点击对手`
+          )
+        );
+      } else if (targeting?.type === 'minion') {
+        this.targetingHudEl.append(this.el('span', undefined, `${effect?.name}：点击发光的随从`));
+      } else if (targeting?.type === 'enemyPlayer') {
+        this.targetingHudEl.append(
+          this.el('span', undefined, `${effect?.name}：点击桌上发光的对手席位`)
+        );
+      } else if (targeting?.type === 'players') {
+        const selectedPlayers = this.hearthSelection.selectedPlayerIds.size;
+        const confirm = this.btn('确认施放', () => {
+          if (selectedPlayers !== targeting.count) return;
+          this.sendAction({
+            type: 'playHearth',
+            cardId: this.hearthSelection!.cardId,
+            targets: [...this.hearthSelection!.selectedPlayerIds],
+          });
+          this.cancelTargeting(false);
+        });
+        confirm.disabled = selectedPlayers !== targeting.count;
+        this.targetingHudEl.append(
+          this.el(
+            'span',
+            undefined,
+            `${effect?.name}：在桌上选择两名英雄 ${selectedPlayers}/${targeting.count}`
+          ),
+          confirm
+        );
+      }
+      this.targetingHudEl.append(this.btn('取消', () => this.cancelTargeting()));
+    }
+    this.targetingHudEl.classList.add('visible');
+  }
+
+  private cancelTargeting(announce = true): void {
+    const had = Boolean(
+      this.hearthSelection ||
+        this.selectedAttackerId ||
+        this.unoTargetCardId ||
+        this.heroTargetSelection
+    );
+    this.hearthSelection = null;
+    this.selectedAttackerId = null;
+    this.unoTargetCardId = null;
+    this.heroTargetSelection = null;
+    if (this.snapshot) this.renderSnapshot(this.snapshot);
+    if (had && announce) this.setStatus('已取消目标选择');
+  }
+
+  private async useHeroPower(): Promise<void> {
+    const snapshot = this.snapshot;
+    if (!snapshot?.heroPowerUsable || this.actionAnimating) return;
+    const heroId = snapshot.players[snapshot.viewer]?.heroId;
+    if (heroId !== 'inspector') {
+      this.sendAction({ type: 'useHeroPower' });
+      return;
+    }
+    this.hearthSelection = null;
+    this.selectedAttackerId = null;
+    this.unoTargetCardId = null;
+    this.heroTargetSelection = new Set();
+    this.renderSnapshot(snapshot);
+    this.setStatus('检察官：在桌上选择两名玩家，可以包含自己');
+  }
+
+  private confirmHeroTargets(): void {
+    if (this.heroTargetSelection?.size !== 2) return;
+    this.sendAction({ type: 'useHeroPower', targets: [...this.heroTargetSelection] });
+    this.cancelTargeting(false);
+  }
+
+  private endTurn(): void {
+    const snapshot = this.snapshot;
+    if (
+      !snapshot ||
+      this.actionAnimating ||
+      snapshot.turn !== snapshot.viewer ||
+      snapshot.phase === 'gameOver'
+    )
+      return;
+    if (snapshot.mustResolveRoulette) {
+      this.promptRoulette();
+      return;
+    }
+    this.cancelTargeting(false);
+    this.sendAction({ type: 'endTurn' });
+  }
+
+  private promptRoulette(): void {
+    const snapshot = this.snapshot;
+    if (!(snapshot?.mine.roulettePending && snapshot.turn === snapshot.viewer)) return;
+    if (this.roulettePromptOpen) return;
+    this.roulettePromptOpen = true;
+    void pickColor(this.root, {
+      title: `颜色轮盘：为玩家 ${(snapshot.mine.rouletteDrawer ?? 0) + 1} 选择抽牌颜色`,
+      allowCancel: false,
+    }).then((color) => {
+      this.roulettePromptOpen = false;
+      if (color) this.sendAction({ type: 'resolveRoulette', color });
+    });
+  }
+
+  private sendAction(action: NetworkAction): void {
+    try {
+      getNet().sendInput(action);
+    } catch (error) {
+      this.setStatus(error instanceof Error ? error.message : String(error), true);
     }
   }
+
+  private async playEventAnimations(
+    events: GameEvent[],
+    snapshot: MultiplayerSnapshot
+  ): Promise<void> {
+    if (!this.view) return;
+    for (const event of events) {
+      this.applyAnimationHandDeltas(event);
+      const source = 'player' in event ? this.visualSeat(event.player, snapshot) : 0;
+      if (event.type === 'unoPlayed') {
+        const presentation = unoPresentation(event.card.value);
+        audio.playSfx('/assets/audio/sfx/card_flip.mp3');
+        if (!(event.penaltyAdded ?? 0)) audio.playSfx(soundAsset(presentation.sound), 0.55);
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        if ((event.penaltyAdded ?? 0) > 0 && event.penaltyTarget !== undefined) {
+          const target = this.visualSeat(event.penaltyTarget, snapshot);
+          if ((event.penaltyTransferred ?? 0) > 0)
+            await this.view.playPenaltyDealAnimation(
+              target,
+              event.penaltyTransferred!,
+              snapshot.players.length,
+              source
+            );
+          audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.72);
+          await this.view.playPenaltyDealAnimation(
+            target,
+            event.penaltyAdded!,
+            snapshot.players.length
+          );
+        } else if (!/^\d$/.test(event.card.value)) {
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            source,
+            this.nextVisualSeat(source, snapshot),
+            snapshot.players.length
+          );
+        }
+      } else if (event.type === 'hearthPlayed') {
+        const effect = getEffect(event.effectId);
+        const presentation = cardPresentation(event.effectId);
+        audio.playSfx('/assets/audio/sfx/card_flip.mp3');
+        audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        if (effect?.kind !== 'minion') {
+          const targetGlobal =
+            event.targets?.[0] ??
+            (event.targetMinionId
+              ? snapshot.players.findIndex((player) =>
+                  player.board.some((minion) => minion.id === event.targetMinionId)
+                )
+              : -1);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            source,
+            targetGlobal >= 0 ? this.visualSeat(targetGlobal, snapshot) : null,
+            snapshot.players.length
+          );
+        }
+      } else if (event.type === 'heroPowerUsed') {
+        audio.playSfx(`/assets/audio/voice/heroes/${event.heroId}_power.mp3`, 1);
+        audio.playSfx(
+          event.heroId === 'cardMaster'
+            ? '/assets/audio/sfx/generated/hero_cardmaster.mp3'
+            : event.heroId === 'thug'
+              ? '/assets/audio/sfx/generated/hero_thug.mp3'
+              : '/assets/audio/sfx/generated/hero_inspector_shuffle.mp3',
+          0.8
+        );
+        await this.view.playHeroPowerAnimation(event.heroId);
+      } else if (event.type === 'unoAlert') {
+        audio.playSfx('/assets/audio/sfx/uno_cheer.mp3', 1);
+        await this.view.animationPause(180);
+      } else if (event.type === 'minionSummoned') {
+        audio.playSfx(`/assets/audio/voice/minions/${event.effectId}_summon.mp3`, 0.95);
+        audio.playSfx('/assets/audio/sfx/generated/minion_summon.mp3', 0.76);
+        await this.view.playSummonAnimation(source, snapshot.players.length, event.effectId);
+      } else if (event.type === 'minionAttack') {
+        audio.playSfx(`/assets/audio/voice/minions/${event.attackerEffectId}_attack.mp3`, 0.95);
+        audio.playSfx('/assets/audio/sfx/generated/minion_attack_swing.mp3', 0.9);
+        await this.view.playAttackAnimation(
+          source,
+          this.visualSeat(event.targetPlayer, snapshot),
+          snapshot.players.length,
+          event.attackerId,
+          event.targetMinionId,
+          event.attackDamage,
+          event.counterDamage
+        );
+        audio.playSfx('/assets/audio/sfx/generated/minion_hit.mp3', 0.95);
+      } else if (
+        event.type === 'battlecry' ||
+        event.type === 'deathrattle' ||
+        event.type === 'minionTriggered' ||
+        event.type === 'penaltyRedirected' ||
+        event.type === 'minionTransformed' ||
+        event.type === 'minionEmpowered' ||
+        event.type === 'minionsEqualized'
+      ) {
+        await this.view.playSpellAnimation(source, null, snapshot.players.length);
+      } else if (
+        event.type === 'drawUno' ||
+        event.type === 'drawPenalty' ||
+        event.type === 'hearthDrawn' ||
+        event.type === 'mixedCardsDrawn'
+      ) {
+        audio.playSfx('/assets/audio/sfx/card_flip.mp3', 0.5);
+        await this.view.playDrawAnimation(source, snapshot.players.length);
+      } else if (event.type === 'rouletteColorChosen') {
+        await this.showColorBroadcast(source, event.color);
+      } else if (event.type === 'rouletteCardDrawn') {
+        await Promise.all([
+          this.view.playDrawAnimation(source, snapshot.players.length),
+          this.showPublicRouletteCard(source, event.card, event.index),
+        ]);
+      } else if (event.type === 'handRevealed' && event.player === snapshot.viewer) {
+        const choice = await this.showHandRevealDialog(
+          event.targetPlayer,
+          event.cards,
+          Boolean(event.chooseTakeAndDiscard)
+        );
+        if (choice)
+          this.sendAction({
+            type: 'resolveOracle',
+            takeCardId: choice.takeCardId,
+            discardCardId: choice.discardCardId,
+          });
+      } else if (event.type === 'turnStart') {
+        if (event.drawUno) await this.view.playDrawAnimation(source, snapshot.players.length);
+        if (event.drawHearth) await this.view.playDrawAnimation(source, snapshot.players.length);
+      } else if (event.type === 'endTurn') {
+        await this.view.animationPause(260);
+      }
+      this.reactToEvent(event, snapshot);
+      this.recordActivity(event, snapshot);
+    }
+  }
+
+  private reactToEvent(event: GameEvent, snapshot: MultiplayerSnapshot): void {
+    const name = (player: number): string =>
+      snapshot.players[player]?.userName ?? `玩家 ${player + 1}`;
+    if (event.type === 'playerEliminated') {
+      this.showTurnNotice(
+        event.player === snapshot.viewer ? '你已被淘汰' : `${name(event.player)}被淘汰`,
+        `UNO 手牌达到 ${event.cardCount} 张，全部手牌与场面已清空；后续回合会自动跳过。`,
+        'eliminated'
+      );
+    } else if (
+      event.type === 'playerSkipped' &&
+      event.player === snapshot.viewer &&
+      snapshot.players[event.player]?.active
+    ) {
+      this.showTurnNotice('你被禁用了', '跳过效果已生效，本轮行动直接跳过。', 'skipped');
+    } else if (event.type === 'drawPenalty' && event.player === snapshot.viewer) {
+      this.showTurnNotice(
+        `罚抽结算 +${event.count}`,
+        `已强制抽取 ${event.count} 张 UNO 牌。`,
+        'penalty'
+      );
+    } else if (
+      event.type === 'handSwap' &&
+      (event.player === snapshot.viewer || event.targetPlayer === snapshot.viewer)
+    ) {
+      const other = event.player === snapshot.viewer ? event.targetPlayer : event.player;
+      this.showTurnNotice('手牌已交换', `你与 ${name(other)} 交换了全部手牌。`, 'swap');
+    } else if (event.type === 'handPass') {
+      this.showTurnNotice(
+        '全桌传牌',
+        `所有手牌已按${event.direction === 1 ? '顺时针' : '逆时针'}传给下一位。`,
+        'swap'
+      );
+    }
+  }
+
+  private applyAnimationHandDeltas(event: GameEvent): void {
+    for (const change of handCountDeltas(event)) {
+      const current = this.animationHandDeltas.get(change.player) ?? {
+        player: change.player,
+        uno: 0,
+        hearth: 0,
+        pendingUno: 0,
+      };
+      current.uno += change.uno;
+      current.hearth += change.hearth;
+      current.pendingUno += change.pendingUno;
+      this.animationHandDeltas.set(change.player, current);
+      this.renderAnimationHandDelta(change.player);
+    }
+  }
+
+  private renderAnimationHandDelta(player: number): void {
+    const playerState = this.snapshot?.players[player];
+    if (!playerState?.active) return;
+    const targets = [
+      this.rosterEl?.querySelector<HTMLElement>(
+        `.table-seat[data-player="${player}"] .seat-card-count`
+      ) ?? null,
+      player === this.snapshot?.viewer ? this.handSummaryEl : null,
+    ].filter((target): target is HTMLElement => target !== null);
+    const change = this.animationHandDeltas.get(player);
+    for (const target of targets) {
+      if (!change) continue;
+      renderHandCountLabel(target, playerState.unoCount, playerState.hearthCount, change, {
+        unoSuffix: target === this.handSummaryEl ? ' / 25 张淘汰' : '',
+      });
+    }
+  }
+
+  private clearAnimationHandDeltas(): void {
+    this.animationHandDeltas.clear();
+  }
+
+  private showTurnNotice(title: string, detail: string, kind: string): void {
+    if (!this.turnNoticeEl) return;
+    if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
+    const icon = this.el('span', 'notice-icon', kind === 'swap' ? '↔' : '!');
+    icon.setAttribute('aria-hidden', 'true');
+    const copy = this.el('span');
+    copy.append(this.el('strong', undefined, title), this.el('small', undefined, detail));
+    this.turnNoticeEl.replaceChildren(icon, copy);
+    this.turnNoticeEl.className = `turn-notice visible ${kind}`;
+    this.turnNoticeTimer = window.setTimeout(() => {
+      if (this.turnNoticeEl) this.turnNoticeEl.className = 'turn-notice';
+      this.turnNoticeTimer = null;
+    }, 3600);
+  }
+
+  private recordActivity(event: GameEvent, snapshot: MultiplayerSnapshot): void {
+    const entry = formatActivity(
+      event,
+      (player) => snapshot.players[player]?.userName ?? `玩家 ${player + 1}`
+    );
+    if (!entry) return;
+    this.activityEntries.push(entry);
+    this.renderActivityLedger();
+  }
+
+  private renderActivityLedger(): void {
+    if (!this.activityLedgerEl) return;
+    this.activityLedgerEl.replaceChildren();
+    for (const entry of this.activityEntries.slice(-80)) {
+      this.activityLedgerEl.append(this.el('li', undefined, entry));
+    }
+    this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
+  }
+
+  private visualSeat(globalPlayer: number, snapshot: MultiplayerSnapshot): number {
+    if (globalPlayer === snapshot.viewer) return 0;
+    return (globalPlayer - snapshot.viewer + snapshot.players.length) % snapshot.players.length;
+  }
+
+  private nextVisualSeat(source: number, snapshot: MultiplayerSnapshot): number {
+    const step = snapshot.direction === 1 ? 1 : snapshot.players.length - 1;
+    return (source + step) % snapshot.players.length;
+  }
+
+  private actionOrigin(player: number, playerCount: number): THREE.Vector3 {
+    if (player === 0) return new THREE.Vector3(0, 0.6, 4.2);
+    const angle = Math.PI * (0.12 + (player - 1) / Math.max(1, playerCount - 1)) + Math.PI * 0.38;
+    return new THREE.Vector3(Math.cos(angle) * 3.7, 0.75, Math.sin(angle) * 2.7);
+  }
+
+  private showHeroEmote(player: number, message: string, playerCount: number): Promise<void> {
+    const bubble = this.el('div', 'hero-emote-bubble', message);
+    const angle = Math.PI / 2 + (Math.PI * 2 * player) / playerCount;
+    bubble.style.setProperty('--bubble-x', `${50 + Math.cos(angle) * 38}%`);
+    bubble.style.setProperty('--bubble-y', `${50 + Math.sin(angle) * 34}%`);
+    this.root.append(bubble);
+    return new Promise((resolve) =>
+      window.setTimeout(() => {
+        bubble.remove();
+        resolve();
+      }, 1450)
+    );
+  }
+
+  private showColorBroadcast(player: number, color: string): Promise<void> {
+    const overlay = this.el('div', `roulette-broadcast ${color}`);
+    overlay.innerHTML = `<small>玩家 ${player + 1} 选择颜色</small><strong>${COLOR_NAMES[color] ?? color}</strong>`;
+    this.root.append(overlay);
+    return new Promise((resolve) =>
+      window.setTimeout(() => {
+        overlay.remove();
+        resolve();
+      }, 850)
+    );
+  }
+
+  private showPublicRouletteCard(
+    player: number,
+    card: { id: string; color: string | null; value: string },
+    index: number
+  ): Promise<void> {
+    const overlay = this.el('div', 'roulette-public-card');
+    const image = new Image();
+    image.src = unoCardDataURL(card as UnoCard);
+    image.alt = `${card.color ?? '四色'} ${card.value}`;
+    overlay.append(
+      this.el('strong', undefined, `玩家 ${player + 1} 轮盘抽牌 · 第 ${index} 张`),
+      image,
+      this.el('small', undefined, image.alt)
+    );
+    this.root.append(overlay);
+    return new Promise((resolve) =>
+      window.setTimeout(() => {
+        overlay.remove();
+        resolve();
+      }, 620)
+    );
+  }
+
+  private showHandRevealDialog(
+    targetPlayer: number,
+    cards: Array<{ id: string; color: string | null; value: string }>,
+    choose = false
+  ): Promise<{ takeCardId: string; discardCardId: string } | null> {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'hand-reveal-dialog';
+    dialog.setAttribute('aria-labelledby', 'multiplayer-hand-reveal-title');
+    const header = this.el('header');
+    const copy = this.el('div');
+    const title = this.el('h2', undefined, `窥镜：玩家 ${targetPlayer + 1} 的手牌`);
+    title.id = 'multiplayer-hand-reveal-title';
+    copy.append(
+      title,
+      this.el(
+        'p',
+        undefined,
+        choose
+          ? `随机展示 ${cards.length} 张：选择拿走 1 张，并选择另 1 张弃掉。`
+          : `随机展示 ${cards.length} 张；确认后关闭情报。`
+      )
+    );
+    const toggle = this.btn('隐藏窥镜', () => {}, 'hand-reveal-toggle');
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.onclick = () => {
+      const observing = dialog.classList.toggle('is-observing');
+      toggle.textContent = observing ? '显示窥镜' : '隐藏窥镜';
+      toggle.setAttribute('aria-expanded', String(!observing));
+      toggle.setAttribute(
+        'aria-label',
+        observing ? '重新显示窥镜决策界面' : '隐藏窥镜界面以观察牌桌'
+      );
+    };
+    header.append(copy, toggle);
+    const list = this.el('div', 'hand-reveal-cards');
+    let take = '';
+    let discard = '';
+    const confirm = this.btn(choose ? '确认拿取与弃置' : '确认情报', () => {});
+    confirm.disabled = choose;
+    for (const card of cards) {
+      const wrap = this.el('div', 'hand-reveal-card');
+      const image = new Image();
+      image.src = unoCardDataURL(card as UnoCard);
+      image.alt = `${card.color ?? '四色'} ${card.value}`;
+      wrap.append(image);
+      if (choose) {
+        const takeButton = this.btn('拿走', () => {
+          take = card.id;
+          if (discard === card.id) discard = '';
+          confirm.disabled = !(take && discard);
+        });
+        const discardButton = this.btn('弃掉', () => {
+          discard = card.id;
+          if (take === card.id) take = '';
+          confirm.disabled = !(take && discard);
+        });
+        wrap.append(takeButton, discardButton);
+      }
+      list.append(wrap);
+    }
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    confirm.type = 'submit';
+    form.append(confirm);
+    dialog.append(header, list, form);
+    this.root.append(dialog);
+    return new Promise((resolve) => {
+      dialog.addEventListener('cancel', (event) => event.preventDefault());
+      dialog.addEventListener(
+        'close',
+        () => {
+          dialog.remove();
+          resolve(choose && take && discard ? { takeCardId: take, discardCardId: discard } : null);
+        },
+        { once: true }
+      );
+      dialog.showModal();
+    });
+  }
+
+  private isSnapshot(value: unknown): value is MultiplayerSnapshot {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as Partial<MultiplayerSnapshot>;
+    return (
+      Number.isInteger(candidate.sequence) &&
+      Number.isInteger(candidate.turnSerial) &&
+      Number.isInteger(candidate.viewer) &&
+      Number.isInteger(candidate.turn) &&
+      Array.isArray(candidate.players) &&
+      Boolean(
+        candidate.mine &&
+          Array.isArray(candidate.mine.hand) &&
+          Array.isArray(candidate.mine.hearthHand)
+      )
+    );
+  }
+
+  private setStatus(message: string, error = false): void {
+    if (!this.statusEl) return;
+    this.statusEl.textContent = message;
+    this.statusEl.classList.toggle('error', error);
+  }
+
+  private handleEscape = (event: KeyboardEvent): void => {
+    if (
+      event.key === 'Escape' &&
+      (this.hearthSelection ||
+        this.selectedAttackerId ||
+        this.unoTargetCardId ||
+        this.heroTargetSelection)
+    ) {
+      event.preventDefault();
+      this.cancelTargeting();
+    }
+  };
 
   override exit(): void {
-    if (this.timer !== null) window.clearInterval(this.timer);
+    this.exited = true;
+    this.root.classList.remove('multiplayer-battle');
+    if (this.timeoutInterval !== null) window.clearInterval(this.timeoutInterval);
+    if (this.botInterval !== null) window.clearInterval(this.botInterval);
+    if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
+    if (this.workDoneTimer !== null) window.clearTimeout(this.workDoneTimer);
+    window.removeEventListener('keydown', this.handleEscape);
     this.pause?.unbind();
     this.view?.dispose();
-    getNet().onInputReceived = undefined;
-    getNet().onStateReceived = undefined;
+    const net = getNet();
+    net.onInputReceived = undefined;
+    net.onStateReceived = undefined;
+    net.onSnapshotRequested = undefined;
     super.exit();
   }
 }
+
+const COLOR_NAMES: Record<string, string> = {
+  red: '红色',
+  yellow: '黄色',
+  green: '绿色',
+  blue: '蓝色',
+};
+
+const ACTION_NAMES: Record<string, string> = {
+  skip: '跳过',
+  reverse: '反转',
+  draw2: '+2',
+  draw4: '彩色+4',
+  wild: '万能',
+  wildDraw4: '万能+4',
+  massSkip: '全员跳过',
+  colorDump: '同色清场',
+  wildReverseDraw4: '反转+4',
+  wildDraw6: '万能+6',
+  wildDraw10: '万能+10',
+  wildColorRoulette: '颜色轮盘',
+};

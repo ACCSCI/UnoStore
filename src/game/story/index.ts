@@ -6,6 +6,8 @@ export {
   isChapterUnlocked,
   loadSave,
   recordResult,
+  recordStoryMatchResult,
+  sanitizeStoryProgress,
   saveProgress,
 } from './save';
 export type { StorySession } from './session';

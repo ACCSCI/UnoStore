@@ -1,88 +1,173 @@
-import { getEffect } from '../../game/hearth/effects/registry';
-import { unoCardDataURL } from './CardRenderer';
+import type { MinionState } from '../../game/core/state';
+import {
+  effectKeywords,
+  getEffect,
+  HEARTH_KEYWORDS,
+  type HearthEffect,
+} from '../../game/hearth/effects/registry';
+import { unoCardDataURL, unoCardTitle } from './CardRenderer';
 import type { HandCardEntry } from './HandRenderer';
 import { hearthCardDataURL } from './HearthCardRenderer';
 
-/**
- * 卡牌详情面板（屏幕中央，悬停卡牌时显示）：
- * - 卡面图像 + 中文名称 + 效果说明 + 费用
- * 纯 DOM 覆盖层，不影响 3D 场景。
- */
-
-const COLOR_NAMES: Record<string, string> = {
-  red: '红',
-  yellow: '黄',
-  green: '绿',
-  blue: '蓝',
-};
-
-const UNO_ACTION_INFO: Record<string, { name: string; desc: string }> = {
-  skip: { name: '跳过', desc: '让下一个玩家跳过回合' },
-  reverse: { name: '反转', desc: '反转出牌方向（2人局=跳过对手）' },
-  draw2: { name: '+2', desc: '下一个玩家罚抽 2 张' },
-  wild: { name: '万能', desc: '选择任意颜色继续出牌' },
-  wildDraw4: { name: '万能+4', desc: '选择颜色，罚下一个玩家抽 4 张' },
-  massSkip: { name: '全员跳过', desc: '所有对手跳过回合，自己获得额外行动' },
-};
-
+/** 悬停预览：所有规则均写在卡面上，因此这里只展示卡牌放大版。 */
 export class CardDetailPanel {
   private el: HTMLDivElement | null = null;
+  private requestVersion = 0;
+  private pinned:
+    | { type: 'card'; entry: HandCardEntry }
+    | { type: 'minion'; minion: MinionState }
+    | null = null;
 
   constructor(private root: HTMLElement) {}
 
-  /** 显示某张卡的详情（null = 隐藏） */
   show(entry: HandCardEntry | null): void {
     if (!entry) {
-      this.hide();
+      this.restorePinnedOrHide();
       return;
     }
+    this.renderCard(entry);
+  }
+
+  pin(entry: HandCardEntry): void {
+    this.pinned = { type: 'card', entry };
+    this.renderCard(entry);
+  }
+
+  pinMinion(minion: MinionState): void {
+    this.pinned = { type: 'minion', minion };
+    this.renderMinion(minion);
+  }
+
+  clearPinned(): void {
+    this.pinned = null;
+    this.removePanel();
+  }
+
+  private renderCard(entry: HandCardEntry): void {
     if (!this.el) {
       this.el = document.createElement('div');
       this.el.className = 'card-detail';
+      this.el.setAttribute('role', 'tooltip');
       this.root.appendChild(this.el);
     }
+    this.el.className = 'card-detail';
+
+    const requestVersion = ++this.requestVersion;
     if (entry.isHearth && entry.hearth) {
       const effect = getEffect(entry.hearth.effectId);
       const name = effect?.name ?? entry.hearth.effectId;
-      const cost = effect?.cost ?? 0;
-      const desc = effect?.description ?? '效果未知';
-      // 插画异步加载完成后生成卡面 dataURL
+      this.el.setAttribute('aria-label', `${name}放大预览`);
+      const loading = document.createElement('div');
+      loading.className = 'detail-loading';
+      loading.setAttribute('aria-hidden', 'true');
+      this.el.replaceChildren(loading);
       void hearthCardDataURL(entry.hearth).then((art) => {
-        if (!this.el) return;
-        this.el.innerHTML = `
-          <div class="detail-art"><img src="${art}" alt="${name}" /></div>
-          <div class="detail-cost">${cost}</div>
-          <div class="detail-name hearth">${name}</div>
-          <div class="detail-desc">${desc}</div>
-          <div class="detail-hint">点击打出</div>`;
+        if (!(this.el && requestVersion === this.requestVersion)) return;
+        const glossary = createKeywordGlossary(effect);
+        this.el.classList.toggle('has-keywords', Boolean(glossary));
+        this.el.replaceChildren(createPreviewImage(art, name), ...(glossary ? [glossary] : []));
       });
-    } else if (entry.uno) {
-      const c = entry.uno;
-      let name: string;
-      let desc: string;
-      if (c.color === null) {
-        const info = UNO_ACTION_INFO[c.value] ?? { name: c.value, desc: '' };
-        name = info.name;
-        desc = info.desc;
-      } else if (/^\d$/.test(c.value)) {
-        name = `${COLOR_NAMES[c.color] ?? c.color} ${c.value}`;
-        desc = `打出后冻结 ${c.value} 颗水晶，下回合可用`;
-      } else {
-        const info = UNO_ACTION_INFO[c.value] ?? { name: c.value, desc: '' };
-        name = `${COLOR_NAMES[c.color] ?? c.color} ${info.name}`;
-        desc = info.desc;
-      }
-      const art = unoCardDataURL(c);
-      this.el.innerHTML = `
-        <div class="detail-art"><img src="${art}" alt="${name}" /></div>
-        <div class="detail-name">${name}</div>
-        <div class="detail-desc">${desc}</div>
-        <div class="detail-hint">点击打出</div>`;
+      return;
+    }
+
+    if (entry.uno) {
+      const name = unoCardTitle(entry.uno);
+      this.el.setAttribute('aria-label', `${name}放大预览`);
+      this.el.replaceChildren(createPreviewImage(unoCardDataURL(entry.uno), name));
     }
   }
 
+  showMinion(minion: MinionState | null): void {
+    if (!minion) {
+      this.restorePinnedOrHide();
+      return;
+    }
+    this.renderMinion(minion);
+  }
+
+  private renderMinion(minion: MinionState): void {
+    if (!this.el) {
+      this.el = document.createElement('div');
+      this.el.className = 'card-detail minion-detail';
+      this.el.setAttribute('role', 'tooltip');
+      this.root.appendChild(this.el);
+    } else {
+      this.el.className = 'card-detail minion-detail';
+    }
+    const effect = getEffect(minion.effectId);
+    const name = effect?.name ?? minion.effectId;
+    const description = effect?.description ?? '攻击玩家时令其抽取攻击力等量的 UNO 牌。';
+    this.el.setAttribute(
+      'aria-label',
+      `${name}，${minion.attack} 点攻击，${minion.health} 点生命。${description}`
+    );
+    const loading = document.createElement('div');
+    loading.className = 'detail-loading';
+    loading.setAttribute('aria-hidden', 'true');
+    this.el.replaceChildren(loading);
+    const requestVersion = ++this.requestVersion;
+    void hearthCardDataURL(
+      { id: minion.cardId, effectId: minion.effectId },
+      { attack: minion.attack, health: minion.health }
+    ).then((art) => {
+      if (!(this.el && requestVersion === this.requestVersion)) return;
+      const glossary = createKeywordGlossary(effect);
+      this.el.classList.toggle('has-keywords', Boolean(glossary));
+      this.el.replaceChildren(
+        createPreviewImage(art, `${name}，当前 ${minion.attack}/${minion.health}`),
+        ...(glossary ? [glossary] : [])
+      );
+    });
+  }
+
   hide(): void {
+    this.pinned = null;
+    this.removePanel();
+  }
+
+  private restorePinnedOrHide(): void {
+    if (this.pinned?.type === 'card') {
+      this.renderCard(this.pinned.entry);
+      return;
+    }
+    if (this.pinned?.type === 'minion') {
+      this.renderMinion(this.pinned.minion);
+      return;
+    }
+    this.removePanel();
+  }
+
+  private removePanel(): void {
+    this.requestVersion++;
     this.el?.remove();
     this.el = null;
   }
+}
+
+function createKeywordGlossary(effect: HearthEffect | null): HTMLElement | null {
+  const keywords = effectKeywords(effect);
+  if (keywords.length === 0) return null;
+  const aside = document.createElement('aside');
+  aside.className = 'keyword-glossary';
+  aside.setAttribute('aria-label', '卡牌属性释义');
+  for (const keyword of keywords) {
+    const definition = HEARTH_KEYWORDS[keyword];
+    const item = document.createElement('section');
+    const title = document.createElement('strong');
+    title.textContent = definition.name;
+    const description = document.createElement('small');
+    description.textContent = definition.description;
+    item.append(title, description);
+    aside.appendChild(item);
+  }
+  return aside;
+}
+
+function createPreviewImage(src: string, name: string): HTMLImageElement {
+  const image = new Image();
+  image.className = 'detail-preview-image';
+  image.src = src;
+  image.alt = name;
+  image.decoding = 'async';
+  return image;
 }

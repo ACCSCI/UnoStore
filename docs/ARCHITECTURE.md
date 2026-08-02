@@ -74,6 +74,8 @@ type Crystal = { free: number; frozen: number };  // free=本回合可用，froz
 | `callUno()` | 剩 1 张 | 自动报牌（系统自动，无需行动） |
 | `endTurn()` | 行动完毕 | 解冻水晶、推进 turn、下一人 |
 
+对战 UI 只提供一个炉石式「结束回合」主按钮；若当前没有可出的 Uno 牌且尚有 Uno 行动，界面会先派发 `drawUno()`，播放抽牌动画，再派发 `endTurn()`。规则引擎仍保留两个独立行动，方便 AI、回放与网络同步复用。
+
 ### 2.4 回合流程
 
 ```
@@ -83,7 +85,7 @@ turnStart（抽 1 Uno + 1 炉石）
   → endTurn（free += frozen; frozen=0; 推进 turn）
 ```
 
-- 打不出 Uno 牌时：必须 `drawUno()` 抽 1 即止（抽出的牌**不可当场打出**），随后仍可打炉石
+- 打不出 Uno 牌时：必须 `drawUno()` 抽 1 即止（抽出的牌**不可当场打出**）；玩家界面在结束回合时自动完成这一步
 - `+2/+4` 惩罚：加到目标玩家 `pendingDraw`，目标回合开始时若 >0 则先抽（叠加累计）再正常开始
 
 ### 2.5 卡牌定义与 effect 注册表（可扩展性核心）
@@ -110,9 +112,9 @@ type HearthEffect = {
 - V1 炉石卡池 ≥ 12 张（见 `hearth/cards.ts`），预设牌组 2 套（连击流/爆发流）
 - 牌组编辑器：V1 存预设（`hearth/decks.ts` 数据），架构已支持自定义
 
-### 2.6 Uno 功能牌集（V1）
+### 2.6 UNO Show 'Em No Mercy 牌集
 
-数字牌（76 张）+ 功能牌：Skip（跳过）、Reverse（反转）、Draw2（+2）、Wild（变色+0 水晶）、Wild Draw4（变色+4）。功能牌**不产出水晶**。Nomercy 变体：`MassSkip`（全员跳过，打出者额外行动 +1）作为高级牌在剧情 Boss/牌组中出现。
+公共 UNO 牌库采用 168 张 No Mercy 核心牌表：数字 0-9 每色各两张；彩色 Skip、Reverse、+2、+4、Discard All、Skip Everyone；万能 Reverse +4、+6、+10、Color Roulette。数字 7 强制指定玩家交换手牌，数字 0 让所有活跃玩家按当前方向传递手牌；罚抽牌只允许用等值或更大的罚抽牌叠加，手牌达到 25 张触发慈悲规则淘汰。所有功能牌**不产出水晶**。
 
 ### 2.7 测试策略
 
@@ -142,7 +144,7 @@ type HearthEffect = {
 ## 6. 单人剧情（Phase 5）
 
 - 数据驱动：`story/chapters.ts` 定义章节/对局/事件；5-8 对手角色；Boss 特殊规则
-- 存档：localStorage（进度/解锁/统计）—— V1 单机存档；联机阶段迁移 VibeHub save
+- 存档：localStorage 离线兜底；登录后按更新时间与 VibeHub `save` 双向调和
 - UI 流：主菜单 → 章节选择 → 对局 → 结算
 
 ## 7. 联机（Phase 6，V2）— VibeHub v3 beta SDK
@@ -151,7 +153,10 @@ type HearthEffect = {
 - 数据作用域：存档/解锁/统计 → `vibe.save`；对局结果/房间元数据 → `room.data`；全局配置 → `vibe.global`
 - **红线**（SDK 规范强制）：不自建后端/数据库/WebSocket；实时状态走 P2P `room.send` 不落库；不轮询；Canvas + rAF 渲染与 UI 状态分离
 - 每局广播 < 64KB（回合制天然满足）
-- 参考：https://vibe.lumigrav.space/sdk/v3/llms-full.txt
+- SDK 固定绝对地址：`https://vibe.lumigrav.space/sdk/beta/vibehub.js`；运行时校验 `channel === "beta"`
+- 本地开发复制 `.env.example` 为 `.env.local`，填入 Creator Center 中的精确项目 slug；线上从 `vibeapps` 路径推导
+- 权威快照按座位定向脱敏：本人收到完整手牌，其他玩家仅公开 UNO/炉石数量、水晶与场面
+- 参考：https://vibe.lumigrav.space/sdk/beta/llms-full.txt
 
 ## 8. 文件规模约束
 

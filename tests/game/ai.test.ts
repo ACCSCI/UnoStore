@@ -65,6 +65,30 @@ test('AI 从不打出非法牌（引擎校验兜底）', () => {
   expect(illegal).toBeLessThan(10);
 });
 
+test('8 人单机混战可连续完成且所有 AI 行动合法', () => {
+  for (const seed of [3, 17, 81]) {
+    const state = createGame(8, getDeck('combo').cardIds, seed);
+    const gameRng = new Rng(seed);
+    const ais = Array.from(
+      { length: 8 },
+      (_, player) => new NormalHeuristic(new Rng(seed * 31 + player))
+    );
+    let steps = 0;
+    while (state.phase !== 'gameOver' && steps < 4000) {
+      const player = state.turn;
+      const action = ais[player]!.decide(state, player);
+      expect(action).not.toBeNull();
+      if (!action) break;
+      const result = dispatch(state, gameRng, action);
+      expect(result.ok).toBe(true);
+      steps++;
+    }
+    expect(state.phase).toBe('gameOver');
+    expect(steps).toBeLessThan(4000);
+    expect(state.players).toHaveLength(8);
+  }
+});
+
 test('Boss 规则：额外水晶每回合生效', () => {
   const boss = { 1: { bonusCrystalPerTurn: 3 } };
   const deck = getDeck('combo');

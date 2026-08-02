@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { drawCardBack } from './CardRenderer';
+import { assetUrl } from '../assets/url';
 
 /**
  * 对手手牌渲染（炉石传说风格）：
@@ -8,7 +8,7 @@ import { drawCardBack } from './CardRenderer';
 export class OpponentHandRenderer {
   private group = new THREE.Group();
   private meshes: THREE.Mesh[] = [];
-  private backTex: THREE.CanvasTexture | null = null;
+  private backTex: THREE.Texture | null = null;
 
   constructor(private scene: THREE.Scene) {
     this.scene.add(this.group);
@@ -20,6 +20,8 @@ export class OpponentHandRenderer {
     while (this.meshes.length > count) {
       const m = this.meshes.pop()!;
       this.group.remove(m);
+      m.geometry.dispose();
+      disposeMaterial(m.material);
     }
     // 补充牌背
     while (this.meshes.length < count) {
@@ -37,11 +39,9 @@ export class OpponentHandRenderer {
 
   private createBackCard(): THREE.Mesh {
     if (!this.backTex) {
-      const canvas = document.createElement('canvas');
-      canvas.width = 128;
-      canvas.height = 176;
-      drawCardBack(canvas.getContext('2d')!, 128, 176);
-      this.backTex = new THREE.CanvasTexture(canvas);
+      this.backTex = new THREE.TextureLoader().load(
+        assetUrl('/assets/images/dual-deck-card-back.webp')
+      );
       this.backTex.colorSpace = THREE.SRGBColorSpace;
     }
     // 立起卡牌：+z 面 = 牌背（朝向玩家）
@@ -55,6 +55,16 @@ export class OpponentHandRenderer {
   }
 
   dispose(): void {
+    for (const mesh of this.meshes) {
+      mesh.geometry.dispose();
+      disposeMaterial(mesh.material);
+    }
+    this.meshes = [];
+    this.backTex?.dispose();
     this.scene.remove(this.group);
   }
+}
+
+function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+  for (const item of Array.isArray(material) ? material : [material]) item.dispose();
 }

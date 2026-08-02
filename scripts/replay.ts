@@ -116,9 +116,16 @@ function printEvents(events: { type: string; player?: number }[]): void {
       case 'endTurn':
         console.log(`  ⏭ 玩家 ${e.player} 结束回合（冻结水晶解冻）`);
         break;
-      case 'gameOver':
-        console.log(`  🏆 玩家 ${(e as unknown as { winner: number }).winner} 出完手牌获胜！`);
+      case 'gameOver': {
+        const gameOver = e as unknown as {
+          winner: number;
+          reason: 'unoEmpty' | 'lastStanding';
+        };
+        console.log(
+          `  🏆 玩家 ${gameOver.winner}${gameOver.reason === 'lastStanding' ? '成为最后幸存者' : '清空 UNO 手牌'}获胜！`
+        );
         break;
+      }
       default:
         console.log(`  · ${e.type}`);
     }

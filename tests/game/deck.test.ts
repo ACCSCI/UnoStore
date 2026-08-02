@@ -1,35 +1,81 @@
 import { expect, test } from 'bun:test';
 
 import { createUnoDeck } from '../../src/game';
+import { PRESET_DECKS } from '../../src/game/hearth/decks';
 
-test('标准 Uno 牌堆为 110 张（108 标准 + 2 MassSkip）', () => {
-  expect(createUnoDeck()).toHaveLength(110);
+test('UNO Show Em No Mercy 核心牌堆为 168 张', () => {
+  expect(createUnoDeck()).toHaveLength(168);
 });
 
-test('每种颜色的 0 只有 1 张，1-9 各 2 张', () => {
+test('每种颜色的 0-9 均为 2 张', () => {
   const deck = createUnoDeck();
   for (const color of ['red', 'yellow', 'green', 'blue']) {
-    const ofColor = deck.filter((c) => c.color === color);
-    expect(ofColor.filter((c) => c.value === '0')).toHaveLength(1);
-    for (let v = 1; v <= 9; v++) {
-      const value = String(v);
-      expect(ofColor.filter((c) => c.value === value)).toHaveLength(2);
+    const ofColor = deck.filter((card) => card.color === color);
+    for (let value = 0; value <= 9; value++) {
+      expect(ofColor.filter((card) => card.value === String(value))).toHaveLength(2);
     }
   }
 });
 
-test('Wild / WildDraw4 各 4 张且无色', () => {
+test('每色彩色功能牌数量符合 No Mercy 牌表', () => {
   const deck = createUnoDeck();
-  expect(deck.filter((c) => c.value === 'wild')).toHaveLength(4);
-  expect(deck.filter((c) => c.value === 'wildDraw4')).toHaveLength(4);
-  for (const c of deck.filter((c) => c.value === 'wild' || c.value === 'wildDraw4')) {
-    expect(c.color).toBeNull();
+  for (const color of ['red', 'yellow', 'green', 'blue']) {
+    const count = (value: string): number =>
+      deck.filter((card) => card.color === color && card.value === value).length;
+    expect(count('skip')).toBe(3);
+    expect(count('reverse')).toBe(3);
+    expect(count('draw2')).toBe(3);
+    expect(count('draw4')).toBe(2);
+    expect(count('massSkip')).toBe(2);
+    expect(count('colorDump')).toBe(3);
   }
 });
 
-test('MassSkip 2 张且无色', () => {
+test('四类 No Mercy 万能牌数量正确且无色', () => {
   const deck = createUnoDeck();
-  const mass = deck.filter((c) => c.value === 'massSkip');
-  expect(mass).toHaveLength(2);
-  for (const c of mass) expect(c.color).toBeNull();
+  const expected = {
+    wildReverseDraw4: 8,
+    wildDraw6: 4,
+    wildDraw10: 4,
+    wildColorRoulette: 8,
+  } as const;
+  for (const [value, count] of Object.entries(expected)) {
+    const cards = deck.filter((card) => card.value === value);
+    expect(cards).toHaveLength(count);
+    for (const card of cards) expect(card.color).toBeNull();
+  }
+});
+
+test('强力随从在每套炉石预设中均有两张，避免长期抽不到', () => {
+  const featured = [
+    'bloodboundTitan',
+    'spyglassOracle',
+    'ashPhoenix',
+    'graveArchivist',
+    'calamityDealer',
+    'penaltyBulwark',
+    'voidGambler',
+    'penitentChampion',
+    'powerAcolyte',
+    'powerUnbound',
+    'warcryCommander',
+    'bloodforgeColossus',
+    'goldenCitadel',
+    'agonyDevourer',
+    'berserkerOath',
+    'vitalSurge',
+    'unoAnnihilation',
+    'forcedConscription',
+    'bloodMeasureArbiter',
+    'battlefieldRotation',
+    'duelOfAllegiance',
+    'armyExchange',
+    'chaosConscription',
+    'equalityOfAll',
+  ];
+  for (const deck of PRESET_DECKS) {
+    for (const effectId of featured) {
+      expect(deck.cardIds.filter((id) => id === effectId)).toHaveLength(2);
+    }
+  }
 });

@@ -11,6 +11,7 @@ export interface ScreenOptions {
 }
 
 export abstract class Screen {
+  private static active: Screen | null = null;
   protected root: HTMLElement;
 
   constructor(options: ScreenOptions = {}) {
@@ -22,15 +23,22 @@ export abstract class Screen {
 
   /** 进入屏幕（清空容器 + 渲染） */
   async enter(): Promise<void> {
-    this.root.innerHTML = '';
+    if (Screen.active && Screen.active !== this) Screen.active.exit();
+    Screen.active = this;
+    // 先挂载横屏提示，避免异步加载期间短暂露出不可用的竖屏界面。
+    this.root.replaceChildren(this.createOrientationGuard());
     await this.render();
+    if (Screen.active === this && !this.root.querySelector(':scope > .mobile-orientation-guard')) {
+      this.root.append(this.createOrientationGuard());
+    }
   }
 
   abstract render(): Promise<void> | void;
 
   /** 离开屏幕（清理事件监听等） */
   exit(): void {
-    this.root.innerHTML = '';
+    if (Screen.active === this) Screen.active = null;
+    this.root.replaceChildren();
   }
 
   protected el<K extends keyof HTMLElementTagNameMap>(
@@ -46,7 +54,21 @@ export abstract class Screen {
 
   protected btn(label: string, onClick: () => void, className = 'btn'): HTMLButtonElement {
     const b = this.el('button', className, label);
+    b.type = 'button';
     b.addEventListener('click', onClick);
     return b;
+  }
+
+  /** 手机端所有页面固定采用横屏；竖屏时只显示统一旋转提示。 */
+  protected createOrientationGuard(): HTMLElement {
+    const guard = this.el('aside', 'mobile-orientation-guard');
+    guard.setAttribute('role', 'status');
+    guard.setAttribute('aria-live', 'polite');
+    guard.append(
+      this.el('span', 'orientation-phone', '↻'),
+      this.el('strong', undefined, '请将手机旋转为横屏'),
+      this.el('small', undefined, 'UnoStore 的首页、房间、构筑与对局均采用横屏布局。')
+    );
+    return guard;
   }
 }

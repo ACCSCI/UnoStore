@@ -20,7 +20,7 @@ const STEPS = [
   },
   {
     title: '🖱️ 操作方式',
-    desc: '悬停手牌查看详情，点击出牌。右侧「抽牌」「结束回合」按钮控制节奏。',
+    desc: '电脑单击拿起手牌，再点击桌面打出，右键可取消；手机长按手牌并拖到桌面后释放。结束回合后不能再操作；若本回合没打出 UNO，会补抽 1 张 UNO，并总是抽 1 张炉石。',
   },
 ];
 
@@ -42,6 +42,9 @@ export class TutorialOverlay {
     this.step = 0;
     this.el = document.createElement('div');
     this.el.className = 'tutorial-overlay';
+    this.el.setAttribute('role', 'dialog');
+    this.el.setAttribute('aria-modal', 'true');
+    this.el.setAttribute('aria-label', '玩法引导');
     this.root.appendChild(this.el);
     this.renderStep(onDone);
   }
@@ -69,6 +72,7 @@ export class TutorialOverlay {
       }
     });
     const nextBtn = this.el.querySelector('.tutorial-btn:not(.prev)') as HTMLButtonElement;
+    nextBtn.focus();
     nextBtn.addEventListener('click', () => {
       this.step++;
       if (this.step >= STEPS.length) {

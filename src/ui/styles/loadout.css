@@ -1,0 +1,418 @@
+@layer components {
+  .loadout-wrap {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    padding: clamp(1rem, 4vw, 3rem);
+    background:
+      radial-gradient(circle at 80% 10%, rgb(92 72 184 / 28%), transparent 30rem),
+      linear-gradient(145deg, #080c1c, #111b3a 62%, #231438);
+  }
+
+  .loadout-header,
+  .loadout-form,
+  .rules-panel {
+    inline-size: min(78rem, 100%);
+    margin-inline: auto;
+  }
+
+  .loadout-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 2rem;
+  }
+
+  .loadout-header h1 {
+    margin-block: 0.2rem;
+    font-family: var(--font-display);
+    font-size: clamp(2.2rem, 5vw, 4.2rem);
+  }
+
+  .loadout-subtitle,
+  .loadout-save-note {
+    color: var(--paper-muted);
+  }
+
+  .rules-panel,
+  .loadout-section {
+    border: 1px solid var(--line);
+    border-radius: 1rem;
+    background: rgb(10 16 38 / 88%);
+    box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 20%);
+  }
+
+  .rules-panel {
+    margin-block: 1.5rem;
+  }
+
+  .rules-panel summary {
+    cursor: pointer;
+    padding: 1rem 1.25rem;
+    color: var(--gold);
+    font-weight: 900;
+  }
+
+  .rules-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    padding: 0 1.25rem 1.25rem;
+  }
+
+  .rules-grid article {
+    padding: 0.8rem;
+    border-radius: 0.65rem;
+    background: rgb(255 255 255 / 4%);
+  }
+
+  .rules-grid h3,
+  .rules-grid p {
+    margin: 0;
+  }
+
+  .rules-grid h3 {
+    margin-block-end: 0.35rem;
+    font-size: 0.9rem;
+  }
+
+  .rules-grid p {
+    color: var(--paper-muted);
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+
+  .loadout-form {
+    display: grid;
+    gap: 1rem;
+    padding-block-end: 3rem;
+  }
+
+  .loadout-section {
+    min-inline-size: 0;
+    padding: 1rem;
+  }
+
+  .loadout-section legend {
+    padding-inline: 0.5rem;
+    color: var(--gold);
+    font-weight: 900;
+  }
+
+  .player-count-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .player-count-control span,
+  .hero-choice span,
+  .deck-card-row > span:nth-child(2),
+  .saved-deck > span {
+    display: grid;
+    gap: 0.22rem;
+  }
+
+  .player-count-control small,
+  .hero-choice small,
+  .deck-card-row small,
+  .saved-deck small {
+    color: var(--paper-muted);
+  }
+
+  .player-count-control select,
+  .deck-editor-header input {
+    min-block-size: 2.7rem;
+    border: 1px solid var(--line);
+    border-radius: 0.55rem;
+    padding-inline: 0.85rem;
+    background: #111a36;
+    color: white;
+    font: inherit;
+  }
+
+  .hero-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .hero-choice {
+    position: relative;
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    align-items: center;
+    gap: 0.75rem;
+    overflow: hidden;
+    padding: 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    cursor: pointer;
+  }
+
+  .hero-choice:has(input:checked) {
+    border-color: var(--gold);
+    background: rgb(231 182 92 / 12%);
+    box-shadow: 0 0 0 0.15rem rgb(231 182 92 / 16%);
+  }
+
+  .hero-choice input {
+    position: absolute;
+    inset: 0.5rem auto auto 0.5rem;
+  }
+
+  .hero-choice img {
+    inline-size: 4.5rem;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+
+  .hero-choice b {
+    color: var(--gold);
+    font-size: 0.72rem;
+  }
+
+  .hero-choice small {
+    font-size: 0.68rem;
+    line-height: 1.35;
+  }
+
+  .deck-builder-layout {
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    gap: 1rem;
+  }
+
+  .deck-sidebar-actions,
+  .saved-deck-list {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .saved-deck-list {
+    margin-block-start: 0.7rem;
+  }
+
+  .saved-deck {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 0.6rem;
+    background: rgb(255 255 255 / 4%);
+  }
+
+  .saved-deck.editing {
+    border-color: #5e7cca;
+  }
+
+  .deck-edit-button,
+  .deck-count-button {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: #26375e;
+    color: white;
+    cursor: pointer;
+  }
+
+  .deck-edit-button {
+    padding: 0.35rem 0.5rem;
+  }
+
+  .deck-editor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-block-end: 0.7rem;
+  }
+
+  .deck-editor-header input {
+    inline-size: min(24rem, 75%);
+    font-weight: 800;
+  }
+
+  .deck-count.invalid {
+    color: #ff8f8f;
+  }
+
+  .deck-card-pool {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+    max-block-size: 34rem;
+    overflow: auto;
+    padding-inline-end: 0.25rem;
+  }
+
+  .deck-card-row {
+    display: grid;
+    grid-template-columns: 3.25rem 1fr auto;
+    align-items: center;
+    gap: 0.6rem;
+    min-inline-size: 0;
+    padding: 0.5rem;
+    border-radius: 0.6rem;
+    background: rgb(255 255 255 / 4%);
+  }
+
+  .deck-card-row img {
+    inline-size: 3.25rem;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+
+  .deck-card-row small {
+    overflow: hidden;
+    font-size: 0.62rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .deck-card-controls {
+    display: grid;
+    grid-template-columns: 1.7rem 1.4rem 1.7rem;
+    place-items: center;
+  }
+
+  .deck-count-button {
+    inline-size: 1.7rem;
+    block-size: 1.7rem;
+    font-size: 1rem;
+  }
+
+  .deck-count-button:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .loadout-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 1rem;
+    padding: 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: 0.8rem;
+    background: rgb(8 12 28 / 94%);
+    backdrop-filter: blur(1rem);
+  }
+}
+
+@layer responsive {
+  @media (max-width: 58rem) {
+    .hero-choice-grid,
+    .rules-grid,
+    .deck-card-pool {
+      grid-template-columns: 1fr;
+    }
+
+    .deck-builder-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 36rem) {
+    .loadout-header {
+      display: grid;
+    }
+
+    .loadout-footer {
+      justify-content: space-between;
+    }
+  }
+
+  @media (pointer: coarse) and (orientation: landscape) and (max-height: 34rem) {
+    .loadout-wrap {
+      padding: max(0.55rem, env(safe-area-inset-top)) max(0.8rem, env(safe-area-inset-right))
+        max(0.55rem, env(safe-area-inset-bottom)) max(0.8rem, env(safe-area-inset-left));
+      overscroll-behavior: contain;
+    }
+
+    .loadout-header {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .loadout-header h1 {
+      font-size: 1.65rem;
+    }
+
+    .loadout-subtitle {
+      font-size: 0.68rem;
+    }
+
+    .rules-panel {
+      margin-block: 0.55rem;
+    }
+
+    .rules-panel summary {
+      padding: 0.55rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .rules-grid,
+    .hero-choice-grid,
+    .deck-card-pool {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .rules-grid {
+      padding: 0 0.75rem 0.75rem;
+    }
+
+    .loadout-form {
+      gap: 0.55rem;
+      padding-block-end: 0.75rem;
+    }
+
+    .loadout-section {
+      padding: 0.65rem;
+    }
+
+    .hero-choice-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.4rem;
+    }
+
+    .hero-choice {
+      grid-template-columns: 2.8rem 1fr;
+      gap: 0.4rem;
+      padding: 0.4rem;
+    }
+
+    .hero-choice img {
+      inline-size: 2.8rem;
+    }
+
+    .deck-builder-layout {
+      grid-template-columns: 11.5rem minmax(0, 1fr);
+      gap: 0.55rem;
+    }
+
+    .deck-card-pool {
+      max-block-size: 16rem;
+    }
+
+    .deck-card-row {
+      grid-template-columns: 2.35rem 1fr auto;
+      gap: 0.4rem;
+      padding: 0.35rem;
+    }
+
+    .deck-card-row img {
+      inline-size: 2.35rem;
+    }
+
+    .loadout-footer {
+      position: sticky;
+      inset-block-end: 0;
+      padding: 0.5rem;
+    }
+  }
+}

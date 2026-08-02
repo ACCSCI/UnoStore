@@ -12,6 +12,14 @@
         "run": "bunx tsc --noEmit",
         "skip": ["merge", "rebase"]
       },
+      "card-art": {
+        "run": "bun run check:card-art",
+        "skip": ["merge", "rebase"]
+      },
+      "text-selection": {
+        "run": "bun run check:text-selection",
+        "skip": ["merge", "rebase"]
+      },
       "test": {
         "run": "bun test",
         "skip": ["merge", "rebase"]

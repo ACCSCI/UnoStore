@@ -1,5 +1,4 @@
 import {
-  MASS_SKIP_COUNT,
   UNO_ACTION_COUNTS,
   UNO_COLORS,
   UNO_NUMBER_COUNTS,
@@ -9,11 +8,10 @@ import {
 import type { UnoAction, UnoCard, UnoColor, UnoValue } from './types';
 
 /**
- * 生成标准 Uno 牌堆（108 张）：
- * - 数字牌：每色 0×1 + 1-9×2 = 19 张 × 4 色 = 76
- * - 彩色功能牌：每色 skip/reverse/draw2 各 2 张 = 24 张
- * - Wild × 4 + WildDraw4 × 4 = 8
- * - MassSkip × 2（Nomercy 变体，共 110 张）
+ * 生成 UNO Show 'Em No Mercy 核心牌堆（168 张）：
+ * - 数字牌：每色 0-9 各 2 张 = 80
+ * - 彩色功能牌：skip/reverse/draw2 ×3，draw4/massSkip ×2，colorDump ×3 = 64
+ * - 万能牌：ReverseDraw4 ×8，Draw6 ×4，Draw10 ×4，ColorRoulette ×8 = 24
  * 未洗牌，调用方自行 shuffle。
  */
 export function createUnoDeck(): UnoCard[] {
@@ -26,21 +24,23 @@ export function createUnoDeck(): UnoCard[] {
         deck.push({ id: `u-${n++}`, color: color as UnoColor, value: value as UnoValue });
       }
     }
-    for (const action of ['skip', 'reverse', 'draw2'] as const) {
+    for (const action of ['skip', 'reverse', 'draw2', 'draw4', 'massSkip', 'colorDump'] as const) {
       const count = UNO_ACTION_COUNTS[action];
       for (let i = 0; i < count; i++) {
         deck.push({ id: `u-${n++}`, color: color as UnoColor, value: action as UnoAction });
       }
     }
   }
-  for (const wild of ['wild', 'wildDraw4'] as const) {
+  for (const wild of [
+    'wildReverseDraw4',
+    'wildDraw6',
+    'wildDraw10',
+    'wildColorRoulette',
+  ] as const) {
     const count = WILD_COUNTS[wild];
     for (let i = 0; i < count; i++) {
       deck.push({ id: `u-${n++}`, color: null, value: wild as UnoAction });
     }
-  }
-  for (let i = 0; i < MASS_SKIP_COUNT; i++) {
-    deck.push({ id: `u-${n++}`, color: null, value: 'massSkip' as UnoAction });
   }
   return deck;
 }

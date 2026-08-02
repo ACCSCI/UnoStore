@@ -6,6 +6,8 @@ import {
   opponentDecide,
   playerPlayableIndices,
   recordResult,
+  recordStoryMatchResult,
+  sanitizeStoryProgress,
   saveProgress,
   storyDispatch,
 } from '../../src/game/story';
@@ -67,18 +69,28 @@ test('剧情：完整对局能打到游戏结束', () => {
   const session = createStorySession(match, 1);
   let steps = 0;
   // 玩家和对手轮流行动（用 AI 策略驱动玩家侧）
-  while (session.phase !== 'gameOver' && steps < 800) {
+  while (session.phase !== 'gameOver' && steps < 2000) {
     steps++;
     if (session.state.turn === 0) {
       // 玩家：简单 AI 决策（玩家侧由 UI 操作，测试用 EasyRandom 代替）
       const playable = playerPlayableIndices(session);
       if (playable.length > 0) {
+        const card = session.state.players[0]!.hand[playable[0]!]!;
         storyDispatch(session, {
           type: 'playUno',
           player: 0,
           cardIdx: playable[0]!,
+          ...(card.value === '7' ? { targetPlayer: 1 } : {}),
+          ...(card.color === null && card.value !== 'wildColorRoulette'
+            ? { color: 'red' as const }
+            : {}),
         });
-      } else if (session.state.unoActionsLeft > 0) {
+      } else if (session.state.players[0]!.roulettePending) {
+        storyDispatch(session, { type: 'resolveRoulette', player: 0, color: 'red' });
+      } else if (
+        session.state.unoActionsLeft > 0 &&
+        session.state.players[0]!.pendingDrawMin === 0
+      ) {
         storyDispatch(session, { type: 'drawUno', player: 0 });
       } else {
         storyDispatch(session, { type: 'endTurn', player: 0 });
@@ -99,6 +111,24 @@ test('存档：通关解锁下一章', () => {
   const next = completeChapter(data, 'ch1', 'ch2');
   expect(isChapterCompleted(next, 'ch1')).toBe(true);
   expect(isChapterUnlocked(next, 'ch2')).toBe(true);
+});
+
+test('存档：失败只记录败场，不完成章节或解锁下一章', () => {
+  const initial = loadSave();
+  const failed = recordStoryMatchResult(initial, false, 'ch1', 'ch2');
+  expect(failed.completedChapters).not.toContain('ch1');
+  expect(failed.unlockedChapters).not.toContain('ch2');
+  expect(failed.totalLosses).toBe(initial.totalLosses + 1);
+});
+
+test('存档：旧版本错误解锁但没有通关记录时会自动重新锁定', () => {
+  const repaired = sanitizeStoryProgress({
+    completedChapters: [],
+    unlockedChapters: ['ch1', 'ch2', 'ch3', 'ch4'],
+    totalWins: 0,
+    totalLosses: 2,
+  });
+  expect(repaired.unlockedChapters).toEqual(['ch1']);
 });
 
 test('存档：胜负记录', () => {

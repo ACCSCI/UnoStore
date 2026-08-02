@@ -27,3 +27,8 @@ desktop.ini
 
 # Logs
 *.log
+
+# Environment files may contain local tokens or credentials.
+.env
+.env.*
+!.env.example

@@ -1,6 +1,14 @@
 import { EasyRandom, HardCombo, NormalHeuristic } from './ai/strategies';
 import type { ActionResult, GameEvent } from './core/events';
-import { createGame, dispatch } from './core/reducer';
+import { canPlayUnoCard } from './core/flow';
+import {
+  canInitiateHearthPlay,
+  createGame,
+  dispatch,
+  hearthPlayError,
+  heroPowerCost,
+  heroPowerError,
+} from './core/reducer';
 import { Rng } from './core/rng';
 import type { GameAction, GameState } from './core/state';
 import { getDeck, PRESET_DECKS } from './hearth/decks';
@@ -8,8 +16,21 @@ import { canPlayOn, createUnoDeck } from './uno/deck';
 import './hearth/cards';
 
 export type { AiStrategy, BossRules } from './ai/types';
+export type { HeroDefinition, HeroId } from './heroes';
+export { DEFAULT_HERO_ID, getHero, HEROES } from './heroes';
+export type { LoadoutProfile, SavedHearthDeck } from './loadout';
+export {
+  activeDeck,
+  createDeckId,
+  loadLoadoutProfile,
+  MAX_CARD_COPIES,
+  MAX_CUSTOM_DECK_SIZE,
+  MIN_CUSTOM_DECK_SIZE,
+  saveLoadoutProfile,
+} from './loadout';
 export type { ActionResult, GameAction, GameEvent, GameState };
 export {
+  canInitiateHearthPlay,
   canPlayOn,
   createGame,
   createUnoDeck,
@@ -17,6 +38,9 @@ export {
   EasyRandom,
   getDeck,
   HardCombo,
+  hearthPlayError,
+  heroPowerCost,
+  heroPowerError,
   NormalHeuristic,
   PRESET_DECKS,
   Rng,
@@ -31,6 +55,6 @@ export function createDefaultGame(playerCount: number, seed = 42): GameState {
 export function playableUnoIndices(state: GameState): number[] {
   const hand = state.players[state.turn]!.hand;
   return hand
-    .map((c, i) => (canPlayOn(c, state.topCard, state.chosenColor) ? i : -1))
+    .map((card, index) => (canPlayUnoCard(state, state.turn, card) ? index : -1))
     .filter((i) => i >= 0);
 }

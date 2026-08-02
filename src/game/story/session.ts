@@ -1,9 +1,12 @@
 import { EasyRandom, HardCombo, NormalHeuristic } from '../ai/strategies';
 import type { AiStrategy } from '../ai/types';
+import type { ActionResult } from '../core/events';
+import { canPlayUnoCard } from '../core/flow';
 import { createGame, dispatch } from '../core/reducer';
 import { Rng } from '../core/rng';
 import type { GameAction, GameState } from '../core/state';
 import { getDeck } from '../hearth/decks';
+import type { HeroId } from '../heroes';
 import type { StoryMatch } from './story';
 
 /**
@@ -24,28 +27,35 @@ export interface StorySession {
   rng: Rng;
 }
 
-export function createStorySession(match: StoryMatch, seed = 42): StorySession {
+export function createStorySession(
+  match: StoryMatch,
+  seed = 42,
+  playerCount = 2,
+  hearthDecks: string[] | string[][] = getDeck('combo').cardIds,
+  heroIds: HeroId[] = []
+): StorySession {
   const bossRules = match.boss ? { 1: match.boss } : undefined;
-  const state = createGame(2, getDeck('combo').cardIds, seed, bossRules);
+  const state = createGame(playerCount, hearthDecks, seed, bossRules, heroIds);
   return { state, phase: 'playing', winner: null, rng: new Rng(seed) };
 }
 
 /** 对手 AI 决策（一步） */
-export function opponentDecide(session: StorySession, match: StoryMatch): GameAction | null {
+export function opponentDecide(
+  session: StorySession,
+  match: StoryMatch,
+  player = 1
+): GameAction | null {
   const ai: AiStrategy =
     match.difficulty === 'easy'
       ? new EasyRandom(session.rng)
       : match.difficulty === 'normal'
         ? new NormalHeuristic(session.rng)
         : new HardCombo(session.rng);
-  return ai.decide(session.state, 1);
+  return ai.decide(session.state, player);
 }
 
 /** 执行一步行动（玩家或对手），自动更新会话状态 */
-export function storyDispatch(
-  session: StorySession,
-  action: GameAction
-): { ok: boolean; error?: string } {
+export function storyDispatch(session: StorySession, action: GameAction): ActionResult {
   const result = dispatch(session.state, session.rng, action);
   if (!result.ok) return { ok: false, error: result.error };
   if (session.state.phase === 'gameOver') {
@@ -53,7 +63,7 @@ export function storyDispatch(
     const ev = session.state.pendingEvents.find((e) => e.type === 'gameOver');
     session.winner = ev?.type === 'gameOver' ? ev.winner : null;
   }
-  return { ok: true };
+  return result;
 }
 
 /** 玩家是否获胜 */
@@ -68,11 +78,6 @@ export function playerPlayableIndices(session: StorySession): number[] {
     .map((_, i) => i)
     .filter((i) => {
       const card = hand[i]!;
-      return (
-        session.state.unoActionsLeft > 0 &&
-        (card.color === null ||
-          card.color === session.state.chosenColor ||
-          card.value === session.state.topCard.value)
-      );
+      return canPlayUnoCard(session.state, 0, card);
     });
 }

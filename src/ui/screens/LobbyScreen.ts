@@ -1,119 +1,162 @@
 import { getNet } from '../../net';
+import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS } from '../../net/NetworkLayer';
+import { MainMenuScreen } from './MainMenuScreen';
+import { MultiplayerScreen } from './MultiplayerScreen';
 import { Screen } from './Screen';
-
-/**
- * 房间大厅：房间列表 / 创建 / 加入 / 快速匹配。
- * 房间上限 2-8 人；房主可自由开局（≥2 人即可开，不强制）。
- */
-
-const ROOM_MAX = 8;
 
 export class LobbyScreen extends Screen {
   private listEl: HTMLElement | null = null;
-  private refreshTimer: number | null = null;
+  private statusEl: HTMLElement | null = null;
+  private maxPlayers = MAX_ROOM_PLAYERS;
 
   override async render(): Promise<void> {
-    const wrap = this.el('div', 'lobby-wrap');
-    const title = this.el('h2', 'screen-title', '🏠 房间大厅');
-    const back = this.btn('← 返回', () => void this.exit(), 'btn-link');
-    wrap.append(title, back);
+    const net = getNet();
+    if (!net.isLoggedIn) {
+      void new MultiplayerScreen().enter();
+      return;
+    }
+    const wrap = this.el('main', 'lobby-wrap');
+    wrap.append(this.el('h2', 'screen-title', '🏠 VibeHub 联机大厅'));
+    const identity = this.el('p', 'lobby-identity', `已登录：${net.user?.name ?? 'VibeHub 玩家'}`);
+    const sdk = net.sdkInfo;
+    identity.append(this.el('small', 'sdk-inline', `Beta ${sdk.version}`));
+    wrap.append(identity);
 
-    // 创建房间（房主自由开局：人数≥2 可开，也可等人）
-    const createBtn = this.btn('＋ 创建房间', () => this.createRoom());
-    const quickBtn = this.btn('⚡ 快速匹配', () => this.quickMatch());
     const actions = this.el('div', 'lobby-actions');
-    actions.append(createBtn, quickBtn);
+    const maxLabel = this.el('label', 'lobby-field');
+    maxLabel.append(this.el('span', undefined, '房间人数'));
+    const maxSelect = this.el('select', 'lobby-input') as HTMLSelectElement;
+    for (let count = MIN_ROOM_PLAYERS; count <= MAX_ROOM_PLAYERS; count++) {
+      const option = this.el('option') as HTMLOptionElement;
+      option.value = String(count);
+      option.textContent = `${count} 人`;
+      option.selected = count === MAX_ROOM_PLAYERS;
+      maxSelect.append(option);
+    }
+    maxSelect.addEventListener('change', () => {
+      this.maxPlayers = Number(maxSelect.value);
+    });
+    maxLabel.append(maxSelect);
+    actions.append(
+      maxLabel,
+      this.btn('＋ 创建房间', () => void this.createRoom(), 'btn btn-primary'),
+      this.btn('⚡ 快速匹配', () => void this.quickMatch(), 'btn btn-secondary'),
+      this.btn('刷新列表', () => void this.refreshList(), 'btn btn-quiet')
+    );
     wrap.append(actions);
 
-    // 加入房间（房间号）
-    const joinRow = this.el('div', 'lobby-join');
-    const input = this.el('input') as HTMLInputElement;
-    input.placeholder = '输入房间号加入';
-    input.className = 'lobby-input';
-    const joinBtn = this.btn('加入', () => {
-      const id = input.value.trim();
-      if (id) void this.joinRoomById(id);
+    const joinForm = this.el('form', 'lobby-join');
+    joinForm.method = 'post';
+    const label = this.el('label', 'lobby-field');
+    label.append(this.el('span', undefined, '房间号'));
+    const input = this.el('input', 'lobby-input') as HTMLInputElement;
+    input.id = 'room-code';
+    input.name = 'room';
+    input.placeholder = '例如 uno-a1b2c3';
+    input.autocomplete = 'off';
+    input.required = true;
+    input.minLength = 3;
+    input.maxLength = 48;
+    input.pattern = '[a-z0-9][a-z0-9-]{2,47}';
+    label.append(input);
+    const join = this.btn('加入房间', () => undefined, 'btn btn-secondary');
+    join.type = 'submit';
+    joinForm.append(label, join);
+    joinForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (joinForm.reportValidity()) void this.joinRoomById(input.value);
     });
-    joinRow.append(input, joinBtn);
-    wrap.append(joinRow);
+    wrap.append(joinForm);
 
-    this.listEl = this.el('div', 'lobby-list');
-    wrap.append(this.listEl);
+    this.statusEl = this.el('p', 'lobby-status');
+    this.statusEl.setAttribute('role', 'status');
+    this.statusEl.setAttribute('aria-live', 'polite');
+    this.listEl = this.el('section', 'lobby-list');
+    this.listEl.setAttribute('aria-label', '可加入房间');
+    wrap.append(this.statusEl, this.listEl);
+    wrap.append(this.btn('← 返回主菜单', () => void new MainMenuScreen().enter(), 'btn btn-quiet'));
     this.root.append(wrap);
-
-    // 刷新房间列表（房间大厅轮询是可接受的：低频、非实时对局状态）
-    this.refreshTimer = window.setInterval(() => void this.refreshList(), 5000);
-    void this.refreshList();
-  }
-
-  override exit(): void {
-    if (this.refreshTimer !== null) window.clearInterval(this.refreshTimer);
-    super.exit();
+    await this.refreshList();
   }
 
   private async refreshList(): Promise<void> {
     if (!this.listEl) return;
+    this.setStatus('正在刷新房间…');
     try {
-      const net = getNet();
-      const rooms = await net.listRooms();
-      this.listEl.innerHTML = '';
+      const rooms = await getNet().listRooms();
+      this.listEl.replaceChildren();
       if (rooms.length === 0) {
-        this.listEl.textContent = '暂无房间，创建一个吧！';
-        return;
+        this.listEl.append(this.el('p', 'lobby-empty', '暂无公开房间，创建一个或使用快速匹配。'));
       }
-      for (const r of rooms) {
-        const row = this.el('div', 'lobby-room');
-        const info = this.el(
-          'span',
-          undefined,
-          `${r.hostName ?? '房主'} 的房间  [${r.players}/${r.max}人]${r.mode ? ` ${r.mode}` : ''}`
+      for (const room of rooms) {
+        const max = typeof room.max === 'number' ? room.max : MAX_ROOM_PLAYERS;
+        const row = this.el('article', 'lobby-room');
+        const info = this.el('div');
+        info.append(
+          this.el('strong', undefined, String(room.hostName ?? 'VibeHub 玩家')),
+          this.el('small', undefined, `${room.roomId} · ${room.players}/${max} 人`)
         );
-        const join = this.btn('加入', () => void this.joinRoomById(r.roomId));
-        row.append(info, join);
-        this.listEl.appendChild(row);
+        const button = this.btn('加入', () => void this.joinRoomById(room.roomId));
+        button.disabled = room.open === false || room.players >= max;
+        row.append(info, button);
+        this.listEl.append(row);
       }
-    } catch (err) {
-      this.listEl.textContent = `刷新失败：${err instanceof Error ? err.message : String(err)}`;
+      this.setStatus(`已找到 ${rooms.length} 个公开房间。`);
+    } catch (error) {
+      this.setStatus(`刷新失败：${this.message(error)}`, true);
     }
   }
 
   private async createRoom(): Promise<void> {
+    this.setStatus('正在创建房间…');
     try {
-      const net = getNet();
-      const roomId = `uno-${Math.random().toString(36).slice(2, 8)}`;
-      await net.createRoom(roomId, ROOM_MAX, '玩家');
+      const bytes = crypto.getRandomValues(new Uint8Array(4));
+      const code = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+      const roomId = `uno-${code}`;
+      await getNet().createRoom(roomId, this.maxPlayers, getNet().user?.name ?? 'VibeHub 玩家');
       this.enterRoom(roomId);
-    } catch (err) {
-      alert(`创建失败：${err instanceof Error ? err.message : String(err)}`);
+    } catch (error) {
+      this.setStatus(`创建失败：${this.message(error)}`, true);
     }
   }
 
   private async joinRoomById(roomId: string): Promise<void> {
+    this.setStatus('正在加入房间…');
     try {
-      const net = getNet();
-      await net.joinRoom(roomId);
-      this.enterRoom(roomId);
-    } catch (err) {
-      alert(`加入失败：${err instanceof Error ? err.message : String(err)}`);
+      await getNet().joinRoom(roomId);
+      this.enterRoom(getNet().roomId ?? roomId);
+    } catch (error) {
+      this.setStatus(`加入失败：${this.message(error)}`, true);
     }
   }
 
   private async quickMatch(): Promise<void> {
+    this.setStatus('正在快速匹配…');
     try {
-      const net = getNet();
-      const roomId = await net.quickJoin();
-      if (!roomId) {
-        alert('没有可加入的房间，创建一个吧！');
-        return;
+      const roomId = await getNet().quickJoin();
+      if (roomId) {
+        await getNet().joinRoom(roomId);
+        this.enterRoom(roomId);
+      } else {
+        this.setStatus('没有空房间，正在为你创建新房间…');
+        await this.createRoom();
       }
-      await net.joinRoom(roomId);
-      this.enterRoom(roomId);
-    } catch (err) {
-      alert(`匹配失败：${err instanceof Error ? err.message : String(err)}`);
+    } catch (error) {
+      this.setStatus(`匹配失败：${this.message(error)}`, true);
     }
   }
 
   private enterRoom(roomId: string): void {
-    void import('./RoomScreen').then((m) => new m.RoomScreen(roomId).enter());
+    void import('./RoomScreen').then(({ RoomScreen }) => new RoomScreen(roomId).enter());
+  }
+
+  private setStatus(message: string, error = false): void {
+    if (!this.statusEl) return;
+    this.statusEl.textContent = message;
+    this.statusEl.classList.toggle('error', error);
+  }
+
+  private message(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

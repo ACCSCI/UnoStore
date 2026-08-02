@@ -4,27 +4,34 @@
  */
 
 const COLORS = [
-  { id: 'red', label: '红', hex: '#e74c3c' },
-  { id: 'yellow', label: '黄', hex: '#f1c40f' },
-  { id: 'green', label: '绿', hex: '#2ecc71' },
-  { id: 'blue', label: '蓝', hex: '#3498db' },
+  { id: 'red', label: '红' },
+  { id: 'yellow', label: '黄' },
+  { id: 'green', label: '绿' },
+  { id: 'blue', label: '蓝' },
 ] as const;
 
-export function pickColor(root: HTMLElement): Promise<'red' | 'yellow' | 'green' | 'blue' | null> {
+export function pickColor(
+  root: HTMLElement,
+  options: { title?: string; allowCancel?: boolean } = {}
+): Promise<'red' | 'yellow' | 'green' | 'blue' | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'color-picker-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'color-picker-title');
     const card = document.createElement('div');
     card.className = 'color-picker-card';
     const title = document.createElement('div');
     title.className = 'color-picker-title';
-    title.textContent = '选择颜色';
+    title.id = 'color-picker-title';
+    title.textContent = options.title ?? '选择颜色';
     const row = document.createElement('div');
     row.className = 'color-picker-row';
     for (const c of COLORS) {
       const btn = document.createElement('button');
-      btn.className = 'color-btn';
-      btn.style.background = c.hex;
+      btn.className = `color-btn ${c.id}`;
+      btn.type = 'button';
       btn.title = c.label;
       btn.textContent = c.label;
       btn.addEventListener('click', () => {
@@ -33,15 +40,20 @@ export function pickColor(root: HTMLElement): Promise<'red' | 'yellow' | 'green'
       });
       row.appendChild(btn);
     }
-    const cancel = document.createElement('button');
-    cancel.className = 'btn color-cancel';
-    cancel.textContent = '取消';
-    cancel.addEventListener('click', () => {
-      overlay.remove();
-      resolve(null);
-    });
-    card.append(title, row, cancel);
+    card.append(title, row);
+    if (options.allowCancel !== false) {
+      const cancel = document.createElement('button');
+      cancel.className = 'btn color-cancel';
+      cancel.type = 'button';
+      cancel.textContent = '取消';
+      cancel.addEventListener('click', () => {
+        overlay.remove();
+        resolve(null);
+      });
+      card.append(cancel);
+    }
     overlay.appendChild(card);
     root.appendChild(overlay);
+    row.querySelector<HTMLButtonElement>('button')?.focus();
   });
 }

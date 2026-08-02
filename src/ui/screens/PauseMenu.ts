@@ -34,10 +34,14 @@ export class PauseMenu {
     if (this.el) return;
     this.el = document.createElement('div');
     this.el.className = 'pause-overlay';
+    this.el.setAttribute('role', 'dialog');
+    this.el.setAttribute('aria-modal', 'true');
+    this.el.setAttribute('aria-labelledby', 'pause-title');
     const card = document.createElement('div');
     card.className = 'pause-card';
     const title = document.createElement('div');
     title.className = 'pause-title';
+    title.id = 'pause-title';
     title.textContent = '⏸ 暂停';
     const resume = this.makeBtn('▶ 继续', () => this.hide());
     const quit = this.makeBtn('🚪 退出对局', () => {
@@ -47,6 +51,7 @@ export class PauseMenu {
     card.append(title, resume, quit);
     this.el.appendChild(card);
     this.root.appendChild(this.el);
+    resume.focus();
   }
 
   hide(): void {
@@ -56,6 +61,7 @@ export class PauseMenu {
 
   private makeBtn(label: string, onClick: () => void): HTMLButtonElement {
     const b = document.createElement('button');
+    b.type = 'button';
     b.className = 'btn pause-btn';
     b.textContent = label;
     b.addEventListener('click', onClick);

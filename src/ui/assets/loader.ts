@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { assetUrl } from './url';
 
 /**
  * GLB 资产加载器。
@@ -29,7 +30,7 @@ export function loadGameAssets(): Promise<GameAssets> {
       reject(new Error('GLB 加载超时（5s）'));
     }, 5000);
     loader.load(
-      '/assets/table.compressed.glb',
+      assetUrl('/assets/table.compressed.glb'),
       (gltf) => {
         window.clearTimeout(timeout);
         resolve({ table: gltf.scene });
