@@ -70,6 +70,7 @@ export class BattleScreen extends Screen {
   private activityLedgerEl: HTMLOListElement | null = null;
   private handSummaryEl: HTMLElement | null = null;
   private playerHeroPowerEl: HTMLButtonElement | null = null;
+  private playerShieldEl: HTMLElement | null = null;
   private readonly activityEntries: string[] = [];
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
   private revealDialog: HTMLDialogElement | null = null;
@@ -120,6 +121,8 @@ export class BattleScreen extends Screen {
   }
 
   override async render(): Promise<void> {
+    // 进入新对局时清掉上一局的胜利音乐
+    audio.stopMusic();
     document.title = this.localTest
       ? `${this.playerCount} 人单机混战 · UnoStore`
       : `对战 ${this.match.opponentName} · UnoStore`;
@@ -231,6 +234,7 @@ export class BattleScreen extends Screen {
     playerPortrait.appendChild(heroImage);
     playerPortrait.addEventListener('contextmenu', (event) => {
       event.preventDefault();
+      event.stopPropagation(); // 已消费为语音菜单，不再触发“右键取消选择”
       this.openHeroEmoteMenu();
     });
     this.playerHeroPortraitEl = playerPortrait;
@@ -250,6 +254,9 @@ export class BattleScreen extends Screen {
     this.playerFrozenEl = this.el('strong', undefined, '0');
     frozen.append(this.playerFrozenEl);
     resources.append(crystal, frozen);
+    this.playerShieldEl = this.el('span', 'hero-shield-badge');
+    this.playerShieldEl.setAttribute('aria-label', '护盾层数');
+    playerCard.appendChild(this.playerShieldEl);
     this.playerHeroPowerEl = this.btn(
       `${hero.powerName} · 2`,
       () => this.useHeroPower(),
@@ -1050,18 +1057,17 @@ export class BattleScreen extends Screen {
     }
   };
 
+  /** 拦截对局内所有右键菜单：右键 = 取消选择（含选择随从/法术目标/换牌目标时）。 */
   private handleTargetingContextMenu = (event: MouseEvent): void => {
-    if (
-      !(
-        this.hearthSelection ||
-        this.selectedAttackerId ||
-        this.unoTargetCardId ||
-        this.heroTargetSelection
-      )
-    )
-      return;
     event.preventDefault();
-    this.cancelTargeting();
+    if (
+      this.hearthSelection ||
+      this.selectedAttackerId ||
+      this.unoTargetCardId ||
+      this.heroTargetSelection
+    ) {
+      this.cancelTargeting();
+    }
   };
 
   /** 刷新手牌（3D）+ 状态栏 */
@@ -1111,7 +1117,7 @@ export class BattleScreen extends Screen {
     if (this.playerCrystalEl) this.playerCrystalEl.textContent = String(p.free);
     if (this.playerFrozenEl) this.playerFrozenEl.textContent = String(p.frozen);
     if (this.opponentCardsEl)
-      this.opponentCardsEl.textContent = `UNO ${opp.hand.length} · 炉石 ${opp.hearthHand.length} · 💎 ${opp.free}${opp.frozen ? ` · ❄ ${opp.frozen}` : ''}`;
+      this.opponentCardsEl.textContent = `UNO ${opp.hand.length} · 炉石 ${opp.hearthHand.length} · 💎 ${opp.free}${opp.frozen ? ` · ❄ ${opp.frozen}` : ''}${opp.shield > 0 ? ` · ⬟ ${opp.shield}` : ''}`;
     if (this.localTest) {
       if (this.opponentNameEl) this.opponentNameEl.textContent = `AI ${focusedOpponent}`;
       if (this.opponentSubtitleEl)
@@ -1205,6 +1211,7 @@ export class BattleScreen extends Screen {
       enemyBoard,
       this.selectedAttackerId,
       !this.actionAnimating &&
+        p.pendingDrawMin <= 0 && // 罚抽链中随从不能攻击，不高亮
         (capabilities.readyMinionIds.length > 0 || targetingMinion) &&
         (!this.hearthSelection || targetingMinion),
       s.players.length,
@@ -1282,7 +1289,17 @@ export class BattleScreen extends Screen {
         : `已淘汰 · UNO 0 · 炉石 0`;
     }
     if (this.playerHeroPowerEl) {
-      const powerError = capabilities.heroPowerUsable ? null : '当前不可使用';
+      // 不可用时给出具体原因（罚抽链中/每回合一次/水晶不足等），而非笼统的“不可使用”
+      const inspectorCandidates =
+        p.heroId === 'inspector'
+          ? s.players
+              .map((entry, index) => (entry.active ? index : -1))
+              .filter((index) => index >= 0)
+              .slice(0, 2)
+          : [];
+      const powerError = capabilities.heroPowerUsable
+        ? null
+        : heroPowerError(s, 0, inspectorCandidates);
       this.playerHeroPowerEl.disabled = Boolean(
         !capabilities.heroPowerUsable || this.actionAnimating
       );
@@ -1292,6 +1309,11 @@ export class BattleScreen extends Screen {
       );
       this.playerHeroPowerEl.textContent = `${getHero(p.heroId).powerName} · ${heroPowerCost(s, 0)}`;
       this.playerHeroPowerEl.title = powerError ?? getHero(p.heroId).description;
+    }
+    if (this.playerShieldEl) {
+      const shield = p.shield;
+      this.playerShieldEl.textContent = shield > 0 ? `⬟ ${shield}` : '';
+      this.playerShieldEl.classList.toggle('visible', shield > 0);
     }
     // 炉石式单按钮：无牌可出时，结束回合自动抽一张。
     this.view?.setActionEnabled(

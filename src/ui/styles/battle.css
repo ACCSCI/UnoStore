@@ -115,6 +115,30 @@
     outline-offset: 0.18rem;
   }
 
+  .hero-shield-badge {
+    position: absolute;
+    z-index: 5;
+    inset-block-end: -0.3rem;
+    inset-inline-start: 4.35rem;
+    display: grid;
+    place-items: center;
+    min-inline-size: 1.45rem;
+    block-size: 1.45rem;
+    border: 1px solid #ffe9b0;
+    border-radius: 999px;
+    background: linear-gradient(145deg, #ffd76e, #b8842a);
+    color: #231400;
+    box-shadow: 0 0.18rem 0.35rem rgb(0 0 0 / 45%);
+    font-family: var(--font-utility);
+    font-size: 0.62rem;
+    font-weight: 1000;
+    pointer-events: none;
+  }
+
+  .hero-shield-badge:not(.visible) {
+    display: none;
+  }
+
   .hero-power-button {
     align-self: center;
     min-inline-size: 5.8rem;
@@ -431,7 +455,7 @@
   }
 
   .multiplayer-table-seat strong {
-    grid-column: 2;
+    grid-column: 3;
     max-inline-size: 8.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -439,12 +463,12 @@
   }
 
   .multiplayer-table-seat .seat-target-button {
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto auto 1fr;
   }
 
   .multiplayer-table-seat .seat-player-id,
   .multiplayer-table-seat .seat-target-button.legal-target::after {
-    grid-column: 2;
+    grid-column: 3;
   }
 
   .table-seat .seat-card-count {

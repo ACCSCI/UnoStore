@@ -1,5 +1,5 @@
 import { buildHearthDeck, drawHearthCards } from '../hearth/draw';
-import { discardRandomUno, discardUnoWhere } from '../hearth/effects/common';
+import { addPenalty, discardRandomUno, discardUnoWhere } from '../hearth/effects/common';
 import { type EffectCtx, getEffect, requiredOwnUnoCardCount } from '../hearth/effects/registry';
 import { DEFAULT_HERO_ID, getHero, getHeroEmote, type HeroId } from '../heroes';
 import {
@@ -294,7 +294,8 @@ function playUnoAction(
   if (p.hand.length === 0) {
     // 同色清场可能从多张手牌直接归零，不应因没有经过“一张牌”状态而被抓 UNO。
     if (!p.unoAlert && card.value !== 'colorDump') {
-      p.pendingDraw += UNO_PENALTY_DRAW;
+      // 走共同罚抽入口：护盾当场抵消，否则入账到下一次回合开始时结算。
+      addPenalty(state, action.player, UNO_PENALTY_DRAW);
       events.push({ type: 'unoCaught', player: action.player, penalty: UNO_PENALTY_DRAW });
     }
     queueUnoWinCandidate(state, action.player);
@@ -430,23 +431,6 @@ function passHands(state: GameState, player: number, events: GameEvent[]): void 
   }
   events.push({ type: 'handPass', player, direction: state.direction });
   state.log.push(`玩家 ${player} 打出 0，所有玩家按当前方向传递手牌`);
-}
-
-/** 给玩家加罚抽（护盾抵消） */
-function addPenalty(
-  state: GameState,
-  player: number,
-  count: number,
-  minimum: 2 | 4 | 6 | 10
-): void {
-  const p = state.players[player]!;
-  if (p.shield > 0) {
-    p.shield -= 1;
-    state.log.push(`玩家 ${player} 护盾抵消 ${count} 张罚抽`);
-  } else {
-    p.pendingDraw += count;
-    p.pendingDrawMin = minimum;
-  }
 }
 
 /** 打炉石牌：法术执行效果，随从则进入战场。 */
@@ -787,7 +771,11 @@ function createEffectContext(
   };
 }
 
-/** 护盾与代罚随从共用的强制抽牌入口；过量伤害不会回流到英雄。 */
+/**
+ * 罚抽结算统一入口（addPenalty 只是入账）：
+ * 护盾优先抵消 → 代罚随从（absorbsPenalty）承受等量伤害（过量不回流）→ 才真正抽牌。
+ * UNO 罚抽链、被抓 UNO、炉石罚抽效果、随从直击全部汇集到这里拦截。
+ */
 function resolveForcedUnoDraw(
   state: GameState,
   rng: Rng,

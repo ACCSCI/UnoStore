@@ -424,6 +424,48 @@ test('护盾抵消罚抽', () => {
   expect(s.players[1]!.shield).toBe(0);
 });
 
+test('被抓 UNO 罚抽入账，护盾可当场抵消', () => {
+  // 手牌 1 张且从未报 UNO：直接打出即被抓（pendingDraw 入账，不设 minimum）
+  const plain = makeState([[{ color: 'red', value: '1' }]]);
+  const events = okEvents(dispatch(plain, new Rng(22), { type: 'playUno', player: 0, cardIdx: 0 }));
+  expect(plain.players[0]!.pendingDraw).toBe(4);
+  expect(events).toContainEqual({ type: 'unoCaught', player: 0, penalty: 4 });
+  // 有护盾时当场抵消，不再进入结算
+  const shielded = makeState([[{ color: 'red', value: '1' }]]);
+  shielded.players[0]!.shield = 1;
+  const shieldedEvents = okEvents(
+    dispatch(shielded, new Rng(23), { type: 'playUno', player: 0, cardIdx: 0 })
+  );
+  expect(shielded.players[0]!.pendingDraw).toBe(0);
+  expect(shielded.players[0]!.shield).toBe(0);
+  expect(shieldedEvents).toContainEqual({ type: 'unoCaught', player: 0, penalty: 4 });
+});
+
+test('代罚随从在结算入口拦截炉石法术罚抽', () => {
+  const s = makeState([[{ color: 'red', value: '1' }], [{ color: 'red', value: '5' }]]);
+  s.players[0]!.free = 1;
+  s.players[0]!.hearthHand = [hearth('h0', 'bolt')];
+  s.players[1]!.board = [
+    {
+      id: 'bulwark',
+      cardId: 'bulwark-card',
+      effectId: 'penaltyBulwark',
+      owner: 1,
+      attack: 5,
+      health: 14,
+      maxHealth: 14,
+      exhausted: false,
+    },
+  ];
+  dispatch(s, rng, { type: 'playHearth', player: 0, cardIdx: 0, targets: [1] });
+  expect(s.players[1]!.pendingDraw).toBe(3); // 法术罚抽先入账（保留响应窗口）
+  const before = s.players[1]!.hand.length;
+  const events = okEvents(dispatch(s, rng, { type: 'endTurn', player: 0 }));
+  expect(s.players[1]!.hand).toHaveLength(before); // 未真正抽牌
+  expect(s.players[1]!.board[0]!.health).toBe(11); // 随从承受等量伤害
+  expect(events.some((event) => event.type === 'penaltyRedirected')).toBe(true);
+});
+
 test('playableUnoIndices 只返回可打的牌', () => {
   const s = makeState(
     [
