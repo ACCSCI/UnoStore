@@ -2,7 +2,7 @@ import { canPlayUnoCard } from '../core/flow';
 import { canInitiateHearthPlay, heroPowerError } from '../core/reducer';
 import type { Rng } from '../core/rng';
 import type { GameAction, GameState } from '../core/state';
-import { getEffect } from '../hearth/effects/registry';
+import { getEffect, minionHasTaunt } from '../hearth/effects/registry';
 import type { AiStrategy, BossRules } from './types';
 
 const COLORS = ['red', 'yellow', 'green', 'blue'] as const;
@@ -97,7 +97,7 @@ function minionAttack(state: GameState, player: number, rng: Rng): GameAction | 
   );
   // 嘲讽必须先处理；不能因为其他随从可被击杀而生成非法目标。
   for (const { p, i } of enemies) {
-    const taunts = p.board.filter((minion) => getEffect(minion.effectId)?.taunt);
+    const taunts = p.board.filter((minion) => minionHasTaunt(minion));
     if (taunts.length > 0) {
       const target = [...taunts].sort(
         (a, b) => Number(b.health <= attacker.attack) - Number(a.health <= attacker.attack)
@@ -125,6 +125,7 @@ function minionAttack(state: GameState, player: number, rng: Rng): GameAction | 
       };
     }
   }
+  // 无值得换掉的随从时直击英雄：优先手牌最少的玩家（最接近清空 UNO）。
   enemies.sort(
     (a, b) =>
       a.p.hand.length - b.p.hand.length ||
@@ -132,11 +133,7 @@ function minionAttack(state: GameState, player: number, rng: Rng): GameAction | 
         a.p.board.reduce((sum, minion) => sum + minion.attack, 0)
   );
   const target = enemies[0];
-  // 直击用于阻止即将 UNO 的对手；常态下保留随从，避免 AI 无休止地互相灌牌。
-  const alreadyDirectHit = state.log.some((line) =>
-    line.startsWith(`玩家 ${player} 的随从直击玩家`)
-  );
-  return target && target.p.hand.length <= 2 && !alreadyDirectHit
+  return target
     ? { type: 'attackMinion', player, attackerId: attacker.id, targetPlayer: target.i }
     : null;
 }

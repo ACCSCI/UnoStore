@@ -432,6 +432,7 @@ registerEffect({
       minion.attack = 1;
       minion.health = 1;
       minion.maxHealth = 1;
+      minion.taunt = false; // 变形清除效果赋予的嘲讽
       ctx.events.push({
         type: 'minionTransformed',
         player: ctx.source,
@@ -479,6 +480,40 @@ registerEffect({
   attack: 1,
   health: 1,
   apply: () => {},
+});
+
+registerEffect({
+  id: 'formationCommander',
+  name: '列阵指挥官',
+  cost: 3,
+  description: '战吼：两侧的随从获得 +1/+1 和嘲讽。请精确选择放置位置来影响相邻随从。',
+  kind: 'minion',
+  attack: 2,
+  health: 2,
+  apply: (ctx) => {
+    const board = ctx.state.players[ctx.source]!.board;
+    const index = ctx.sourceIndex();
+    if (index < 0) return;
+    for (const offset of [-1, 1]) {
+      const neighbor = board[index + offset];
+      if (!neighbor) continue;
+      neighbor.attack += 1;
+      neighbor.health += 1;
+      neighbor.maxHealth += 1;
+      neighbor.taunt = true;
+      ctx.events.push({
+        type: 'minionBuffed',
+        player: ctx.source,
+        minionId: neighbor.id,
+        attackDelta: 1,
+        healthDelta: 1,
+        taunt: true,
+      });
+    }
+    if (board[index - 1] || board[index + 1]) {
+      ctx.state.log.push(`玩家 ${ctx.source} 的列阵指挥官使相邻随从获得 +1/+1 与嘲讽`);
+    }
+  },
 });
 
 registerEffect({

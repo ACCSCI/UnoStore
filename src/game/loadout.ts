@@ -5,7 +5,7 @@ import './hearth/cards';
 
 export const LOADOUT_STORAGE_KEY = 'unostore_loadouts_v1';
 export const MIN_CUSTOM_DECK_SIZE = 10;
-export const MAX_CUSTOM_DECK_SIZE = 80;
+export const MAX_CUSTOM_DECK_SIZE = 50;
 export const MAX_CARD_COPIES = 2;
 
 export interface SavedHearthDeck {

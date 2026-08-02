@@ -169,7 +169,25 @@
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
+    align-items: center;
     gap: 0.65rem;
+  }
+
+  .room-bot-hero {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--paper-muted);
+    font-size: 0.72rem;
+  }
+
+  .room-bot-hero-select {
+    border: 1px solid rgb(103 202 255 / 40%);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.4rem;
+    background: #101c36;
+    color: var(--paper);
+    font: inherit;
   }
 
   .player-identity {

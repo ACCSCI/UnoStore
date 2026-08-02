@@ -1,7 +1,9 @@
 /**
  * ESC 暂停菜单（对局中按 ESC 弹出）：
- * 继续对局 / 退出对局 / 离开房间返回大厅。
+ * 继续对局 / 设置（三路音量） / 退出对局 / 离开房间返回大厅。
  */
+import { SettingsPanel } from './SettingsPanel';
+
 export class PauseMenu {
   private el: HTMLDivElement | null = null;
   private onClose: () => void;
@@ -44,11 +46,14 @@ export class PauseMenu {
     title.id = 'pause-title';
     title.textContent = '⏸ 暂停';
     const resume = this.makeBtn('▶ 继续', () => this.hide());
+    const settings = this.makeBtn('⚙ 设置', () => {
+      new SettingsPanel(this.root).show();
+    });
     const quit = this.makeBtn('🚪 退出对局', () => {
       this.hide();
       this.onClose();
     });
-    card.append(title, resume, quit);
+    card.append(title, resume, settings, quit);
     this.el.appendChild(card);
     this.root.appendChild(this.el);
     resume.focus();

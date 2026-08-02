@@ -1238,6 +1238,33 @@
     translate: -50%;
   }
 
+  .board-slot {
+    position: relative;
+    display: grid;
+    place-items: center;
+    inline-size: clamp(2.6rem, 3.6vw, 3.4rem);
+    aspect-ratio: 1;
+    border: 0.14rem dashed rgb(255 215 125 / 75%);
+    border-radius: 50%;
+    background: rgb(255 215 125 / 10%);
+    color: #ffe3a0;
+    font-family: var(--font-utility);
+    font-size: 0.56rem;
+    font-weight: 900;
+    cursor: pointer;
+    transition:
+      border-color 120ms ease,
+      background 120ms ease,
+      scale 120ms ease;
+  }
+
+  .board-slot:hover,
+  .board-slot:focus-visible {
+    border-color: #ffd77d;
+    background: rgb(255 215 125 / 28%);
+    scale: 1.12;
+  }
+
   .board-minion {
     position: relative;
     display: grid;
@@ -1646,6 +1673,28 @@
     inline-size: 100%;
     block-size: 100%;
     border-radius: inherit;
+    object-fit: cover;
+    /* 人物立绘优先露出头部（顶部对齐，避免圆形裁切切掉头顶） */
+    object-position: top center;
+  }
+
+  .activity-hover-card {
+    position: fixed;
+    z-index: 60;
+    inline-size: 7.5rem;
+    aspect-ratio: 2 / 3;
+    border: 1px solid rgb(246 196 83 / 65%);
+    border-radius: 0.55rem;
+    overflow: hidden;
+    background: #151d40;
+    box-shadow: 0 0.6rem 1.2rem rgb(0 0 0 / 55%);
+    pointer-events: none;
+  }
+
+  .activity-hover-card img {
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
     object-fit: cover;
   }
 

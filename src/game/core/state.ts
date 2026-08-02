@@ -30,6 +30,8 @@ export interface MinionState {
   maxHealth: number;
   /** 新召唤或本回合已经攻击过。 */
   exhausted: boolean;
+  /** 效果赋予的嘲讽（区别于卡面自带 taunt；变形为绵羊时清除）。 */
+  taunt?: boolean;
 }
 
 /** 玩家状态 */
@@ -134,6 +136,8 @@ export type GameAction =
       unoCardIds?: string[];
       cardIds?: string[];
       color?: string | null;
+      /** 随从放置位置（战场槽位索引，默认追加到末尾） */
+      position?: number;
     }
   | { type: 'drawUno'; player: number }
   | { type: 'resolveRoulette'; player: number; color: NonNullable<UnoCard['color']> }

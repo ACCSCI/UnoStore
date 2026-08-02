@@ -35,6 +35,16 @@ public/assets/
     sfx/       # 音效（CC0 素材）
 ```
 
+## 立绘规范（人物头部完整性，2026-08-03 定稿）
+
+卡牌立绘（炉石卡面椭圆插画窗 / 随从圆形头像）必须保证主体头部与身体完整可见：
+
+1. 人物头部完整、不被画面边缘裁切；头顶距画面上边缘 ≥ 8% 画面高度（`HEAD_TOP_MARGIN ≥ 8`）。禁止头部贴边构图。
+2. mmx 生成提示词必须包含「半身/全身像、头部完整、头顶留白」约束；竖构图（高大于宽）禁止——统一 1:1 方形。
+3. 生成后必须用 `mmx vision describe` 批量校验（提示词要求输出 `HEAD_STATUS` 与 `HEAD_TOP_MARGIN`），不合格即重绘，禁止直接入库。
+4. 渲染端约束（勿回退）：`drawHearthArtInWindow` 以 contain 完整显示立绘，禁止 cover 居中裁切；随从圆形头像 `object-position: top center` 优先露出头部。
+5. 换新立绘时保持同角色形象（用 `--subject-ref type=character,image=<旧图>` 保留角色一致性）。
+
 ## 性能红线
 
 - 单模型 GLB ≤ 200KB（压缩后）

@@ -1,6 +1,11 @@
 import { buildHearthDeck, drawHearthCards } from '../hearth/draw';
 import { addPenalty, discardRandomUno, discardUnoWhere } from '../hearth/effects/common';
-import { type EffectCtx, getEffect, requiredOwnUnoCardCount } from '../hearth/effects/registry';
+import {
+  type EffectCtx,
+  getEffect,
+  minionHasTaunt,
+  requiredOwnUnoCardCount,
+} from '../hearth/effects/registry';
 import { DEFAULT_HERO_ID, getHero, getHeroEmote, type HeroId } from '../heroes';
 import {
   INITIAL_HEARTH_HAND,
@@ -584,7 +589,12 @@ function playHearthAction(
     const attack = effect.attack ?? 0;
     const health = effect.health ?? 1;
     const minionId = `m-${card.id}`;
-    p.board.push({
+    // 放置位置系统：position 为战场槽位（0..board.length），默认追加到末尾
+    const position = action.position ?? p.board.length;
+    if (!Number.isInteger(position) || position < 0 || position > p.board.length) {
+      return { ok: false, error: '无效的随从放置位置' };
+    }
+    p.board.splice(position, 0, {
       id: minionId,
       cardId: card.id,
       effectId: card.effectId,
@@ -602,6 +612,7 @@ function playHearthAction(
       effectId: card.effectId,
       attack,
       health,
+      position,
     });
     if (effect.targeting) {
       events.push({ type: 'battlecry', player: action.player, minionId, effectId: effect.id });
@@ -675,8 +686,8 @@ function attackMinionAction(
     ? targetPlayer.board.find((minion) => minion.id === action.targetMinionId)
     : undefined;
   if (action.targetMinionId && !defender) return { ok: false, error: '找不到目标随从' };
-  const hasTaunt = targetPlayer.board.some((minion) => getEffect(minion.effectId)?.taunt);
-  if (hasTaunt && !(defender && getEffect(defender.effectId)?.taunt)) {
+  const hasTaunt = targetPlayer.board.some((minion) => minionHasTaunt(minion));
+  if (hasTaunt && !(defender && minionHasTaunt(defender))) {
     return { ok: false, error: '必须先攻击具有嘲讽的随从' };
   }
   const attackerEffect = getEffect(attacker.effectId);
@@ -767,6 +778,11 @@ function createEffectContext(
     rng,
     forceUnoDraw: (player, count, reason) =>
       resolveForcedUnoDraw(state, rng, player, count, events, reason),
+    sourceIndex: () => {
+      const minionId = extras.sourceMinionId;
+      if (!minionId) return -1;
+      return state.players[source]?.board.findIndex((entry) => entry.id === minionId) ?? -1;
+    },
     ...extras,
   };
 }

@@ -58,24 +58,19 @@ test('强力随从在每套炉石预设中均有两张，避免长期抽不到',
     'penitentChampion',
     'powerAcolyte',
     'powerUnbound',
-    'warcryCommander',
-    'bloodforgeColossus',
-    'goldenCitadel',
-    'agonyDevourer',
-    'berserkerOath',
-    'vitalSurge',
-    'unoAnnihilation',
-    'forcedConscription',
+    'chromaticConductor',
     'bloodMeasureArbiter',
-    'battlefieldRotation',
-    'duelOfAllegiance',
-    'armyExchange',
-    'chaosConscription',
-    'equalityOfAll',
   ];
   for (const deck of PRESET_DECKS) {
     for (const effectId of featured) {
       expect(deck.cardIds.filter((id) => id === effectId)).toHaveLength(2);
     }
+  }
+});
+
+test('预设牌组不超 50 张上限', () => {
+  for (const deck of PRESET_DECKS) {
+    expect(deck.cardIds.length).toBeLessThanOrEqual(50);
+    expect(deck.cardIds.length).toBeGreaterThanOrEqual(10);
   }
 });

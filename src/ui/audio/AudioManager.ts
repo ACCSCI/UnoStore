@@ -5,10 +5,17 @@
 
 import { assetUrl } from '../assets/url';
 
+type VolumeChannel = 'music' | 'sfx' | 'voice';
+
+const VOLUME_STORAGE_KEY = 'unostore_volumes';
+const DEFAULT_VOLUMES: Record<VolumeChannel, number> = { music: 1, sfx: 1, voice: 1 };
+
 class AudioManager {
   private musicEl: HTMLAudioElement | null = null;
   private sfxEls: Map<string, HTMLAudioElement> = new Map();
   private muted = false;
+  /** 三路音量（BGM/音效/语音），独立调节并持久化 */
+  private volumes: Record<VolumeChannel, number> = { ...DEFAULT_VOLUMES };
   /** 用户是否已交互（解锁自动播放） */
   private userActivated = false;
   private audioContext: AudioContext | null = null;
@@ -16,6 +23,19 @@ class AudioManager {
   constructor() {
     const saved = localStorage.getItem('unostore_muted');
     this.muted = saved === '1';
+    try {
+      const parsed = JSON.parse(localStorage.getItem(VOLUME_STORAGE_KEY) ?? '{}') as Partial<
+        Record<VolumeChannel, number>
+      >;
+      for (const channel of Object.keys(DEFAULT_VOLUMES) as VolumeChannel[]) {
+        const value = parsed[channel];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          this.volumes[channel] = Math.max(0, Math.min(1, value));
+        }
+      }
+    } catch {
+      /* 保持默认音量 */
+    }
     // 首次用户交互 → 解锁音频（浏览器自动播放策略）
     const unlock = (): void => {
       this.userActivated = true;
@@ -28,6 +48,22 @@ class AudioManager {
     window.addEventListener('keydown', unlock);
   }
 
+  /** 读取某通道音量（0–1） */
+  getVolume(channel: VolumeChannel): number {
+    return this.volumes[channel];
+  }
+
+  /** 设置某通道音量（0–1），即时生效并持久化 */
+  setVolume(channel: VolumeChannel, value: number): void {
+    this.volumes[channel] = Math.max(0, Math.min(1, value));
+    localStorage.setItem(VOLUME_STORAGE_KEY, JSON.stringify(this.volumes));
+    if (channel === 'music' && this.musicEl) this.musicEl.volume = this.musicVolume();
+  }
+
+  private musicVolume(): number {
+    return 0.5 * this.volumes.music;
+  }
+
   /** 播放背景音乐（切换时自动停止上一首） */
   playMusic(src: string): void {
     const resolvedSrc = assetUrl(src);
@@ -35,7 +71,7 @@ class AudioManager {
     this.musicEl?.pause();
     const audio = new Audio(resolvedSrc);
     audio.loop = true;
-    audio.volume = 0.5;
+    audio.volume = this.musicVolume();
     audio.muted = this.muted;
     // 未交互前挂起播放，等首次点击解锁
     if (this.userActivated) {
@@ -50,17 +86,18 @@ class AudioManager {
     this.musicEl = null;
   }
 
-  /** 播放音效（缓存实例）；未交互前挂起 */
+  /** 播放音效（缓存实例）；未交互前挂起。voice 路径（/voice/）走语音通道独立调节。 */
   playSfx(src: string, volume = 0.7): void {
     if (this.muted) return;
     if (!this.userActivated) return;
     const resolvedSrc = assetUrl(src);
+    const channel = resolvedSrc.includes('/voice/') ? this.volumes.voice : this.volumes.sfx;
     let audio = this.sfxEls.get(resolvedSrc);
     if (!audio) {
       audio = new Audio(resolvedSrc);
       this.sfxEls.set(resolvedSrc, audio);
     }
-    audio.volume = Math.max(0, Math.min(1, volume));
+    audio.volume = Math.max(0, Math.min(1, volume * channel));
     audio.currentTime = 0;
     void audio.play().catch(() => {
       /* 忽略播放失败 */
@@ -74,6 +111,7 @@ class AudioManager {
     utterance.lang = 'zh-CN';
     utterance.pitch = pitch;
     utterance.rate = rate;
+    utterance.volume = this.volumes.voice;
     window.speechSynthesis.speak(utterance);
   }
 

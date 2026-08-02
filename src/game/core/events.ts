@@ -99,6 +99,8 @@ export type GameEvent =
       effectId: string;
       attack: number;
       health: number;
+      /** 放置位置（战场槽位索引），供演出与位置相关效果使用 */
+      position: number;
     }
   | {
       type: 'minionAttack';
@@ -128,6 +130,14 @@ export type GameEvent =
       stat: 'attack' | 'health';
       before: number;
       after: number;
+    }
+  | {
+      type: 'minionBuffed';
+      player: number;
+      minionId: string;
+      attackDelta: number;
+      healthDelta: number;
+      taunt: boolean;
     }
   | {
       type: 'minionsEqualized';

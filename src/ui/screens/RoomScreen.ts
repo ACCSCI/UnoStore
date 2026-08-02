@@ -1,3 +1,4 @@
+import { getHero, HEROES } from '../../game/heroes';
 import { getNet } from '../../net';
 import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS } from '../../net/NetworkLayer';
 import { MultiplayerBattleScreen } from './MultiplayerBattleScreen';
@@ -51,7 +52,28 @@ export class RoomScreen extends Screen {
       const botActions = this.el('div', 'room-bot-actions');
       this.addBotBtn = this.btn('＋ 添加机器人', () => this.changeBots(1));
       this.removeBotBtn = this.btn('－ 移除机器人', () => this.changeBots(-1));
-      botActions.append(this.addBotBtn, this.removeBotBtn);
+      // 机器人英雄：随机职业或指定职业（持久化到本机，开局时应用）
+      const botHero = this.el('label', 'room-bot-hero');
+      botHero.append(document.createTextNode('机器人英雄：'));
+      const heroSelect = document.createElement('select');
+      heroSelect.className = 'room-bot-hero-select';
+      heroSelect.setAttribute('aria-label', '机器人英雄职业');
+      const randomOption = document.createElement('option');
+      randomOption.value = 'random';
+      randomOption.textContent = '随机职业';
+      heroSelect.append(randomOption);
+      for (const hero of HEROES) {
+        const option = document.createElement('option');
+        option.value = hero.id;
+        option.textContent = getHero(hero.id).powerName;
+        heroSelect.append(option);
+      }
+      heroSelect.value = localStorage.getItem('unostore_bot_hero_mode') ?? 'random';
+      heroSelect.addEventListener('change', () => {
+        localStorage.setItem('unostore_bot_hero_mode', heroSelect.value);
+      });
+      botHero.append(heroSelect);
+      botActions.append(this.addBotBtn, this.removeBotBtn, botHero);
       const start = this.btn('🚀 开始对局', () => this.startGame(), 'btn primary');
       this.startBtn = start;
       wrap.append(botActions, start);
