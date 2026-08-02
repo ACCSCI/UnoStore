@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createGame, dispatch } from '../../game';
 import { NormalHeuristic } from '../../game/ai/strategies';
 import type { GameEvent } from '../../game/core/events';
-import { heroPowerCost, playerCapabilities } from '../../game/core/reducer';
+import { heroPowerCost, heroPowerError, playerCapabilities } from '../../game/core/reducer';
 import { Rng } from '../../game/core/rng';
 import type { GameAction, GameState, HearthCard, MinionState } from '../../game/core/state';
 import {
@@ -39,6 +39,7 @@ interface PublicPlayerState {
   free: number;
   frozen: number;
   pendingDraw: number;
+  shield: number;
   active: boolean;
   heroId: string;
   board: MinionState[];
@@ -68,6 +69,7 @@ interface MultiplayerSnapshot {
   readyMinionIds: string[];
   heroPowerUsable: boolean;
   heroPowerCost: number;
+  heroPowerReason: string | null;
   mustResolveRoulette: boolean;
   events: GameEvent[];
   winner: number | null;
@@ -116,6 +118,7 @@ export class MultiplayerBattleScreen extends Screen {
   private playerHeroIdEl: HTMLElement | null = null;
   private playerCrystalEl: HTMLElement | null = null;
   private playerFrozenEl: HTMLElement | null = null;
+  private playerShieldEl: HTMLElement | null = null;
   private handSummaryEl: HTMLElement | null = null;
   private pause: PauseMenu | null = null;
   private sequence = 0;
@@ -150,6 +153,8 @@ export class MultiplayerBattleScreen extends Screen {
 
   override async render(): Promise<void> {
     const net = getNet();
+    // 进入新对局时清掉上一局的胜利/失败音乐
+    audio.stopMusic();
     this.root.classList.remove('local-battle');
     this.root.classList.add('multiplayer-battle');
     const canvasHost = this.el('div', 'battle-canvas');
@@ -210,6 +215,7 @@ export class MultiplayerBattleScreen extends Screen {
     }, 250);
 
     window.addEventListener('keydown', this.handleEscape);
+    this.root.addEventListener('contextmenu', this.handleTargetingContextMenu);
     this.pause = new PauseMenu(this.root, () => {
       net.leaveRoom();
       void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
@@ -244,6 +250,7 @@ export class MultiplayerBattleScreen extends Screen {
     this.playerHeroPortraitEl.setAttribute('aria-label', `${hero.name}头像；点击或右键发送语音`);
     this.playerHeroPortraitEl.addEventListener('contextmenu', (event) => {
       event.preventDefault();
+      event.stopPropagation(); // 已消费为语音菜单，不再触发“右键取消选择”
       this.openHeroEmoteMenu();
     });
     this.playerHeroImageEl = new Image();
@@ -266,6 +273,9 @@ export class MultiplayerBattleScreen extends Screen {
     this.playerFrozenEl = this.el('strong', undefined, '0');
     frozen.append(this.playerFrozenEl);
     resources.append(crystal, frozen);
+    this.playerShieldEl = this.el('span', 'hero-shield-badge');
+    this.playerShieldEl.setAttribute('aria-label', '护盾层数');
+    frame.append(this.playerShieldEl);
 
     this.heroPowerEl = this.btn(
       `${hero.powerName} · 2`,
@@ -462,6 +472,13 @@ export class MultiplayerBattleScreen extends Screen {
     if (!this.hostState) return;
     const capabilities = playerCapabilities(this.hostState, player);
     const mine = this.hostState.players[player]!;
+    const inspectorCandidates =
+      mine.heroId === 'inspector'
+        ? this.hostState.players
+            .map((entry, index) => (entry.active ? index : -1))
+            .filter((index) => index >= 0)
+            .slice(0, 2)
+        : [];
     const playableIds = [
       ...capabilities.playableUnoIndices.map((index) => mine.hand[index]!.id),
       ...capabilities.playableHearthIndices.map((index) => mine.hearthHand[index]!.id),
@@ -485,6 +502,7 @@ export class MultiplayerBattleScreen extends Screen {
         free: entry.free,
         frozen: entry.frozen,
         pendingDraw: entry.pendingDrawMin > 0 ? entry.pendingDraw : 0,
+        shield: entry.shield,
         active: entry.active,
         heroId: entry.heroId,
         board: entry.board,
@@ -499,6 +517,9 @@ export class MultiplayerBattleScreen extends Screen {
       readyMinionIds: capabilities.readyMinionIds,
       heroPowerUsable: capabilities.heroPowerUsable,
       heroPowerCost: heroPowerCost(this.hostState, player),
+      heroPowerReason: capabilities.heroPowerUsable
+        ? null
+        : heroPowerError(this.hostState, player, inspectorCandidates),
       mustResolveRoulette: capabilities.mustResolveRoulette,
       events: events.filter((event) => event.type !== 'handRevealed' || event.player === player),
       winner: this.hostGameResult?.winner ?? null,
@@ -681,7 +702,8 @@ export class MultiplayerBattleScreen extends Screen {
       snapshot.phase !== 'gameOver' &&
       mine.active &&
       !this.actionAnimating &&
-      !snapshot.mustResolveRoulette;
+      !snapshot.mustResolveRoulette &&
+      mine.pendingDraw <= 0; // 罚抽链中随从不能攻击，不高亮
     const hasAnyAction =
       snapshot.playableIds.length > 0 ||
       snapshot.readyMinionIds.length > 0 ||
@@ -708,12 +730,18 @@ export class MultiplayerBattleScreen extends Screen {
     if (this.heroPowerEl) {
       const hero = getHero(mine.heroId);
       this.heroPowerEl.textContent = `${hero.powerName} · ${snapshot.heroPowerCost}`;
-      this.heroPowerEl.title = hero.description;
+      // 不可用时给出具体原因（罚抽链中/每回合一次/水晶不足等），而非笼统的“不可使用”
+      this.heroPowerEl.title = snapshot.heroPowerReason ?? hero.description;
       this.heroPowerEl.disabled = !snapshot.heroPowerUsable || this.actionAnimating;
       this.heroPowerEl.classList.toggle('actionable-highlight', snapshot.heroPowerUsable);
       if (this.playerHeroImageEl) this.playerHeroImageEl.src = assetUrl(hero.portrait);
       if (this.playerHeroNameEl) this.playerHeroNameEl.textContent = mine.userName;
       if (this.playerHeroIdEl) this.playerHeroIdEl.textContent = `ID ${mine.userId} · ${hero.name}`;
+    }
+    if (this.playerShieldEl) {
+      const shield = mine.shield;
+      this.playerShieldEl.textContent = shield > 0 ? `⬟ ${shield}` : '';
+      this.playerShieldEl.classList.toggle('visible', shield > 0);
     }
     if (this.playerHeroPortraitEl) {
       const ownTargetable = this.isPlayerTargetable(snapshot.viewer, snapshot);
@@ -942,6 +970,11 @@ export class MultiplayerBattleScreen extends Screen {
         target.tabIndex = -1;
       }
       const hero = getHero(player.heroId);
+      const heroPortrait = new Image();
+      heroPortrait.src = assetUrl(hero.portrait);
+      heroPortrait.alt = '';
+      heroPortrait.className = 'seat-hero-portrait';
+      heroPortrait.setAttribute('aria-hidden', 'true');
       const fan = this.el('span', 'seat-hand-fan');
       const visibleBacks = player.active ? player.unoCount + player.hearthCount : 0;
       const spacing = Math.min(0.55, 4.8 / Math.max(1, visibleBacks - 1));
@@ -956,6 +989,7 @@ export class MultiplayerBattleScreen extends Screen {
         fan.append(back);
       }
       target.append(
+        heroPortrait,
         this.el('span', 'seat-index', String(index + 1)),
         this.el('strong', undefined, `${player.userName} · ${hero.name}`),
         this.el('small', 'seat-player-id', `ID ${player.userId}`),
@@ -969,7 +1003,7 @@ export class MultiplayerBattleScreen extends Screen {
         this.el(
           'small',
           'seat-crystal-count',
-          `💎 ${player.active ? player.free : 0}${player.frozen ? ` · ❄ ${player.frozen}` : ''}${player.pendingDraw ? ` · 罚抽 ${player.pendingDraw}` : ''}`
+          `💎 ${player.active ? player.free : 0}${player.frozen ? ` · ❄ ${player.frozen}` : ''}${player.pendingDraw ? ` · 罚抽 ${player.pendingDraw}` : ''}${player.shield > 0 ? ` · ⬟ ${player.shield}` : ''}`
         ),
         fan
       );
@@ -1790,6 +1824,19 @@ export class MultiplayerBattleScreen extends Screen {
     }
   };
 
+  /** 拦截对局内所有右键菜单：右键 = 取消选择（含选择随从/法术目标/换牌目标时）。 */
+  private handleTargetingContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+    if (
+      this.hearthSelection ||
+      this.selectedAttackerId ||
+      this.unoTargetCardId ||
+      this.heroTargetSelection
+    ) {
+      this.cancelTargeting();
+    }
+  };
+
   override exit(): void {
     this.exited = true;
     this.root.classList.remove('multiplayer-battle');
@@ -1798,6 +1845,7 @@ export class MultiplayerBattleScreen extends Screen {
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
     if (this.workDoneTimer !== null) window.clearTimeout(this.workDoneTimer);
     window.removeEventListener('keydown', this.handleEscape);
+    this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
     this.pause?.unbind();
     this.view?.dispose();
     const net = getNet();

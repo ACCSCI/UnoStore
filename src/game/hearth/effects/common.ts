@@ -1,18 +1,30 @@
 import { drawPublic, nextActiveFrom } from '../../core/flow';
+import type { GameState } from '../../core/state';
 import { drawHearthCards } from '../draw';
 import type { EffectCtx } from './registry';
 
 export type MinionStat = 'attack' | 'health';
 
-/** 公共辅助：给目标玩家加罚抽 */
-export function addPenalty(ctx: EffectCtx, player: number, count: number): void {
-  const p = ctx.state.players[player];
+/**
+ * 公共辅助：给目标玩家加罚抽（规则引擎与炉石效果共用的唯一入口）。
+ * 护盾立即抵消；代罚随从在结算入口 resolveForcedUnoDraw 统一拦截。
+ * 传入 minimum 表示 UNO 罚抽链（需要叠加或结束回合接受罚抽）；
+ * 不传则只会入账 pendingDraw，在目标下回合开始时结算。
+ */
+export function addPenalty(
+  state: GameState,
+  player: number,
+  count: number,
+  minimum?: 2 | 4 | 6 | 10
+): void {
+  const p = state.players[player];
   if (!p) return;
   if (p.shield > 0) {
     p.shield -= 1;
-    ctx.state.log.push(`玩家 ${player} 护盾抵消 ${count} 张罚抽`);
+    state.log.push(`玩家 ${player} 护盾抵消 ${count} 张罚抽`);
   } else {
     p.pendingDraw += count;
+    if (minimum !== undefined) p.pendingDrawMin = minimum;
   }
 }
 

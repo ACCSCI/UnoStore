@@ -28,7 +28,7 @@ registerEffect({
   description: '对目标玩家造成 3 张罚抽。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
-  apply: (ctx) => addPenalty(ctx, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
+  apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
 });
 
 registerEffect({
@@ -127,7 +127,7 @@ registerEffect({
   description: '对目标玩家造成 6 张罚抽。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
-  apply: (ctx) => addPenalty(ctx, ctx.targets?.[0] ?? defaultTarget(ctx), 6),
+  apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 6),
 });
 
 registerEffect({
@@ -179,7 +179,7 @@ registerEffect({
   description: '目标玩家下回合罚抽 3 张。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
-  apply: (ctx) => addPenalty(ctx, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
+  apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
 });
 
 registerEffect({
@@ -242,7 +242,7 @@ registerEffect({
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => {
-    addPenalty(ctx, ctx.targets?.[0] ?? defaultTarget(ctx), 4);
+    addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 4);
     drawMixedToHand(ctx, 2);
   },
 });
