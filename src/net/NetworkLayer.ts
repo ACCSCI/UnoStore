@@ -4,6 +4,8 @@
  * 房主按座位发送各自脱敏快照，绝不广播私人手牌。
  */
 
+import { activeBattleLoadout, type BattleLoadout, parseBattleLoadout } from '../game/loadout';
+
 export type VibeUser = VibeHubSDK.User;
 export type RoomMeta = VibeHubSDK.RoomMetadata;
 export type RoomHandle = VibeHubSDK.Room;
@@ -20,6 +22,24 @@ export const VIBE_SDK_URL = 'https://vibe.lumigrav.space/sdk/beta/vibehub.js';
 export const VIBE_SDK_CHANNEL = 'beta' as const;
 export const MIN_ROOM_PLAYERS = 2;
 export const MAX_ROOM_PLAYERS = 8;
+const LOADOUT_RETRY_MS = 1_200;
+
+interface PendingLoadoutSubmission {
+  requestId: string;
+  fingerprint: string;
+  loadout: BattleLoadout;
+}
+
+function loadoutFingerprint(loadout: BattleLoadout): string {
+  return `${loadout.heroId}\u0000${loadout.deckCardIds.join('\u0000')}`;
+}
+
+function loadoutRequestId(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `loadout-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  );
+}
 
 /** 把浏览器只返回 Failed to fetch 的 LNA/Fake-IP 故障转换成可执行诊断。 */
 export function vibeHubErrorMessage(error: unknown): string {
@@ -38,12 +58,31 @@ export function vibeHubErrorMessage(error: unknown): string {
  * Beta SDK 的 peers() 同时返回真实玩家连接和 VibeNet relay 路径。
  * relay 项带有 role，绝不能计入游戏席位，否则两名真人在启用中继时会被显示成三人或更多。
  */
-export function gameplayPeers(room: Pick<RoomHandle, 'peerId' | 'peers'>): VibeHubSDK.PeerInfo[] {
+export function gameplayPeers(
+  room: Pick<RoomHandle, 'peerId' | 'peers'>,
+  departedPeerIds: ReadonlySet<string> = new Set()
+): VibeHubSDK.PeerInfo[] {
   const players = room
     .peers()
-    .filter((peer) => peer.role === undefined && peer.id !== room.peerId)
+    .filter(
+      (peer) =>
+        peer.role === undefined &&
+        peer.id !== room.peerId &&
+        peer.open &&
+        !peer.reconnecting &&
+        !departedPeerIds.has(peer.id)
+    )
     .map((peer) => [peer.id, peer] as const);
   return [...new Map(players).values()];
+}
+
+function parseVibeUser(value: unknown): VibeUser | null {
+  if (!value || typeof value !== 'object') return null;
+  const user = value as Partial<VibeUser>;
+  if (typeof user.id !== 'string' || !user.id.trim()) return null;
+  if (!(typeof user.name === 'string' || user.name === null)) return null;
+  if (!(typeof user.image === 'string' || user.image === null)) return null;
+  return { id: user.id, name: user.name, image: user.image };
 }
 
 export function areRoomPlayersReady(
@@ -87,6 +126,14 @@ export class NetworkLayer {
   private readonly peerUsers = new Map<string, VibeUser>();
   private readonly seatUsers = new Map<number, RoomPlayerIdentity>();
   private readonly readyUserIds = new Set<string>();
+  private readonly playerLoadouts = new Map<string, BattleLoadout>();
+  private readonly loadoutReadyUserIds = new Set<string>();
+  private readonly departedPeerIds = new Set<string>();
+  private pendingLoadout: PendingLoadoutSubmission | null = null;
+  private loadoutRetryTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private localLoadoutConfirmed = false;
+  private confirmedLoadoutFingerprint: string | null = null;
+  private localLoadoutError: string | null = null;
   private initPromise: Promise<void> | null = null;
   private humanCount = 0;
   private botCount = 0;
@@ -202,18 +249,22 @@ export class NetworkLayer {
     this.peerUsers.clear();
     this.seatUsers.clear();
     this.readyUserIds.clear();
+    this.playerLoadouts.clear();
+    this.loadoutReadyUserIds.clear();
+    this.departedPeerIds.clear();
     this.playerIndex = this.room.isHost ? 0 : -1;
     if (this.room.isHost && this.api.user) this.rememberSeatUser(0, this.api.user);
     this.room.onMessage((message, fromId) => this.handleMessage(message, fromId));
     this.room.onPeer((event) => this.handlePeerEvent(event));
-    this.humanCount = gameplayPeers(this.room).length + 1;
+    this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
     this.botCount = 0;
     this.playerCount = this.humanCount;
     if (this.room.isHost) this.rebuildSeatsAndIdentities();
     if (!this.room.isHost) {
-      this.room.send({ type: 'hello', user: this.api.user }, this.room.hostId ?? undefined);
-      this.room.send({ type: 'snapshotRequest' }, this.room.hostId ?? undefined);
+      this.sendGuestIdentity();
+      this.requestSnapshot();
     }
+    this.ensureLocalLoadoutSync();
     return this.room;
   }
 
@@ -249,6 +300,7 @@ export class NetworkLayer {
 
   startGame(playerCount: number): void {
     if (!this.room?.isHost) throw new Error('只有房主可以开始对局');
+    this.ensureLocalLoadoutSync();
     if (
       !Number.isInteger(playerCount) ||
       playerCount < MIN_ROOM_PLAYERS ||
@@ -256,6 +308,7 @@ export class NetworkLayer {
     ) {
       throw new RangeError(`开局人数必须为 ${MIN_ROOM_PLAYERS}–${MAX_ROOM_PLAYERS} 人`);
     }
+    if (!this.allPlayerLoadoutsReady) throw new Error('仍有玩家的出战构筑未同步完成');
     if (!this.allPlayersReady) throw new Error('所有真人玩家准备后才能开始对局');
     this.gameStarted = true;
     void this.room.announce({ open: false, listed: false });
@@ -266,6 +319,11 @@ export class NetworkLayer {
     if (!this.room || (ready && this.gameStarted)) return false;
     const userId = this.api?.user?.id;
     if (!userId) return false;
+    if (ready && !this.isLocalLoadoutConfirmed) {
+      this.ensureLocalLoadoutSync();
+      this.onRoomUpdate?.(this.playerCount);
+      return false;
+    }
     if (this.room.isHost) {
       if (ready) this.readyUserIds.add(userId);
       else this.readyUserIds.delete(userId);
@@ -287,16 +345,18 @@ export class NetworkLayer {
     if (userId) this.readyUserIds.delete(userId);
     if (this.room.isHost) {
       this.gameStarted = false;
-      this.humanCount = gameplayPeers(this.room).length + 1;
+      this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
       this.botCount = Math.min(this.botCount, Math.max(0, this.roomMax - this.humanCount));
       this.rebuildSeatsAndIdentities();
       this.readyUserIds.clear();
       this.broadcastRoomState();
       this.onRoomUpdate?.(this.playerCount);
       void this.refreshLobbyAnnouncement();
+      this.ensureLocalLoadoutSync();
       return;
     }
     this.room.send({ type: 'ready', ready: false }, this.room.hostId ?? undefined);
+    this.ensureLocalLoadoutSync();
   }
 
   addBot(): boolean {
@@ -348,6 +408,9 @@ export class NetworkLayer {
   private handlePeerEvent(event: VibeHubSDK.PeerEvent): void {
     if ('id' in event && event.type === 'leave') {
       this.peerUsers.delete(event.id);
+      this.departedPeerIds.add(event.id);
+    } else if ('id' in event && event.type === 'join') {
+      this.departedPeerIds.delete(event.id);
     }
     if (this.room?.isHost && (event.type === 'join' || event.type === 'leave')) {
       if (this.gameStarted) {
@@ -360,12 +423,17 @@ export class NetworkLayer {
         this.onPeerChange?.(event);
         return;
       }
-      this.humanCount = gameplayPeers(this.room).length + 1;
+      this.humanCount = gameplayPeers(this.room, this.departedPeerIds).length + 1;
       this.botCount = Math.min(this.botCount, Math.max(0, this.roomMax - this.humanCount));
       this.rebuildSeatsAndIdentities();
       this.broadcastRoomState();
       this.onRoomUpdate?.(this.playerCount);
       void this.refreshLobbyAnnouncement();
+    }
+    if (!this.room?.isHost && event.type === 'join') {
+      this.sendGuestIdentity();
+      this.requestSnapshot();
+      this.restartLocalLoadoutSync();
     }
     this.onPeerChange?.(event);
   }
@@ -377,7 +445,7 @@ export class NetworkLayer {
 
   private rebuildSeatsAndIdentities(): void {
     if (!this.room?.isHost) return;
-    const peers = gameplayPeers(this.room).map((peer) => peer.id);
+    const peers = gameplayPeers(this.room, this.departedPeerIds).map((peer) => peer.id);
     this.peerSeats.clear();
     this.seatPeers.clear();
     this.seatUsers.clear();
@@ -410,6 +478,12 @@ export class NetworkLayer {
     for (const id of this.readyUserIds) {
       if (!currentHumanIds.has(id)) this.readyUserIds.delete(id);
     }
+    for (const id of this.playerLoadouts.keys()) {
+      if (!currentHumanIds.has(id)) this.playerLoadouts.delete(id);
+    }
+    for (const id of this.loadoutReadyUserIds) {
+      if (!currentHumanIds.has(id)) this.loadoutReadyUserIds.delete(id);
+    }
   }
 
   private rememberSeatUser(seat: number, user: VibeUser): void {
@@ -432,6 +506,7 @@ export class NetworkLayer {
         maxPlayers: this.roomMax,
         gameStarted: this.gameStarted,
         readyPlayerIds: [...this.readyUserIds],
+        loadoutPlayerIds: [...this.loadoutReadyUserIds],
         players: [...this.seatUsers.values()],
       },
       targetPeerId
@@ -448,8 +523,38 @@ export class NetworkLayer {
     if (msg.type === 'seat' && !this.room?.isHost) {
       const player = Number(msg.player);
       if (Number.isInteger(player) && player >= 1 && player < MAX_ROOM_PLAYERS) {
+        const seatChanged = this.playerIndex !== player;
         this.playerIndex = player;
         if (this.api?.user) this.rememberSeatUser(player, this.api.user);
+        this.sendGuestIdentity();
+        this.requestSnapshot();
+        if (seatChanged || !this.localLoadoutConfirmed) this.restartLocalLoadoutSync();
+      }
+      return;
+    }
+    if (msg.type === 'loadoutAck' && !this.room?.isHost) {
+      const requestId = typeof msg.requestId === 'string' ? msg.requestId : '';
+      const userId = typeof msg.userId === 'string' ? msg.userId : '';
+      if (
+        this.pendingLoadout?.requestId === requestId &&
+        userId === this.api?.user?.id &&
+        Number(msg.player) === this.playerIndex
+      ) {
+        this.confirmedLoadoutFingerprint = this.pendingLoadout.fingerprint;
+        this.localLoadoutConfirmed = true;
+        this.localLoadoutError = null;
+        this.loadoutReadyUserIds.add(userId);
+        this.pendingLoadout = null;
+        this.stopLoadoutRetry();
+        this.onRoomUpdate?.(this.playerCount);
+      }
+      return;
+    }
+    if (msg.type === 'loadoutRejected' && !this.room?.isHost) {
+      if (this.pendingLoadout?.requestId === msg.requestId) {
+        this.localLoadoutError =
+          typeof msg.reason === 'string' ? msg.reason : '房主拒绝了无效的出战构筑';
+        this.onRoomUpdate?.(this.playerCount);
       }
       return;
     }
@@ -479,6 +584,12 @@ export class NetworkLayer {
             if (typeof id === 'string') this.readyUserIds.add(id);
           }
         }
+        this.loadoutReadyUserIds.clear();
+        if (Array.isArray(msg.loadoutPlayerIds)) {
+          for (const id of msg.loadoutPlayerIds) {
+            if (typeof id === 'string') this.loadoutReadyUserIds.add(id);
+          }
+        }
         if (Array.isArray(msg.players)) {
           this.seatUsers.clear();
           for (const value of msg.players) {
@@ -499,25 +610,71 @@ export class NetworkLayer {
             }
           }
         }
+        if (this.playerIndex >= 1 && this.api?.user && !this.seatUsers.has(this.playerIndex)) {
+          this.rememberSeatUser(this.playerIndex, this.api.user);
+        }
         this.onRoomUpdate?.(count);
       }
       return;
     }
     if (!this.room?.isHost) return;
+    if (msg.type === 'hello') {
+      const user = parseVibeUser(msg.user);
+      if (!user) return;
+      // hello 可能早于 onPeer(join) 或 peers() 列表更新；先缓存，座位建立后再绑定。
+      this.peerUsers.set(fromId, user);
+      this.assignSeat(fromId);
+      const player = this.peerSeats.get(fromId);
+      if (player !== undefined) {
+        this.rememberSeatUser(player, user);
+        this.broadcastRoomState();
+        this.onRoomUpdate?.(this.playerCount);
+      }
+      return;
+    }
     this.assignSeat(fromId);
     const authoritativePlayer = this.peerSeats.get(fromId);
     if (authoritativePlayer === undefined) return;
-    if (msg.type === 'hello' && msg.user && typeof msg.user === 'object') {
-      const user = msg.user as VibeUser;
-      this.peerUsers.set(fromId, user);
-      this.rememberSeatUser(authoritativePlayer, user);
+    if (msg.type === 'snapshotRequest') {
+      this.onSnapshotRequested?.(authoritativePlayer);
+    } else if (msg.type === 'loadout' && typeof msg.requestId === 'string') {
+      const identity = this.seatUsers.get(authoritativePlayer);
+      const loadout = parseBattleLoadout(msg.loadout);
+      if (!(identity && loadout)) {
+        this.room.send(
+          {
+            type: 'loadoutRejected',
+            requestId: msg.requestId,
+            reason: identity ? '出战牌库或英雄配置无效' : '玩家身份尚未完成绑定',
+          },
+          fromId
+        );
+        return;
+      }
+      const previous = this.playerLoadouts.get(identity.id);
+      const changed = !previous || loadoutFingerprint(previous) !== loadoutFingerprint(loadout);
+      this.playerLoadouts.set(identity.id, loadout);
+      this.loadoutReadyUserIds.add(identity.id);
+      if (changed) this.readyUserIds.delete(identity.id);
+      // 对重复请求也必须重复确认：第一次 ACK 丢失时，客户端才能最终停止重传。
+      this.room.send(
+        {
+          type: 'loadoutAck',
+          requestId: msg.requestId,
+          userId: identity.id,
+          player: authoritativePlayer,
+        },
+        fromId
+      );
       this.broadcastRoomState();
       this.onRoomUpdate?.(this.playerCount);
-    } else if (msg.type === 'snapshotRequest') {
-      this.onSnapshotRequested?.(authoritativePlayer);
     } else if (msg.type === 'ready' && typeof msg.ready === 'boolean') {
       const identity = this.seatUsers.get(authoritativePlayer);
-      if (identity && (!this.gameStarted || msg.ready === false)) {
+      if (
+        identity &&
+        (!this.gameStarted || msg.ready === false) &&
+        (msg.ready === false || this.playerLoadouts.has(identity.id))
+      ) {
         if (msg.ready) this.readyUserIds.add(identity.id);
         else this.readyUserIds.delete(identity.id);
         this.broadcastRoomState();
@@ -528,7 +685,84 @@ export class NetworkLayer {
     }
   }
 
+  /**
+   * 在房间存续期间同步当前出战构筑。客人只有收到与本次 requestId 匹配的房主 ACK
+   * 才会停止定时重传；房主则直接把自己的本地构筑登记为权威配置。
+   */
+  ensureLocalLoadoutSync(): void {
+    if (!(this.room && this.api?.user)) return;
+    const loadout = activeBattleLoadout();
+    const fingerprint = loadoutFingerprint(loadout);
+    const userId = this.api.user.id;
+    if (this.room.isHost) {
+      const previous = this.playerLoadouts.get(userId);
+      const changed = !previous || loadoutFingerprint(previous) !== fingerprint;
+      this.playerLoadouts.set(userId, loadout);
+      this.loadoutReadyUserIds.add(userId);
+      this.localLoadoutConfirmed = true;
+      this.confirmedLoadoutFingerprint = fingerprint;
+      this.localLoadoutError = null;
+      if (changed) this.readyUserIds.delete(userId);
+      this.broadcastRoomState();
+      this.onRoomUpdate?.(this.playerCount);
+      return;
+    }
+
+    if (this.localLoadoutConfirmed && this.confirmedLoadoutFingerprint === fingerprint) return;
+    if (this.pendingLoadout?.fingerprint !== fingerprint) {
+      this.pendingLoadout = { requestId: loadoutRequestId(), fingerprint, loadout };
+      this.localLoadoutConfirmed = false;
+      this.localLoadoutError = null;
+      this.loadoutReadyUserIds.delete(userId);
+    }
+    this.sendPendingLoadout();
+    this.startLoadoutRetry();
+  }
+
+  private restartLocalLoadoutSync(): void {
+    if (!this.room || this.room.isHost) return;
+    this.localLoadoutConfirmed = false;
+    this.confirmedLoadoutFingerprint = null;
+    this.pendingLoadout = null;
+    this.stopLoadoutRetry();
+    this.ensureLocalLoadoutSync();
+  }
+
+  private sendPendingLoadout(): void {
+    if (
+      !this.room ||
+      this.room.isHost ||
+      !this.room.hostId ||
+      !this.pendingLoadout ||
+      this.localLoadoutConfirmed
+    )
+      return;
+    this.room.send(
+      {
+        type: 'loadout',
+        requestId: this.pendingLoadout.requestId,
+        loadout: this.pendingLoadout.loadout,
+      },
+      this.room.hostId
+    );
+  }
+
+  private startLoadoutRetry(): void {
+    if (this.loadoutRetryTimer !== null || this.localLoadoutConfirmed) return;
+    this.loadoutRetryTimer = globalThis.setInterval(
+      () => this.sendPendingLoadout(),
+      LOADOUT_RETRY_MS
+    );
+  }
+
+  private stopLoadoutRetry(): void {
+    if (this.loadoutRetryTimer === null) return;
+    globalThis.clearInterval(this.loadoutRetryTimer);
+    this.loadoutRetryTimer = null;
+  }
+
   leaveRoom(): void {
+    this.stopLoadoutRetry();
     this.room?.leave();
     this.room = null;
     this.gameStarted = false;
@@ -542,6 +776,13 @@ export class NetworkLayer {
     this.peerUsers.clear();
     this.seatUsers.clear();
     this.readyUserIds.clear();
+    this.playerLoadouts.clear();
+    this.loadoutReadyUserIds.clear();
+    this.departedPeerIds.clear();
+    this.pendingLoadout = null;
+    this.localLoadoutConfirmed = false;
+    this.confirmedLoadoutFingerprint = null;
+    this.localLoadoutError = null;
   }
 
   async closeRoom(): Promise<void> {
@@ -618,8 +859,44 @@ export class NetworkLayer {
     return Boolean(identity && (identity.isBot || this.readyUserIds.has(identity.id)));
   }
 
+  playerLoadout(seat: number): BattleLoadout | null {
+    const identity = this.seatUsers.get(seat);
+    if (!identity || identity.isBot) return null;
+    const loadout = this.playerLoadouts.get(identity.id);
+    return loadout ? { heroId: loadout.heroId, deckCardIds: [...loadout.deckCardIds] } : null;
+  }
+
+  isPlayerLoadoutReady(seat: number): boolean {
+    const identity = this.seatUsers.get(seat);
+    return Boolean(identity && (identity.isBot || this.loadoutReadyUserIds.has(identity.id)));
+  }
+
+  get isLocalLoadoutConfirmed(): boolean {
+    return this.localLoadoutConfirmed;
+  }
+
+  get loadoutSyncError(): string | null {
+    return this.localLoadoutError;
+  }
+
+  get allPlayerLoadoutsReady(): boolean {
+    const players = [...this.seatUsers.values()];
+    return (
+      players.length >= this.playerCount &&
+      players.every((identity) => identity.isBot || this.loadoutReadyUserIds.has(identity.id))
+    );
+  }
+
   get allPlayersReady(): boolean {
-    return areRoomPlayersReady(this.seatUsers.values(), this.readyUserIds, this.playerCount);
+    return (
+      this.allPlayerLoadoutsReady &&
+      areRoomPlayersReady(this.seatUsers.values(), this.readyUserIds, this.playerCount)
+    );
+  }
+
+  private sendGuestIdentity(): void {
+    if (!this.room || this.room.isHost || !this.room.hostId || !this.api?.user) return;
+    this.room.send({ type: 'hello', user: this.api.user }, this.room.hostId);
   }
 
   private async refreshLobbyAnnouncement(): Promise<void> {

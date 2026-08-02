@@ -1,6 +1,6 @@
 import { getDeck, HEARTH_EXPANSION_CARD_IDS, PRESET_DECKS } from './hearth/decks';
 import { allEffects } from './hearth/effects/registry';
-import { DEFAULT_HERO_ID, type HeroId } from './heroes';
+import { DEFAULT_HERO_ID, HEROES, type HeroId } from './heroes';
 import './hearth/cards';
 
 export const LOADOUT_STORAGE_KEY = 'unostore_loadouts_v1';
@@ -18,6 +18,12 @@ export interface LoadoutProfile {
   decks: SavedHearthDeck[];
   activeDeckId: string;
   activeHeroId: HeroId;
+}
+
+/** 进入权威联机房间时提交给房主的最小出战配置。 */
+export interface BattleLoadout {
+  heroId: HeroId;
+  deckCardIds: string[];
 }
 
 function defaultProfile(): LoadoutProfile {
@@ -91,6 +97,45 @@ export function activeDeck(profile = loadLoadoutProfile()): SavedHearthDeck {
       cardIds: [...getDeck('combo').cardIds],
     }
   );
+}
+
+export function activeBattleLoadout(profile = loadLoadoutProfile()): BattleLoadout {
+  return {
+    heroId: profile.activeHeroId,
+    deckCardIds: [...activeDeck(profile).cardIds],
+  };
+}
+
+/**
+ * 房主不能信任客人提交的构筑；只接受当前版本存在的英雄、卡牌和合法张数。
+ * 返回新数组，避免网络消息对象之后被调用方修改。
+ */
+export function parseBattleLoadout(value: unknown): BattleLoadout | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<BattleLoadout>;
+  if (!HEROES.some((hero) => hero.id === candidate.heroId)) return null;
+  if (
+    !Array.isArray(candidate.deckCardIds) ||
+    candidate.deckCardIds.length < MIN_CUSTOM_DECK_SIZE ||
+    candidate.deckCardIds.length > MAX_CUSTOM_DECK_SIZE
+  )
+    return null;
+
+  const validIds = new Set(
+    allEffects()
+      .filter((effect) => effect.id !== 'sheepToken')
+      .map((effect) => effect.id)
+  );
+  const copies = new Map<string, number>();
+  const deckCardIds: string[] = [];
+  for (const cardId of candidate.deckCardIds) {
+    if (typeof cardId !== 'string' || !validIds.has(cardId)) return null;
+    const count = (copies.get(cardId) ?? 0) + 1;
+    if (count > MAX_CARD_COPIES) return null;
+    copies.set(cardId, count);
+    deckCardIds.push(cardId);
+  }
+  return { heroId: candidate.heroId!, deckCardIds };
 }
 
 export function createDeckId(): string {

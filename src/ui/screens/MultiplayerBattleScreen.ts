@@ -326,13 +326,21 @@ export class MultiplayerBattleScreen extends Screen {
     const count = Math.max(MIN_ROOM_PLAYERS, Math.min(net.playerCount, MAX_ROOM_PLAYERS));
     const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
     const profile = loadLoadoutProfile();
-    const deck = activeDeck(profile).cardIds;
+    const botLoadout = {
+      heroId: profile.activeHeroId,
+      deckCardIds: [...activeDeck(profile).cardIds],
+    };
+    const loadouts = Array.from({ length: count }, (_, seat) => {
+      const loadout = net.isBotSeat(seat) ? botLoadout : net.playerLoadout(seat);
+      if (!loadout) throw new Error(`席位 ${seat + 1} 的出战构筑尚未由房主确认`);
+      return loadout;
+    });
     this.hostState = createGame(
       count,
-      Array.from({ length: count }, () => deck),
+      loadouts.map((loadout) => loadout.deckCardIds),
       seed,
       {},
-      Array.from({ length: count }, () => profile.activeHeroId)
+      loadouts.map((loadout) => loadout.heroId)
     );
     this.hostRng = new Rng(seed);
     this.botStrategy = new NormalHeuristic(this.hostRng);

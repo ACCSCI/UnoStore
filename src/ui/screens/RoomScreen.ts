@@ -21,6 +21,7 @@ export class RoomScreen extends Screen {
 
   override async render(): Promise<void> {
     const net = getNet();
+    net.ensureLocalLoadoutSync();
     const wrap = this.el('div', 'lobby-wrap');
     const title = this.el('h2', 'screen-title', '🏠 联机房间');
     const roomCode = this.el('div', 'room-code-panel');
@@ -93,7 +94,13 @@ export class RoomScreen extends Screen {
       const readyLabel = this.el(
         'strong',
         net.isPlayerReady(i) ? 'player-ready ready' : 'player-ready',
-        identity?.isBot ? '自动准备' : net.isPlayerReady(i) ? '已准备' : '未准备'
+        identity?.isBot
+          ? '构筑预设 · 自动准备'
+          : !net.isPlayerLoadoutReady(i)
+            ? '构筑同步中…'
+            : net.isPlayerReady(i)
+              ? '构筑已确认 · 已准备'
+              : '构筑已确认 · 未准备'
       );
       row.append(identityLabel, readyLabel);
       this.listEl.appendChild(row);
@@ -103,25 +110,40 @@ export class RoomScreen extends Screen {
     if (this.readyBtn) {
       this.readyBtn.textContent = amReady ? '取消准备' : '准备';
       this.readyBtn.classList.toggle('is-ready', amReady);
-      this.readyBtn.disabled = net.gameStarted || mySeat < 0;
+      this.readyBtn.disabled =
+        net.gameStarted || mySeat < 0 || !(amReady || net.isLocalLoadoutConfirmed);
+      this.readyBtn.title = net.isLocalLoadoutConfirmed
+        ? ''
+        : '正在重传出战构筑，收到房主确认后才能准备';
     }
     if (this.hintEl) {
       this.hintEl.textContent = net.gameStarted
         ? '上一局结算中，等待房主返回房间…'
-        : net.allPlayersReady
-          ? net.isHost
-            ? '所有真人玩家已准备，可以开始对局。'
-            : '所有真人玩家已准备，等待房主开始。'
-          : '支持 2–8 个席位；机器人自动准备，所有真人玩家准备后才能开局。';
+        : net.loadoutSyncError
+          ? `构筑同步失败：${net.loadoutSyncError}；正在自动重试。`
+          : !net.isLocalLoadoutConfirmed
+            ? '正在把英雄与出战牌库发送给房主；收到确认前会持续自动重传。'
+            : !net.allPlayerLoadoutsReady
+              ? '你的构筑已由房主确认，正在等待其他玩家完成构筑同步。'
+              : net.allPlayersReady
+                ? net.isHost
+                  ? '所有真人玩家已准备，可以开始对局。'
+                  : '所有真人玩家已准备，等待房主开始。'
+                : '支持 2–8 个席位；机器人自动准备，所有真人玩家准备后才能开局。';
     }
     if (this.startBtn) {
       this.startBtn.disabled =
         count < MIN_ROOM_PLAYERS ||
         count > MAX_ROOM_PLAYERS ||
         net.playerIdentities.size < count ||
+        !net.allPlayerLoadoutsReady ||
         !net.allPlayersReady ||
         net.gameStarted;
-      this.startBtn.title = net.allPlayersReady ? '' : '所有真人玩家准备后才能开始';
+      this.startBtn.title = !net.allPlayerLoadoutsReady
+        ? '等待所有玩家的出战构筑由房主确认'
+        : net.allPlayersReady
+          ? ''
+          : '所有真人玩家准备后才能开始';
     }
     if (this.addBotBtn) {
       this.addBotBtn.disabled = count >= net.maxPlayers;
@@ -135,6 +157,7 @@ export class RoomScreen extends Screen {
 
   private toggleReady(): void {
     const net = getNet();
+    net.ensureLocalLoadoutSync();
     const mySeat = net.isHost ? 0 : net.playerIndex;
     if (mySeat < 0) return;
     net.setReady(!net.isPlayerReady(mySeat));
@@ -155,6 +178,7 @@ export class RoomScreen extends Screen {
       net.playerCount < MIN_ROOM_PLAYERS ||
       net.playerCount > MAX_ROOM_PLAYERS ||
       net.playerIdentities.size < net.playerCount ||
+      !net.allPlayerLoadoutsReady ||
       !net.allPlayersReady
     )
       return;
