@@ -72,7 +72,7 @@ export function formatActivity(
       const card = event.card as UnoCard;
       const label = unoCardTitle(card);
       const penaltyResult = event.penaltyAdded
-        ? ` → ${playerLabel(event.penaltyTarget ?? event.player)}；结果：${event.penaltyPrevented ? `其护盾抵消了 ${event.penaltyAdded} 张罚抽` : `增加 ${event.penaltyAdded} 张罚抽${event.penaltyTransferred ? `，并转移原有 ${event.penaltyTransferred} 张` : ''}`}`
+        ? ` → ${playerLabel(event.penaltyTarget ?? event.player)}；结果：${event.penaltyPrevented ? `其护盾抵消一整次罚抽（原本 ${event.penaltyAdded} 张）` : `增加 ${event.penaltyAdded} 张罚抽${event.penaltyTransferred ? `，并转移原有 ${event.penaltyTransferred} 张` : ''}`}`
         : `；结果：冻结 ${event.crystalFrozen} 水晶并更新桌面顶牌`;
       return activityEntry(`${playerLabel(event.player)}使用 ${label}${penaltyResult}`, [
         { kind: 'uno', card, label },
@@ -302,7 +302,10 @@ export function formatActivity(
     }
     case 'penaltyPrevented':
       return {
-        text: `${playerLabel(event.player)}以${event.reason}抵消 ${event.amount} 张罚抽`,
+        text:
+          event.reason === '护盾'
+            ? `${playerLabel(event.player)}的护盾抵消一整次罚抽（原本 ${event.amount} 张）；结果：消耗 1 层护盾`
+            : `${playerLabel(event.player)}以${event.reason}抵消一整次罚抽（原本 ${event.amount} 张）`,
       };
     case 'unoAlert':
       return { text: `${playerLabel(event.player)}喊出 UNO` };

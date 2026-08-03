@@ -25,7 +25,7 @@ registerEffect({
   id: 'bolt',
   name: '闪电箭',
   cost: 1,
-  description: '对目标玩家造成 3 张罚抽。',
+  description: '令目标玩家在其下回合开始时强制抽 3 张 UNO。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
@@ -106,7 +106,7 @@ registerEffect({
   id: 'shield',
   name: '护盾',
   cost: 2,
-  description: '获得 2 层持久护盾，抵消接下来的两次罚抽。',
+  description: '获得 2 层持久护盾；每层可抵消一整次罚抽，抵消后消耗。',
   apply: (ctx) => {
     ctx.state.players[ctx.source]!.shield += 2;
   },
@@ -124,7 +124,7 @@ registerEffect({
   id: 'fireball',
   name: '火球术',
   cost: 3,
-  description: '对目标玩家造成 6 张罚抽。',
+  description: '令目标玩家在其下回合开始时强制抽 6 张 UNO。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 6),
@@ -152,7 +152,7 @@ registerEffect({
   id: 'reverse2',
   name: '逆转',
   cost: 3,
-  description: '反转出牌方向',
+  description: '立即反转出牌方向。',
   apply: (ctx) => {
     ctx.state.direction = (ctx.state.direction * -1) as 1 | -1;
   },
@@ -162,7 +162,7 @@ registerEffect({
   id: 'massSkip',
   name: '时间静止',
   cost: 4,
-  description: '所有其他玩家跳过 1 次行动',
+  description: '所有其他仍在场的玩家各跳过下一次行动。',
   requiresTarget: false,
   apply: (ctx) => {
     const others = ctx.state.players
@@ -176,7 +176,7 @@ registerEffect({
   id: 'freeze2',
   name: '冰霜新星',
   cost: 2,
-  description: '目标玩家下回合罚抽 3 张。',
+  description: '令目标玩家在其下回合开始时强制抽 3 张 UNO。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => addPenalty(ctx.state, ctx.targets?.[0] ?? defaultTarget(ctx), 3),
@@ -186,7 +186,7 @@ registerEffect({
   id: 'untap',
   name: '超载',
   cost: 2,
-  description: '获得 4 颗冻结水晶，下回合可用',
+  description: '获得 4 颗冻结水晶，在你的下个回合解冻并变为可用水晶。',
   apply: (ctx) => {
     ctx.state.players[ctx.source]!.frozen += 4;
   },
@@ -196,7 +196,7 @@ registerEffect({
   id: 'steal',
   name: '窃取',
   cost: 3,
-  description: '从目标玩家手牌随机偷 1 张 Uno 牌',
+  description: '从目标玩家的 UNO 手牌中随机拿走 1 张，加入你的 UNO 手牌。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => {
@@ -213,7 +213,7 @@ registerEffect({
   id: 'timeTwist',
   name: '时间扭曲',
   cost: 5,
-  description: '获得 2 点额外 Uno 行动（本回合可多打 2 张 Uno 牌）',
+  description: '本回合额外获得 2 次 UNO 行动，即可再打出至多 2 张 UNO。',
   apply: (ctx) => {
     ctx.state.unoActionsLeft += 2;
   },
@@ -246,7 +246,7 @@ registerEffect({
   id: 'manaBlast',
   name: '法力风暴',
   cost: 4,
-  description: '对目标玩家造成 4 张罚抽，并随机抽 2 张 UNO 或炉石牌。',
+  description: '令目标玩家在其下回合开始时强制抽 4 张 UNO；你再随机抽 2 张 UNO 或炉石牌。',
   requiresTarget: true,
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => {
@@ -708,4 +708,31 @@ registerEffect({
   battlecry: true,
   boardClear: { mode: 'destroy', scope: 'allOther', selfUnoDrawback: 4 },
   apply: () => {},
+});
+
+registerEffect({
+  id: 'thunderhoofVanguard',
+  name: '雷蹄先锋',
+  cost: 3,
+  description: '冲锋：从手牌召唤后，本回合即可立即攻击。',
+  kind: 'minion',
+  attack: 3,
+  health: 4,
+  charge: true,
+  apply: () => {},
+});
+
+registerEffect({
+  id: 'meteorLancer',
+  name: '流星枪骑',
+  cost: 7,
+  description: '冲锋。战吼：你立即强制抽 2 张 UNO。',
+  kind: 'minion',
+  attack: 7,
+  health: 4,
+  charge: true,
+  battlecry: true,
+  apply: (ctx) => {
+    ctx.forceUnoDraw(ctx.source, 2, '流星枪骑的战吼副作用');
+  },
 });

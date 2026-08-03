@@ -7,7 +7,7 @@ export type MinionStat = 'attack' | 'health';
 
 /**
  * 公共辅助：给目标玩家加罚抽（规则引擎与炉石效果共用的唯一入口）。
- * 护盾立即抵消；代罚随从在结算入口 resolveForcedUnoDraw 统一拦截。
+ * 护盾立即抵消一整次罚抽；代罚随从在结算入口 resolveForcedUnoDraw 统一拦截。
  * 传入 minimum 表示 UNO 罚抽链（需要叠加或结束回合接受罚抽）；
  * 不传则只会入账 pendingDraw，在目标下回合开始时结算。
  */
@@ -21,7 +21,7 @@ export function addPenalty(
   if (!p) return;
   if (p.shield > 0) {
     p.shield -= 1;
-    state.log.push(`玩家 ${player} 护盾抵消 ${count} 张罚抽`);
+    state.log.push(`玩家 ${player} 的护盾抵消一整次罚抽（原本 ${count} 张）`);
   } else {
     p.pendingDraw += count;
     if (minimum !== undefined) p.pendingDrawMin = minimum;

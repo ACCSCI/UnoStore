@@ -57,6 +57,7 @@ import {
   pendingDrawHandCountDelta,
   renderHandCountLabel,
 } from './HandCountDelta';
+import { openHandRevealDialog } from './HandRevealDialog';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
@@ -500,6 +501,15 @@ export class BattleScreen extends Screen {
         this.playMinionVoice(event.effectId, 'summon');
         audio.playSfx('/assets/audio/sfx/generated/minion_summon.mp3', 0.75);
         await this.view.playSummonAnimation(event.player, this.playerCount, event.effectId);
+        if (getEffect(event.effectId)?.charge) {
+          const presentation = cardPresentation(event.effectId);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            event.player,
+            null,
+            this.playerCount
+          );
+        }
       } else if (event.type === 'minionAttack') {
         this.playMinionVoice(event.attackerEffectId, 'attack');
         audio.playSfx('/assets/audio/sfx/generated/minion_attack_swing.mp3', 0.88);
@@ -515,6 +525,21 @@ export class BattleScreen extends Screen {
         audio.playSfx('/assets/audio/sfx/generated/minion_hit.mp3', 0.95);
         this.refreshUI();
         await this.view.animationPause(120);
+      } else if (event.type === 'minionsCleared') {
+        this.refreshUI();
+        const effect = getEffect(event.effectId);
+        if (effect?.kind === 'minion') {
+          const presentation = cardPresentation(event.effectId);
+          audio.playSfx(soundAsset(presentation.sound), 0.72);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            event.player,
+            null,
+            this.playerCount
+          );
+        } else {
+          await this.view.animationPause(80);
+        }
       } else if (
         event.type === 'battlecry' ||
         event.type === 'deathrattle' ||
@@ -522,11 +547,15 @@ export class BattleScreen extends Screen {
         event.type === 'penaltyRedirected' ||
         event.type === 'minionTransformed' ||
         event.type === 'minionEmpowered' ||
-        event.type === 'minionsEqualized' ||
-        event.type === 'minionsCleared'
+        event.type === 'minionsEqualized'
       ) {
         this.refreshUI();
-        await this.view.playSpellAnimation(event.player, null, this.playerCount);
+        const effectId = 'effectId' in event ? event.effectId : undefined;
+        if (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) {
+          await this.view.animationPause(60);
+        } else {
+          await this.view.playSpellAnimation(event.player, null, this.playerCount, effectId);
+        }
       } else if (
         event.type === 'drawUno' ||
         event.type === 'drawPenalty' ||
@@ -554,7 +583,12 @@ export class BattleScreen extends Screen {
             takeCardId: choice.takeCardId,
             discardCardId: choice.discardCardId,
           });
-          if (resolved.ok) events.push(...resolved.events);
+          if (resolved.ok) {
+            events.push(...resolved.events);
+            // 规则已在确认动作中同步结算；立即呈现新手牌，不等待整段回合演出结束。
+            this.refreshUI();
+            this.setStatus('窥镜选择已确认并立即结算');
+          }
         }
       } else if (event.type === 'turnStart') {
         if (event.drawUno) await this.view.playDrawAnimation(event.player, this.playerCount);
@@ -1783,119 +1817,16 @@ export class BattleScreen extends Screen {
     chooseTakeAndDiscard = false
   ): Promise<{ takeCardId: string; discardCardId: string } | null> {
     this.revealDialog?.remove();
-    const dialog = document.createElement('dialog');
-    dialog.className = 'hand-reveal-dialog';
-    dialog.setAttribute('aria-labelledby', 'hand-reveal-title');
-    const header = this.el('header');
-    const copy = this.el('div');
-    const title = this.el('h2', undefined, `窥镜：${playerLabel(targetPlayer)} 的手牌`);
-    title.id = 'hand-reveal-title';
-    copy.append(
-      title,
-      this.el(
-        'p',
-        undefined,
-        chooseTakeAndDiscard
-          ? `随机展示 ${cards.length} 张：选择拿走 1 张，并选择另 1 张弃掉。`
-          : `随机展示 ${cards.length} 张；确认后关闭情报。`
-      )
-    );
-    const toggle = this.btn('隐藏窥镜', () => {}, 'hand-reveal-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    header.append(copy, toggle);
-    const cardList = this.el('div', 'hand-reveal-cards');
-    cardList.setAttribute('role', 'list');
-    let takeCardId: string | null = null;
-    let discardCardId: string | null = null;
-    const optionButtons: HTMLButtonElement[] = [];
-    const cardWrappers = new Map<string, HTMLElement>();
-    for (const card of cards) {
-      const wrapper = this.el('div', 'hand-reveal-card');
-      cardWrappers.set(card.id, wrapper);
-      const image = new Image();
-      image.src = unoCardDataURL(card as UnoCard);
-      image.alt = fmtCardFull(card);
-      image.decoding = 'async';
-      wrapper.setAttribute('role', 'listitem');
-      wrapper.appendChild(image);
-      if (chooseTakeAndDiscard) {
-        const actions = this.el('div', 'hand-reveal-card-actions');
-        const take = this.btn('拿走', () => {
-          takeCardId = card.id;
-          if (discardCardId === card.id) discardCardId = null;
-          updateChoices();
-        });
-        take.dataset.cardId = card.id;
-        take.dataset.choice = 'take';
-        const discard = this.btn('弃掉', () => {
-          discardCardId = card.id;
-          if (takeCardId === card.id) takeCardId = null;
-          updateChoices();
-        });
-        discard.dataset.cardId = card.id;
-        discard.dataset.choice = 'discard';
-        optionButtons.push(take, discard);
-        actions.append(take, discard);
-        wrapper.appendChild(actions);
-      }
-      cardList.appendChild(wrapper);
-    }
-    if (cards.length === 0) cardList.append(this.el('p', 'ledger-empty', '对方没有 UNO 手牌'));
-    toggle.onclick = () => {
-      const observing = dialog.classList.toggle('is-observing');
-      toggle.textContent = observing ? '显示窥镜' : '隐藏窥镜';
-      toggle.setAttribute('aria-expanded', String(!observing));
-      toggle.setAttribute(
-        'aria-label',
-        observing ? '重新显示窥镜决策界面' : '隐藏窥镜界面以观察牌桌'
-      );
-    };
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    const confirm = this.btn(
-      chooseTakeAndDiscard ? '确认拿取与弃置' : '确认情报',
-      () => {},
-      'hand-reveal-confirm'
-    );
-    confirm.type = 'submit';
-    confirm.value = 'confirmed';
-    form.appendChild(confirm);
-    const updateChoices = (): void => {
-      for (const [cardId, wrapper] of cardWrappers) {
-        wrapper.classList.toggle('is-selected', cardId === takeCardId || cardId === discardCardId);
-      }
-      for (const button of optionButtons) {
-        const selected =
-          (button.dataset.choice === 'take' && button.dataset.cardId === takeCardId) ||
-          (button.dataset.choice === 'discard' && button.dataset.cardId === discardCardId);
-        button.classList.toggle('selected', selected);
-        button.setAttribute('aria-pressed', String(selected));
-      }
-      confirm.disabled = chooseTakeAndDiscard && !(takeCardId && discardCardId);
-    };
-    updateChoices();
-    dialog.append(header, cardList, form);
-    this.root.appendChild(dialog);
-    this.revealDialog = dialog;
-    return new Promise((resolve) => {
-      dialog.addEventListener('cancel', (event) => event.preventDefault());
-      dialog.addEventListener(
-        'close',
-        () => {
-          dialog.remove();
-          if (this.revealDialog === dialog) this.revealDialog = null;
-          resolve(
-            chooseTakeAndDiscard && takeCardId && discardCardId
-              ? { takeCardId, discardCardId }
-              : chooseTakeAndDiscard
-                ? null
-                : null
-          );
-        },
-        { once: true }
-      );
-      dialog.showModal();
-      confirm.focus();
+    const handle = openHandRevealDialog({
+      root: this.root,
+      title: `窥镜：${playerLabel(targetPlayer)} 的手牌`,
+      cards: cards as Array<Pick<UnoCard, 'id' | 'color' | 'value'>>,
+      chooseTakeAndDiscard,
+      formatCard: fmtCardFull,
+    });
+    this.revealDialog = handle.dialog;
+    return handle.result.finally(() => {
+      if (this.revealDialog === handle.dialog) this.revealDialog = null;
     });
   }
 

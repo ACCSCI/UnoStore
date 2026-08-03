@@ -68,7 +68,7 @@ export interface PlayerState {
   heroId: HeroId;
   /** 本回合已经使用英雄技能的次数。 */
   heroPowerUses: number;
-  /** 魔法护盾层数（持久保留；每次抵消罚抽消耗 1 层） */
+  /** 魔法护盾层数（持久保留；每层抵消一整次罚抽后消耗） */
   shield: number;
   /** 已报 UNO */
   unoAlert: boolean;

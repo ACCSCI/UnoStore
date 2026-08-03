@@ -23,6 +23,8 @@ export const HEARTH_EXPANSION_CARD_IDS = [
   'finalCollapse',
   'dustchargeSapper',
   'apocalypseHerald',
+  'thunderhoofVanguard',
+  'meteorLancer',
 ] as const;
 
 /** 默认扩展牌补两张；极高压的厄运司牌者只补一张。 */
@@ -52,6 +54,7 @@ export const PRESET_DECKS: HearthDeck[] = [
       'arcaneArchive',
       'clockworkSquire',
       'emberWolf',
+      'thunderhoofVanguard',
       'fatefulGift',
       'fatefulGift',
       'chromaticConductor',
@@ -116,6 +119,7 @@ export const PRESET_DECKS: HearthDeck[] = [
       'unstableNova',
       'finalCollapse',
       'apocalypseHerald',
+      'meteorLancer',
     ],
   },
   {
@@ -137,6 +141,8 @@ export const PRESET_DECKS: HearthDeck[] = [
       'arcaneArchive',
       'emberWolf',
       'emberWolf',
+      'thunderhoofVanguard',
+      'thunderhoofVanguard',
       'fatefulGift',
       'fatefulGift',
       'chromaticConductor',
@@ -168,7 +174,6 @@ export const PRESET_DECKS: HearthDeck[] = [
       'powerAcolyte',
       'powerUnbound',
       'powerUnbound',
-      'stormDrake',
       'crystalGuardian',
       'manaBlast',
       'crystal2',
@@ -201,6 +206,7 @@ export const PRESET_DECKS: HearthDeck[] = [
       'unstableNova',
       'finalCollapse',
       'apocalypseHerald',
+      'meteorLancer',
     ],
   },
 ];

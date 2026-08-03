@@ -54,6 +54,7 @@ export class MinionBoardRenderer {
   private readonly enemyLayer: HTMLDivElement;
   private readonly playerRow: HTMLDivElement;
   private readonly minionButtons = new Map<string, HTMLButtonElement>();
+  private readonly enemyRows = new Map<number, HTMLDivElement>();
   private placementPreview: HTMLSpanElement | null = null;
   private placementIndex: number | null = null;
 
@@ -86,7 +87,7 @@ export class MinionBoardRenderer {
     this.clearPlacementPreview();
     this.callbacks.onHoverMinion(null);
     this.root.dataset.playerCount = String(playerCount);
-    this.minionButtons.clear();
+    const liveMinionIds = new Set([...playerBoard, ...enemyBoard].map((minion) => minion.id));
     this.renderEnemyZones(enemyBoard, selectedAttackerId, canAct, spellTargetSide, playerCount);
     const playerAnchor = this.resolveSeatAnchor(0, playerCount);
     this.playerRow.style.setProperty('--minion-x', `${playerAnchor.x.toFixed(1)}px`);
@@ -100,6 +101,11 @@ export class MinionBoardRenderer {
       spellTargetSide,
       false
     );
+    for (const [id, button] of this.minionButtons) {
+      if (liveMinionIds.has(id)) continue;
+      button.remove();
+      this.minionButtons.delete(id);
+    }
   }
 
   /** 拿起随从牌后，按指针横向位置预览插入点；幽灵随从让两侧自动让位。 */
@@ -190,12 +196,11 @@ export class MinionBoardRenderer {
     damage: number,
     counterDamage = 0
   ): Promise<void> {
+    // 等一帧让刚完成的布局写入生效，再按实例 ID 重新解析当前节点。
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     const attacker = this.minionButtons.get(attackerId);
-    if (!attacker) return;
-    const target = targetMinionId
-      ? this.minionButtons.get(targetMinionId)
-      : this.resolveHeroTarget(targetPlayer);
-    if (!target) return;
+    const target = this.resolveCombatTarget(targetMinionId, targetPlayer);
+    if (!(attacker?.isConnected && target?.isConnected)) return;
     const from = attacker.getBoundingClientRect();
     const to = target.getBoundingClientRect();
     const dx = to.left + to.width / 2 - (from.left + from.width / 2);
@@ -212,7 +217,8 @@ export class MinionBoardRenderer {
       { duration: 720, easing: 'cubic-bezier(.2,.8,.2,1)' }
     );
     window.setTimeout(() => {
-      target.animate(
+      const liveTarget = this.resolveCombatTarget(targetMinionId, targetPlayer) ?? target;
+      liveTarget.animate(
         [
           { transform: 'translateX(0)', filter: 'brightness(1)' },
           { transform: 'translateX(-8px)', filter: 'brightness(2) saturate(1.8)' },
@@ -224,7 +230,7 @@ export class MinionBoardRenderer {
       const hit = document.createElement('strong');
       hit.className = 'combat-damage-pop';
       hit.textContent = damage > 0 ? `-${damage}` : '命中';
-      target.appendChild(hit);
+      liveTarget.appendChild(hit);
       window.setTimeout(() => hit.remove(), 620);
       if (counterDamage > 0) {
         window.setTimeout(() => {
@@ -246,6 +252,15 @@ export class MinionBoardRenderer {
     }, 430);
     await Promise.all([lunge.finished.catch(() => undefined), route]);
     attacker.style.zIndex = '';
+  }
+
+  private resolveCombatTarget(
+    targetMinionId: string | undefined,
+    targetPlayer: number
+  ): HTMLElement | null {
+    return targetMinionId
+      ? (this.minionButtons.get(targetMinionId) ?? null)
+      : this.resolveHeroTarget(targetPlayer);
   }
 
   private resolveHeroTarget(targetPlayer: number): HTMLElement | null {
@@ -334,11 +349,20 @@ export class MinionBoardRenderer {
     spellTargetSide: SpellTargetSide,
     playerCount: number
   ): void {
-    this.enemyLayer.replaceChildren();
     const owners = [...new Set(minions.map((minion) => minion.owner))].sort((a, b) => a - b);
+    const liveOwners = new Set(owners);
     for (const owner of owners) {
-      const row = this.createRow(`玩家 ${owner} 的随从`, 'enemy');
+      let row = this.enemyRows.get(owner);
+      if (!row) {
+        row = this.createRow(`玩家 ${owner} 的随从`, 'enemy');
+        const ownerChip = document.createElement('span');
+        ownerChip.className = 'minion-owner-chip';
+        ownerChip.setAttribute('aria-hidden', 'true');
+        row.append(ownerChip);
+        this.enemyRows.set(owner, row);
+      }
       row.dataset.owner = String(owner);
+      row.setAttribute('aria-label', `玩家 ${owner} 的随从`);
       const anchor = this.resolveSeatAnchor(owner, playerCount);
       row.style.setProperty('--minion-x', `${anchor.x.toFixed(1)}px`);
       row.style.setProperty('--minion-y', `${anchor.y.toFixed(1)}px`);
@@ -352,12 +376,14 @@ export class MinionBoardRenderer {
         spellTargetSide,
         ownerMinions.some((minion) => minionHasTaunt(minion))
       );
-      const ownerChip = document.createElement('span');
-      ownerChip.className = 'minion-owner-chip';
-      ownerChip.textContent = `玩家 ${owner}`;
-      ownerChip.setAttribute('aria-hidden', 'true');
-      row.appendChild(ownerChip);
-      this.enemyLayer.appendChild(row);
+      const ownerChip = row.querySelector<HTMLElement>(':scope > .minion-owner-chip');
+      if (ownerChip) ownerChip.textContent = `玩家 ${owner}`;
+      this.enemyLayer.append(row);
+    }
+    for (const [owner, row] of this.enemyRows) {
+      if (liveOwners.has(owner)) continue;
+      row.remove();
+      this.enemyRows.delete(owner);
     }
   }
 
@@ -370,9 +396,9 @@ export class MinionBoardRenderer {
     spellTargetSide: SpellTargetSide,
     attackRequiresTaunt = false
   ): void {
-    row.replaceChildren();
     // 正在选择攻击者/法术目标时，抑制详情面板（会遮挡战场）
     const suppressDetails = Boolean(selectedAttackerId) || Boolean(spellTargetSide);
+    const ownerChip = row.querySelector<HTMLElement>(':scope > .minion-owner-chip');
     for (const minion of minions) {
       const effect = getEffect(minion.effectId);
       const legalAttackTarget = !attackRequiresTaunt || minionHasTaunt(minion);
@@ -380,10 +406,12 @@ export class MinionBoardRenderer {
         spellTargetSide === 'any' ||
         (spellTargetSide === 'friendly' && side === 'player') ||
         (spellTargetSide === 'enemy' && side === 'enemy');
-      const button = document.createElement('button');
-      button.type = 'button';
+      let button = this.minionButtons.get(minion.id);
+      if (!button) {
+        button = this.createMinionButton(minion);
+        this.minionButtons.set(minion.id, button);
+      }
       button.className = `board-minion ${side}`;
-      this.minionButtons.set(minion.id, button);
       button.classList.toggle('selected', minion.id === selectedAttackerId);
       button.classList.toggle(
         'legal-target',
@@ -415,12 +443,8 @@ export class MinionBoardRenderer {
               ? `攻击 ${name}`
               : '必须先攻击嘲讽随从'
             : '请先选择己方随从';
-      button.innerHTML =
-        `<span class="minion-art" aria-hidden="true"><img src="${assetUrl(`/assets/images/hearth/${encodeURIComponent(minion.effectId)}.webp`)}" alt=""></span>` +
-        (minionHasTaunt(minion) ? '<span class="minion-taunt" aria-hidden="true"></span>' : '') +
-        `<span class="minion-stat attack" aria-label="攻击力 ${minion.attack}">${minion.attack}</span>` +
-        `<span class="minion-stat health" aria-label="生命值 ${minion.health}">${minion.health}</span>`;
-      button.addEventListener('click', () => {
+      this.updateMinionButtonContent(button, minion);
+      button.onclick = () => {
         if (!suppressDetails) this.callbacks.onPreviewMinion(minion);
         if (!actionable) {
           if (side === 'enemy' && selectedAttackerId && !legalAttackTarget) {
@@ -431,14 +455,62 @@ export class MinionBoardRenderer {
         if (spellTargetSide) this.callbacks.onAttackMinion(minion.id);
         else if (side === 'player') this.callbacks.onSelectAttacker(minion.id);
         else this.callbacks.onAttackMinion(minion.id);
-      });
+      };
       if (!suppressDetails) {
-        button.addEventListener('pointerenter', () => this.callbacks.onHoverMinion(minion));
-        button.addEventListener('pointerleave', () => this.callbacks.onHoverMinion(null));
-        button.addEventListener('focus', () => this.callbacks.onHoverMinion(minion));
-        button.addEventListener('blur', () => this.callbacks.onHoverMinion(null));
+        button.onpointerenter = () => this.callbacks.onHoverMinion(minion);
+        button.onpointerleave = () => this.callbacks.onHoverMinion(null);
+        button.onfocus = () => this.callbacks.onHoverMinion(minion);
+        button.onblur = () => this.callbacks.onHoverMinion(null);
+      } else {
+        button.onpointerenter = null;
+        button.onpointerleave = null;
+        button.onfocus = null;
+        button.onblur = null;
       }
-      row.appendChild(button);
+      row.insertBefore(button, ownerChip);
+    }
+  }
+
+  private createMinionButton(minion: MinionState): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.minionId = minion.id;
+    const art = document.createElement('span');
+    art.className = 'minion-art';
+    art.setAttribute('aria-hidden', 'true');
+    const image = new Image();
+    image.alt = '';
+    image.decoding = 'async';
+    art.append(image);
+    const taunt = document.createElement('span');
+    taunt.className = 'minion-taunt';
+    taunt.setAttribute('aria-hidden', 'true');
+    const attack = document.createElement('span');
+    attack.className = 'minion-stat attack';
+    const health = document.createElement('span');
+    health.className = 'minion-stat health';
+    button.append(art, taunt, attack, health);
+    return button;
+  }
+
+  /** 只更新发生变化的内容；图片节点与攻击动画目标在整场对局中保持稳定。 */
+  private updateMinionButtonContent(button: HTMLButtonElement, minion: MinionState): void {
+    const image = button.querySelector<HTMLImageElement>('.minion-art img');
+    if (image && image.dataset.effectId !== minion.effectId) {
+      image.dataset.effectId = minion.effectId;
+      image.src = assetUrl(`/assets/images/hearth/${encodeURIComponent(minion.effectId)}.webp`);
+    }
+    const taunt = button.querySelector<HTMLElement>('.minion-taunt');
+    if (taunt) taunt.hidden = !minionHasTaunt(minion);
+    const attack = button.querySelector<HTMLElement>('.minion-stat.attack');
+    if (attack) {
+      attack.textContent = String(minion.attack);
+      attack.setAttribute('aria-label', `攻击力 ${minion.attack}`);
+    }
+    const health = button.querySelector<HTMLElement>('.minion-stat.health');
+    if (health) {
+      health.textContent = String(minion.health);
+      health.setAttribute('aria-label', `生命值 ${minion.health}`);
     }
   }
 

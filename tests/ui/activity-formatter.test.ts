@@ -92,3 +92,12 @@ test('炉石选目标记录同时让施放牌和目标随从显示为详情引�
   expect(entry.text).toContain('玩家1使用 变形术（3 费）→ 玩家2的鎏金圣垒');
   expect(entry.references?.map((reference) => reference.label)).toEqual(['变形术', '鎏金圣垒']);
 });
+
+test('护盾文案明确为抵消一整次罚抽，而不是按张抵消', () => {
+  const entry = formatActivity(
+    { type: 'penaltyPrevented', player: 0, amount: 10, reason: '护盾' },
+    playerLabel
+  )!;
+  expect(entry.text).toContain('抵消一整次罚抽（原本 10 张）');
+  expect(entry.text).toContain('消耗 1 层护盾');
+});

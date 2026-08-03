@@ -841,7 +841,7 @@ function createEffectContext(
 
 /**
  * 罚抽结算统一入口（addPenalty 只是入账）：
- * 护盾优先抵消 → 代罚随从（absorbsPenalty）承受等量伤害（过量不回流）→ 才真正抽牌。
+ * 护盾优先抵消一整次罚抽 → 代罚随从（absorbsPenalty）承受等量伤害（过量不回流）→ 才真正抽牌。
  * UNO 罚抽链、被抓 UNO、炉石罚抽效果、随从直击全部汇集到这里拦截。
  */
 function resolveForcedUnoDraw(
@@ -857,7 +857,7 @@ function resolveForcedUnoDraw(
   if (target.shield > 0) {
     target.shield -= 1;
     events.push({ type: 'penaltyPrevented', player, amount: count, reason: '护盾' });
-    state.log.push(`玩家 ${player} 的护盾抵消 ${reason}：${count} 张`);
+    state.log.push(`玩家 ${player} 的护盾抵消一整次${reason}罚抽（原本 ${count} 张）`);
     return 0;
   }
   const absorber = target.board.find((minion) => getEffect(minion.effectId)?.absorbsPenalty);

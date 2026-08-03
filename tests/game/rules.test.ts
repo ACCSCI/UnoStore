@@ -596,6 +596,27 @@ test('余烬战狼拥有冲锋，放置后可以立即攻击', () => {
   ).toBe(true);
 });
 
+test('冲锋是通用属性：雷蹄先锋与流星枪骑召唤当回合都能立即攻击', () => {
+  for (const [index, effectId] of ['thunderhoofVanguard', 'meteorLancer'].entries()) {
+    const s = createGame(2, [effectId], 108 + index);
+    s.players[0]!.free = 10;
+    s.players[0]!.hearthHand = [hearth(`charge-${effectId}`, effectId)];
+    const beforeUno = s.players[0]!.hand.length;
+    okEvents(dispatch(s, new Rng(108 + index), { type: 'playHearth', player: 0, cardIdx: 0 }));
+    const minion = s.players[0]!.board[0]!;
+    expect(minion.effectId).toBe(effectId);
+    expect(minion.exhausted).toBe(false);
+    if (effectId === 'meteorLancer') expect(s.players[0]!.hand).toHaveLength(beforeUno + 2);
+    const attack = dispatch(s, new Rng(118 + index), {
+      type: 'attackMinion',
+      player: 0,
+      attackerId: minion.id,
+      targetPlayer: 1,
+    });
+    expect(attack.ok).toBe(true);
+  }
+});
+
 test('虹彩指挥家登场时可重新指定当前 UNO 颜色', () => {
   const s = createGame(2, ['chromaticConductor'], 113);
   s.players[0]!.free = 3;
@@ -729,18 +750,24 @@ test('窥镜先知查看对手四张牌，并从中拿一张、弃一张', () =>
   if (reveal?.type === 'handRevealed') {
     expect(reveal.cards).toHaveLength(4);
     expect(reveal.cards.every((card) => targetHand.includes(card.id))).toBe(true);
+    const turnBeforeConfirm = s.turn;
+    const takenId = reveal.cards[0]!.id;
+    const discardedId = reveal.cards[1]!.id;
     const resolve = okEvents(
       dispatch(s, new Rng(24), {
         type: 'resolveOracle',
         player: 0,
-        takeCardId: reveal.cards[0]!.id,
-        discardCardId: reveal.cards[1]!.id,
+        takeCardId: takenId,
+        discardCardId: discardedId,
       })
     );
     expect(resolve.some((event) => event.type === 'oracleResolved')).toBe(true);
     expect(s.players[0]!.hand).toHaveLength(sourceCount + 1);
     expect(s.players[2]!.hand).toHaveLength(targetHand.length - 2);
     expect(s.oraclePending).toBeNull();
+    expect(s.turn).toBe(turnBeforeConfirm);
+    expect(s.players[0]!.hand.some((card) => card.id === takenId)).toBe(true);
+    expect(s.players[2]!.hand.some((card) => card.id === discardedId)).toBe(false);
   }
 });
 

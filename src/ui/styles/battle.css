@@ -2317,11 +2317,24 @@
     font-weight: 800;
   }
 
+  .hand-reveal-toggle {
+    position: fixed;
+    inset-block-start: max(1rem, env(safe-area-inset-top));
+    inset-inline-end: max(1rem, env(safe-area-inset-right));
+    z-index: 2;
+    opacity: 1;
+    transition:
+      opacity 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
   .hand-reveal-dialog.is-observing {
     position: fixed;
-    inset: auto 1rem 1rem auto;
-    inline-size: auto;
-    max-block-size: none;
+    inset: 0;
+    inline-size: 100vw;
+    block-size: 100vh;
+    max-block-size: 100vh;
     margin: 0;
     border: 0;
     background: transparent;
@@ -2341,12 +2354,15 @@
 
   .hand-reveal-dialog.is-observing header {
     padding: 0;
+    pointer-events: none;
   }
 
   .hand-reveal-dialog.is-observing .hand-reveal-toggle {
     border-color: #79c9dd;
     background: rgb(10 24 42 / 94%);
     box-shadow: 0 0.55rem 1.5rem rgb(0 0 0 / 55%);
+    opacity: 0.5;
+    pointer-events: auto;
   }
 
   .hand-reveal-dialog h2,
@@ -2373,6 +2389,7 @@
   }
 
   .hand-reveal-card {
+    position: relative;
     display: grid;
     flex: 0 0 auto;
     gap: 0.45rem;
@@ -2388,6 +2405,34 @@
     outline: 0.22rem solid #ff3f4f;
     outline-offset: 0.18rem;
     box-shadow: 0 0 0.95rem rgb(255 47 67 / 75%);
+  }
+
+  .hand-reveal-choice-marker {
+    position: absolute;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    font-family: system-ui, sans-serif;
+    font-weight: 1000;
+    line-height: 1;
+  }
+
+  .hand-reveal-card.is-take .hand-reveal-choice-marker {
+    inset-block-start: -1.1rem;
+    inset-inline-start: 50%;
+    translate: -50% 0;
+    font-size: 2.8rem;
+    filter: drop-shadow(0 0.2rem 0.25rem rgb(0 0 0 / 75%));
+  }
+
+  .hand-reveal-card.is-discard .hand-reveal-choice-marker {
+    inset: 0 0 2.4rem;
+    color: #ff263d;
+    font-size: clamp(5rem, 10vw, 8.5rem);
+    text-shadow:
+      0 0 0.18rem white,
+      0 0 0.8rem #b50018;
   }
 
   .hand-reveal-card-actions {
@@ -2794,11 +2839,6 @@
       inline-size: 8.25rem;
     }
 
-    .hand-reveal-dialog.is-observing {
-      inset: auto max(0.5rem, env(safe-area-inset-right)) max(0.5rem, env(safe-area-inset-bottom))
-        auto;
-    }
-
     .hero-emote-popover {
       inline-size: calc(100vw - 1rem);
     }
@@ -2847,6 +2887,7 @@
     .action-btn,
     .battle-feedback,
     .card-detail,
+    .hand-reveal-toggle,
     .targeting-hud {
       transition: none;
       animation: none;

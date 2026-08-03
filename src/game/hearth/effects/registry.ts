@@ -31,7 +31,7 @@ export type HearthKeywordId =
   | 'boardClear';
 
 export const HEARTH_KEYWORDS: Record<HearthKeywordId, { name: string; description: string }> = {
-  charge: { name: '冲锋', description: '该随从放置后可以立即攻击。' },
+  charge: { name: '冲锋', description: '该随从从手牌召唤后，在本回合即可立即攻击。' },
   taunt: {
     name: '嘲讽',
     description: '敌人必须先攻击该玩家的嘲讽随从，才能攻击其其他随从或英雄。',
@@ -40,7 +40,7 @@ export const HEARTH_KEYWORDS: Record<HearthKeywordId, { name: string; descriptio
   deathrattle: { name: '亡语', description: '该随从死亡时触发。' },
   penaltyProxy: {
     name: '代罚',
-    description: '你的英雄受到罚抽时，由该随从承受等量伤害；过量伤害不会回到英雄。',
+    description: '你的英雄将要结算一整次罚抽时，由该随从承受等量伤害；过量伤害不会回到英雄。',
   },
   boardClear: {
     name: '清场',
@@ -128,7 +128,7 @@ export interface HearthEffect {
   discardsNumbersBelowHealthOnAttack?: boolean;
   /** 嘲讽在场时，敌方随从不能攻击其非嘲讽随从或英雄。 */
   taunt?: boolean;
-  /** 冲锋随从登场当回合即可攻击。 */
+  /** 通用冲锋属性：任意带有该属性的随从从手牌召唤后当回合即可攻击。 */
   charge?: boolean;
   /** 该随从在场时降低英雄技能费用。 */
   heroPowerCostReduction?: number;

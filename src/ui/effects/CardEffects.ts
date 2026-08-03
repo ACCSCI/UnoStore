@@ -9,7 +9,14 @@ export type CardVisual =
   | 'time'
   | 'draw'
   | 'transform'
-  | 'summon';
+  | 'summon'
+  | 'cinderSweep'
+  | 'unstableNova'
+  | 'finalCollapse'
+  | 'powderBlast'
+  | 'apocalypse'
+  | 'thunderCharge'
+  | 'meteorCharge';
 
 export type CardSound =
   | 'lightning'
@@ -22,7 +29,12 @@ export type CardSound =
   | 'time'
   | 'draw'
   | 'transform'
-  | 'impact';
+  | 'impact'
+  | 'cinderSweep'
+  | 'unstableNova'
+  | 'finalCollapse';
+
+export type CardVisualMotion = 'projectile' | 'nova' | 'collapse' | 'charge';
 
 export interface CardPresentation {
   visual: CardVisual;
@@ -80,11 +92,13 @@ export const CARD_PRESENTATION: Record<string, CardPresentation> = {
   duelOfAllegiance: { visual: 'transform', sound: 'transform' },
   armyExchange: { visual: 'time', sound: 'time' },
   chaosConscription: { visual: 'shadow', sound: 'shadow' },
-  cinderSweep: { visual: 'fire', sound: 'fire' },
-  unstableNova: { visual: 'arcane', sound: 'impact' },
-  finalCollapse: { visual: 'shadow', sound: 'impact' },
-  dustchargeSapper: { visual: 'fire', sound: 'impact' },
-  apocalypseHerald: { visual: 'shadow', sound: 'impact' },
+  cinderSweep: { visual: 'cinderSweep', sound: 'cinderSweep' },
+  unstableNova: { visual: 'unstableNova', sound: 'unstableNova' },
+  finalCollapse: { visual: 'finalCollapse', sound: 'finalCollapse' },
+  dustchargeSapper: { visual: 'powderBlast', sound: 'impact' },
+  apocalypseHerald: { visual: 'apocalypse', sound: 'shadow' },
+  thunderhoofVanguard: { visual: 'thunderCharge', sound: 'lightning' },
+  meteorLancer: { visual: 'meteorCharge', sound: 'fire' },
 };
 
 export function cardPresentation(effectId: string): CardPresentation {
@@ -103,10 +117,23 @@ const SOUND_ASSETS: Record<CardSound, string> = {
   draw: '/assets/audio/sfx/generated/arcane_draw.mp3',
   transform: '/assets/audio/sfx/generated/polymorph.mp3',
   impact: '/assets/audio/sfx/generated/minion_hit.mp3',
+  cinderSweep: '/assets/audio/sfx/generated/cinder_sweep.mp3',
+  unstableNova: '/assets/audio/sfx/generated/unstable_nova.mp3',
+  finalCollapse: '/assets/audio/sfx/generated/final_collapse.mp3',
 };
 
 export function soundAsset(sound: CardSound): string {
   return SOUND_ASSETS[sound];
+}
+
+/** 逐牌动画运动类型；新增表现无需在屏幕层按卡名分支。 */
+export function cardVisualMotion(visual: CardVisual): CardVisualMotion {
+  if (visual === 'cinderSweep' || visual === 'unstableNova' || visual === 'powderBlast') {
+    return 'nova';
+  }
+  if (visual === 'finalCollapse' || visual === 'apocalypse') return 'collapse';
+  if (visual === 'thunderCharge' || visual === 'meteorCharge') return 'charge';
+  return 'projectile';
 }
 
 export function unoPresentation(value: string): CardPresentation {
