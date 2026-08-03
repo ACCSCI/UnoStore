@@ -14,7 +14,7 @@ import {
   redistributeAllMinions,
   revealUnoHand,
 } from './effects/common';
-import { getEffect, registerEffect } from './effects/registry';
+import { registerEffect } from './effects/registry';
 
 /**
  * 炉石卡池：法术 + 可上场战斗的随从。
@@ -106,7 +106,7 @@ registerEffect({
   id: 'shield',
   name: '护盾',
   cost: 2,
-  description: '获得 2 层护盾，抵消接下来的两次罚抽。',
+  description: '获得 2 层持久护盾，抵消接下来的两次罚抽。',
   apply: (ctx) => {
     ctx.state.players[ctx.source]!.shield += 2;
   },
@@ -216,7 +216,6 @@ registerEffect({
   description: '获得 2 点额外 Uno 行动（本回合可多打 2 张 Uno 牌）',
   apply: (ctx) => {
     ctx.state.unoActionsLeft += 2;
-    ctx.state.massSkipUsed = true;
   },
 });
 
@@ -224,13 +223,22 @@ registerEffect({
   id: 'echo',
   name: '回声',
   cost: 4,
-  description: '复制上一张炉石牌的效果（无目标版本）',
+  description: '将全场上一张打出的炉石牌复制到你的手牌；复制牌的费用为 0。',
   apply: (ctx) => {
-    const p = ctx.state.players[ctx.source]!;
-    const last = p.hearthPile[p.hearthPile.length - 2]; // 上一张打出的
+    const last = ctx.state.lastHearthPlayed;
     if (!last) return;
-    const effect = getEffect(last.effectId);
-    if (effect && effect.id !== 'echo') effect.apply(ctx);
+    const copy = {
+      id: `echo-copy-${++ctx.state.hearthCopySerial}`,
+      effectId: last.effectId,
+      costOverride: 0,
+    };
+    ctx.state.players[ctx.source]!.hearthHand.push(copy);
+    ctx.events.push({
+      type: 'hearthDrawn',
+      player: ctx.source,
+      cardIds: [copy.id],
+      reason: '回声',
+    });
   },
 });
 

@@ -46,7 +46,7 @@ const ACTION_INFO: Record<string, { name: string; description: string }> = {
   draw4: { name: '彩色抽四', description: '下一个玩家罚抽 4 张，可向上叠加' },
   wild: { name: '万能变色', description: '打出后选择一种当前颜色' },
   wildDraw4: { name: '万能抽四', description: '选择颜色；下家罚抽 4 张' },
-  massSkip: { name: '全员跳过', description: '跳过所有对手并获得额外行动' },
+  massSkip: { name: '全员跳过', description: '所有其他玩家跳过 1 次行动，随后再次轮到你' },
   colorDump: { name: '同色清场', description: '弃掉全部同色 UNO；数字点数之和转为冻结水晶' },
   wildReverseDraw4: {
     name: '反转抽四',

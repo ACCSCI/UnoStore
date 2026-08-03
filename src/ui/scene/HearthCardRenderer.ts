@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
-import { getEffect } from '../../game/hearth/effects/registry';
+import { getEffect, hearthCardCost } from '../../game/hearth/effects/registry';
 import { assetUrl } from '../assets/url';
 
 /**
@@ -401,32 +401,33 @@ const loadStarted = new Set<string>();
 const loadedArtTextures = new Map<string, THREE.Texture>();
 const failedArt = new Set<string>();
 
-function requestArt(effectId: string): (cb: (tex: THREE.Texture) => void) => void {
+function requestArt(effectId: string, cost: number): (cb: (tex: THREE.Texture) => void) => void {
+  const textureKey = `${effectId}:${cost}`;
   const onLoad = (cb: (tex: THREE.Texture) => void): void => {
-    const loaded = loadedArtTextures.get(effectId);
+    const loaded = loadedArtTextures.get(textureKey);
     if (loaded) {
       cb(loaded);
       return;
     }
     if (failedArt.has(effectId)) {
-      cb(texFallback(effectId));
+      cb(texFallback(effectId, cost));
       return;
     }
-    let set = loadListeners.get(effectId);
+    let set = loadListeners.get(textureKey);
     if (!set) {
       set = new Set();
-      loadListeners.set(effectId, set);
+      loadListeners.set(textureKey, set);
     }
     set.add(cb);
   };
-  if (!loadStarted.has(effectId)) {
-    loadStarted.add(effectId);
+  if (!loadStarted.has(textureKey)) {
+    loadStarted.add(textureKey);
     const img = new Image();
     img.onload = () => {
       const effect = getEffect(effectId);
-      const tex = composeCardFace(effectId, effect?.name ?? effectId, effect?.cost ?? 0, img);
-      loadedArtTextures.set(effectId, tex);
-      const listeners = loadListeners.get(effectId);
+      const tex = composeCardFace(effectId, effect?.name ?? effectId, cost, img);
+      loadedArtTextures.set(textureKey, tex);
+      const listeners = loadListeners.get(textureKey);
       if (listeners) {
         for (const cb of listeners) cb(tex);
         listeners.clear();
@@ -434,9 +435,9 @@ function requestArt(effectId: string): (cb: (tex: THREE.Texture) => void) => voi
     };
     img.onerror = () => {
       failedArt.add(effectId);
-      const listeners = loadListeners.get(effectId);
+      const listeners = loadListeners.get(textureKey);
       if (listeners) {
-        for (const cb of listeners) cb(texFallback(effectId));
+        for (const cb of listeners) cb(texFallback(effectId, cost));
         listeners.clear();
       }
     };
@@ -447,12 +448,13 @@ function requestArt(effectId: string): (cb: (tex: THREE.Texture) => void) => voi
 
 const texCache = new Map<string, THREE.Texture>();
 
-function texFallback(effectId: string): THREE.Texture {
+function texFallback(effectId: string, cost = getEffect(effectId)?.cost ?? 0): THREE.Texture {
   const effect = getEffect(effectId);
-  let t = texCache.get(effectId);
+  const textureKey = `${effectId}:${cost}`;
+  let t = texCache.get(textureKey);
   if (t) return t;
-  t = fallbackTexture(effectId, effect?.name ?? effectId, effect?.cost ?? 0);
-  texCache.set(effectId, t);
+  t = fallbackTexture(effectId, effect?.name ?? effectId, cost);
+  texCache.set(textureKey, t);
   return t;
 }
 
@@ -460,13 +462,16 @@ function texFallback(effectId: string): THREE.Texture {
 export function createHearthCardMesh(card: HearthCard): THREE.Mesh {
   const effect = getEffect(card.effectId);
   const name = effect?.name ?? card.effectId;
-  const cost = effect?.cost ?? 0;
+  const cost = hearthCardCost(card);
   const front = new THREE.MeshStandardMaterial({
-    map: texFallback(card.effectId),
+    map: texFallback(card.effectId, cost),
     roughness: 0.38,
     metalness: 0.05,
   });
-  requestArt(card.effectId)((tex) => {
+  requestArt(
+    card.effectId,
+    cost
+  )((tex) => {
     front.map = tex;
     front.needsUpdate = true;
   });
@@ -498,13 +503,14 @@ export function hearthCardDataURL(
   canvas.height = 704;
   const ctx = canvas.getContext('2d')!;
   const effect = getEffect(card.effectId);
+  const cost = hearthCardCost(card);
   drawHearthCardFace(
     ctx,
     512,
     704,
     card.effectId,
     effect?.name ?? card.effectId,
-    effect?.cost ?? 0,
+    cost,
     effect?.description ?? '按牌面效果结算。',
     minionStats
   );
@@ -519,7 +525,7 @@ export function hearthCardDataURL(
         704,
         card.effectId,
         effect?.name ?? card.effectId,
-        effect?.cost ?? 0,
+        cost,
         effect?.description ?? '按牌面效果结算。',
         minionStats
       );

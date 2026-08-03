@@ -68,7 +68,7 @@ export interface PlayerState {
   heroId: HeroId;
   /** 本回合已经使用英雄技能的次数。 */
   heroPowerUses: number;
-  /** 魔法护盾层数（抵消罚抽，回合结束清零） */
+  /** 魔法护盾层数（持久保留；每次抵消罚抽消耗 1 层） */
   shield: number;
   /** 已报 UNO */
   unoAlert: boolean;
@@ -79,11 +79,17 @@ export interface PlayerState {
 export interface HearthCard {
   id: string;
   effectId: string;
+  /** 单张卡牌实例的费用覆盖值；回声生成的复制牌固定为 0。 */
+  costOverride?: number;
 }
 
 /** 游戏状态（可 JSON 序列化 + 确定性） */
 export interface GameState {
   players: PlayerState[];
+  /** 全场最近打出的炉石牌；回声读取旧值后，本次出牌再覆盖它。 */
+  lastHearthPlayed: HearthCard | null;
+  /** 回声复制牌的确定性唯一编号。 */
+  hearthCopySerial: number;
   /** 公共 Uno 牌堆（顶在末尾） */
   unoDraw: UnoCard[];
   /** 弃牌堆（顶在末尾） */
@@ -104,10 +110,8 @@ export interface GameState {
   topCard: UnoCard;
   /** 当前颜色（Wild 选色后） */
   chosenColor: UnoCard['color'];
-  /** 本回合 Uno 行动余量（1 + MassSkip 奖励） */
+  /** 本回合 Uno 行动余量 */
   unoActionsLeft: number;
-  /** 本回合是否已触发过 MassSkip 额外行动 */
-  massSkipUsed: boolean;
   /** 本回合是否打出过 UNO；结束回合时决定是否补抽 UNO。 */
   unoPlayedThisTurn: boolean;
   /** 单调递增的回合编号，供界面去重回合提示。 */

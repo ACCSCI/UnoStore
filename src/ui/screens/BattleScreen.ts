@@ -151,6 +151,7 @@ export class BattleScreen extends Screen {
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
+      onInvalidAttackTarget: () => this.setStatus('必须先攻击嘲讽随从'),
       onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
       onCancelGameplaySelection: () => this.cancelTargeting(),
     });
@@ -445,7 +446,7 @@ export class BattleScreen extends Screen {
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.6);
         await this.view.playCardAnimation(event.player, this.playerCount, {
           kind: 'hearth',
-          card: { id: event.cardId, effectId: event.effectId },
+          card: { id: event.cardId, effectId: event.effectId, costOverride: event.cost },
         });
         if (effect?.kind !== 'minion') {
           const minionOwner = event.targetMinionId
@@ -969,7 +970,7 @@ export class BattleScreen extends Screen {
         minionHasTaunt(minion)
       );
       if (hasTaunt) {
-        this.setStatus('必须先攻击具有嘲讽的随从');
+        this.setStatus('必须先攻击嘲讽随从');
         return;
       }
       this.attackWithSelected(undefined, player);
@@ -1814,8 +1815,10 @@ export class BattleScreen extends Screen {
     let takeCardId: string | null = null;
     let discardCardId: string | null = null;
     const optionButtons: HTMLButtonElement[] = [];
+    const cardWrappers = new Map<string, HTMLElement>();
     for (const card of cards) {
       const wrapper = this.el('div', 'hand-reveal-card');
+      cardWrappers.set(card.id, wrapper);
       const image = new Image();
       image.src = unoCardDataURL(card as UnoCard);
       image.alt = fmtCardFull(card);
@@ -1865,6 +1868,9 @@ export class BattleScreen extends Screen {
     confirm.value = 'confirmed';
     form.appendChild(confirm);
     const updateChoices = (): void => {
+      for (const [cardId, wrapper] of cardWrappers) {
+        wrapper.classList.toggle('is-selected', cardId === takeCardId || cardId === discardCardId);
+      }
       for (const button of optionButtons) {
         const selected =
           (button.dataset.choice === 'take' && button.dataset.cardId === takeCardId) ||

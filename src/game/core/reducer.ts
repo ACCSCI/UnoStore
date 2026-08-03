@@ -3,6 +3,7 @@ import { addPenalty, discardRandomUno, discardUnoWhere } from '../hearth/effects
 import {
   type EffectCtx,
   getEffect,
+  hearthCardCost,
   minionHasTaunt,
   requiredOwnUnoCardCount,
 } from '../hearth/effects/registry';
@@ -105,6 +106,8 @@ export function createGame(
   while (!/^\d$/.test(top.value) && unoDeck.length > 0) top = unoDeck.pop()!;
   const state: GameState = {
     players,
+    lastHearthPlayed: null,
+    hearthCopySerial: 0,
     unoDraw: unoDeck,
     unoDiscard: [top],
     mercyPile: [],
@@ -117,7 +120,6 @@ export function createGame(
     topCard: top,
     chosenColor: top.color,
     unoActionsLeft: UNO_ACTIONS_PER_TURN,
-    massSkipUsed: false,
     unoPlayedThisTurn: false,
     turnSerial: 0,
     oraclePending: null,
@@ -394,17 +396,13 @@ function applyUnoAction(
       break;
     }
     case 'massSkip': {
-      // Nomercy：所有其他活跃玩家各跳过 1 次（含 2 人局 —— 对手被跳过，自己连续行动）。
-      // 跳过 ≥1 人时额外获得 1 次 Uno 行动（2 人局跳过 1 人同样给：自己连续两回合）。
+      // Nomercy：所有其他活跃玩家各跳过 1 次；回合结束后自然绕回出牌者。
+      // 不在当前回合额外增加 UNO 行动，否则会与“跳过全员后绕回”重复生效。
       state.chosenColor = color ?? state.topCard.color;
       const others = state.players
         .map((pl, i) => (pl.active && i !== player ? i : -1))
         .filter((i) => i >= 0);
       state.skipQueue.push(...others);
-      if (!state.massSkipUsed && others.length >= 1) {
-        state.unoActionsLeft += 1;
-        state.massSkipUsed = true;
-      }
       state.log.push(`玩家 ${player} 打出全员跳过`);
       break;
     }
@@ -455,7 +453,7 @@ export function hearthPlayError(state: GameState, player: number, cardIdx: numbe
   if (!card) return '无效的牌';
   const effect = getEffect(card.effectId);
   if (!effect) return '未知的效果';
-  if (p.free < effect.cost) return '水晶不足';
+  if (p.free < hearthCardCost(card)) return '水晶不足';
   if (effect.kind === 'minion' && p.board.length >= MAX_MINIONS_PER_PLAYER) {
     return `战场已满（最多 ${MAX_MINIONS_PER_PLAYER} 个随从）`;
   }
@@ -522,6 +520,7 @@ function playHearthAction(
   const p = state.players[action.player]!;
   const card = p.hearthHand[action.cardIdx]!;
   const effect = getEffect(card.effectId)!;
+  const cost = hearthCardCost(card);
   const targeting =
     effect.targeting ??
     (effect.requiresTarget ? { type: 'enemyPlayer' as const, count: 1 as const } : null);
@@ -599,7 +598,7 @@ function playHearthAction(
   ) {
     return { ok: false, error: '无效的随从放置位置' };
   }
-  p.free -= effect.cost;
+  p.free -= cost;
   p.hearthHand.splice(action.cardIdx, 1);
   const events: GameEvent[] = [];
   if (effect.kind === 'minion') {
@@ -659,18 +658,19 @@ function playHearthAction(
     events.push({ type: 'gameOver', winner: action.player, reason: 'unoEmpty' });
   }
   applyMercyRule(state, events);
+  state.lastHearthPlayed = { ...card };
   const playedEvent: GameEvent = {
     type: 'hearthPlayed',
     player: action.player,
     cardId: card.id,
     effectId: card.effectId,
-    cost: effect.cost,
+    cost,
     ...(action.targets ? { targets: action.targets } : {}),
     ...(action.targetMinionId ? { targetMinionId: action.targetMinionId } : {}),
   };
   events.unshift(playedEvent);
   state.pendingEvents.push(...events);
-  state.log.push(`玩家 ${action.player} 打出炉石牌 ${effect.name}（${effect.cost} 水晶）`);
+  state.log.push(`玩家 ${action.player} 打出炉石牌 ${effect.name}（${cost} 水晶）`);
   return { ok: true, events };
 }
 
@@ -702,7 +702,7 @@ function attackMinionAction(
   if (action.targetMinionId && !defender) return { ok: false, error: '找不到目标随从' };
   const hasTaunt = targetPlayer.board.some((minion) => minionHasTaunt(minion));
   if (hasTaunt && !(defender && minionHasTaunt(defender))) {
-    return { ok: false, error: '必须先攻击具有嘲讽的随从' };
+    return { ok: false, error: '必须先攻击嘲讽随从' };
   }
   const attackerEffect = getEffect(attacker.effectId);
   if (attackerEffect?.discardsNumbersBelowHealthOnAttack) {
@@ -1020,7 +1020,6 @@ function endTurnAction(
   }
   p.free += p.frozen; // 冻结叠加解冻
   p.frozen = 0;
-  p.shield = 0;
   const event: GameEvent = { type: 'endTurn', player: action.player };
   events.push(event);
   state.pendingEvents.push(...events);
@@ -1082,7 +1081,6 @@ function startTurn(
     drawHearth: null,
   });
   state.unoActionsLeft = (boss?.extraUnoActions ?? 0) + UNO_ACTIONS_PER_TURN;
-  state.massSkipUsed = false;
   state.phase = 'playUno';
   state.log.push(`玩家 ${player} 回合开始`);
   state.pendingEvents.push(...events);

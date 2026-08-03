@@ -65,6 +65,7 @@ export class GameView {
   private onEndClick: () => void = () => {};
   private onSelectAttacker: (id: string) => void = () => {};
   private onAttackMinion: (id: string) => void = () => {};
+  private onInvalidAttackTarget: () => void = () => {};
   private onServerClick: (seat: number, position: THREE.Vector3) => void = () => {};
   private onCancelGameplaySelection: () => boolean = () => false;
 
@@ -103,6 +104,7 @@ export class GameView {
     onEndClick?: () => void;
     onSelectAttacker?: (id: string) => void;
     onAttackMinion?: (id: string) => void;
+    onInvalidAttackTarget?: () => void;
     onServerClick?: (seat: number, position: THREE.Vector3) => void;
     onCancelGameplaySelection?: () => boolean;
   }): void {
@@ -110,6 +112,7 @@ export class GameView {
     if (cb.onEndClick) this.onEndClick = cb.onEndClick;
     if (cb.onSelectAttacker) this.onSelectAttacker = cb.onSelectAttacker;
     if (cb.onAttackMinion) this.onAttackMinion = cb.onAttackMinion;
+    if (cb.onInvalidAttackTarget) this.onInvalidAttackTarget = cb.onInvalidAttackTarget;
     if (cb.onServerClick) this.onServerClick = cb.onServerClick;
     if (cb.onCancelGameplaySelection) {
       this.onCancelGameplaySelection = cb.onCancelGameplaySelection;
@@ -187,6 +190,7 @@ export class GameView {
       {
         onSelectAttacker: (id) => this.onSelectAttacker(id),
         onAttackMinion: (id) => this.onAttackMinion(id),
+        onInvalidAttackTarget: () => this.onInvalidAttackTarget(),
         onHoverMinion: (minion) => this.detailPanel?.showMinion(minion),
         onPreviewMinion: (minion) => this.detailPanel?.pinMinion(minion),
       },
@@ -381,7 +385,7 @@ export class GameView {
     });
   }
 
-  /** 随从头像真实前冲；红色立体曲线仅负责清晰标出攻击方向。 */
+  /** 随从头像与红色航线统一使用实际 DOM 攻击者和目标，避免座位中心错位。 */
   playAttackAnimation(
     player: number,
     target: number,
@@ -393,40 +397,8 @@ export class GameView {
   ): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(100);
-    const from = this.seatActionPosition(player, playerCount);
-    const to = this.seatActionPosition(target, playerCount);
-    // 攻击轨迹固定抬升并经过桌面椭圆中心，避开围桌纸偶与腰部信息卡。
-    const overTableCenter = tableCenterWorldPosition(2.65);
-    const curve = new THREE.CatmullRomCurve3([from, overTableCenter, to], false, 'centripetal');
-    const trailMaterial = new THREE.MeshStandardMaterial({
-      color: 0xff2d2d,
-      emissive: 0xb40000,
-      emissiveIntensity: 2.4,
-      transparent: true,
-      opacity: 0,
-      roughness: 0.32,
-    });
-    const trail = new THREE.Mesh(new THREE.TubeGeometry(curve, 40, 0.045, 8, false), trailMaterial);
-    const group = new THREE.Group();
-    group.add(trail);
-    this.scene.add(group);
-    const start = performance.now();
-    const duration = 760;
-    const curveAnimation = new Promise<void>((resolve) => {
-      const step = (): void => {
-        const t = Math.min((performance.now() - start) / duration, 1);
-        const fade = t < 0.82 ? Math.min(t * 5, 0.82) : Math.max(0, (1 - t) * 4.5);
-        trailMaterial.opacity = fade;
-        if (t < 1) requestAnimationFrame(step);
-        else {
-          this.scene.remove(group);
-          trail.geometry.dispose();
-          trailMaterial.dispose();
-          resolve();
-        }
-      };
-      requestAnimationFrame(step);
-    });
+    void player;
+    void playerCount;
     const combatAnimation = attackerId
       ? this.minionBoard?.playCombatAnimation(
           attackerId,
@@ -436,7 +408,7 @@ export class GameView {
           counterDamage
         )
       : undefined;
-    return Promise.all([curveAnimation, combatAnimation]).then(() => undefined);
+    return combatAnimation ?? this.animationPause(100);
   }
 
   /** 法术：施法者座位升起奥术光球并射向目标/牌桌中心。 */

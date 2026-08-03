@@ -13,12 +13,21 @@ const COLOR_NAMES: Record<string, string> = {
 };
 
 /** 对局记录条目：文本 + 可选的悬停牌面预览。 */
+type ActivityHover = (
+  | { kind: 'uno'; card: UnoCard }
+  | { kind: 'hearth'; effectId: string; costOverride?: number }
+) & {
+  label: string;
+  labelStart: number;
+};
+
 export interface ActivityEntry {
   text: string;
-  hover?: { kind: 'uno'; card: UnoCard } | { kind: 'hearth'; effectId: string };
+  hover?: ActivityHover;
 }
 
 let activeActivityTooltip: HTMLElement | null = null;
+let activityTooltipSequence = 0;
 
 /** 记录重绘或离开对局时移除挂在 document.body 上的牌面预览。 */
 export function clearActivityHover(): void {
@@ -36,48 +45,77 @@ export function formatActivity(
       return { text: `▶ ${playerLabel(event.player)}的回合开始` };
     case 'unoPlayed': {
       const card = event.card as UnoCard;
+      const label = unoCardTitle(card);
+      const prefix = `${playerLabel(event.player)}打出 `;
       return {
-        text: `${playerLabel(event.player)}打出 ${unoCardTitle(card)}`,
-        hover: { kind: 'uno', card },
+        text: `${prefix}${label}`,
+        hover: { kind: 'uno', card, label, labelStart: prefix.length },
       };
     }
-    case 'hearthPlayed':
+    case 'hearthPlayed': {
+      const label = getEffect(event.effectId)?.name ?? event.effectId;
+      const prefix = `${playerLabel(event.player)}施放 `;
       return {
-        text: `${playerLabel(event.player)}施放 ${getEffect(event.effectId)?.name ?? event.effectId}`,
-        hover: { kind: 'hearth', effectId: event.effectId },
+        text: `${prefix}${label}`,
+        hover: {
+          kind: 'hearth',
+          effectId: event.effectId,
+          costOverride: event.cost,
+          label,
+          labelStart: prefix.length,
+        },
       };
+    }
     case 'hearthDrawn':
       return { text: `${playerLabel(event.player)}抽取 ${event.cardIds.length} 张炉石牌` };
     case 'mixedCardsDrawn':
       return {
         text: `${playerLabel(event.player)}混合抽牌：UNO ${event.unoCardIds.length} / 炉石 ${event.hearthCardIds.length}`,
       };
-    case 'minionSummoned':
+    case 'minionSummoned': {
+      const label = getEffect(event.effectId)?.name ?? '随从';
+      const prefix = `${playerLabel(event.player)}召唤 `;
       return {
-        text: `${playerLabel(event.player)}召唤 ${getEffect(event.effectId)?.name ?? '随从'} ${event.attack}/${event.health}`,
-        hover: { kind: 'hearth', effectId: event.effectId },
+        text: `${prefix}${label} ${event.attack}/${event.health}`,
+        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: prefix.length },
       };
-    case 'minionAttack':
+    }
+    case 'minionAttack': {
+      const label = getEffect(event.attackerEffectId)?.name ?? '随从';
+      const prefix = `${playerLabel(event.player)}的`;
       return {
-        text: `${playerLabel(event.player)}的${getEffect(event.attackerEffectId)?.name ?? '随从'}攻击${event.targetMinionId ? '随从' : playerLabel(event.targetPlayer)}${event.discardCount ? `，改为弃 ${event.discardCount} 张` : event.drawCount ? `，罚抽 ${event.drawCount} 张` : ''}`,
+        text: `${prefix}${label}攻击${event.targetMinionId ? '随从' : playerLabel(event.targetPlayer)}${event.discardCount ? `，改为弃 ${event.discardCount} 张` : event.drawCount ? `，罚抽 ${event.drawCount} 张` : ''}`,
+        hover: {
+          kind: 'hearth',
+          effectId: event.attackerEffectId,
+          label,
+          labelStart: prefix.length,
+        },
       };
+    }
     case 'minionDestroyed':
       return { text: `${playerLabel(event.player)}的随从被消灭` };
-    case 'battlecry':
+    case 'battlecry': {
+      const label = getEffect(event.effectId)?.name ?? '随从';
       return {
-        text: `${getEffect(event.effectId)?.name ?? '随从'}触发战吼`,
-        hover: { kind: 'hearth', effectId: event.effectId },
+        text: `${label}触发战吼`,
+        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
       };
-    case 'deathrattle':
+    }
+    case 'deathrattle': {
+      const label = getEffect(event.effectId)?.name ?? '随从';
       return {
-        text: `${getEffect(event.effectId)?.name ?? '随从'}触发亡语`,
-        hover: { kind: 'hearth', effectId: event.effectId },
+        text: `${label}触发亡语`,
+        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
       };
-    case 'minionTriggered':
+    }
+    case 'minionTriggered': {
+      const label = getEffect(event.effectId)?.name ?? '随从';
       return {
-        text: `${getEffect(event.effectId)?.name ?? '随从'}触发${event.trigger === 'anyTurnStart' ? '任意玩家回合开始' : `其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}`}效果`,
-        hover: { kind: 'hearth', effectId: event.effectId },
+        text: `${label}触发${event.trigger === 'anyTurnStart' ? '任意玩家回合开始' : `其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}`}效果`,
+        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
       };
+    }
     case 'minionTransformed':
       return {
         text: `${playerLabel(event.player)}将${playerLabel(event.targetPlayer)}的随从变成绵羊`,
@@ -112,10 +150,15 @@ export function formatActivity(
       return {
         text: `${playerLabel(event.player)}选择${COLOR_NAMES[event.color] ?? event.color}，由${playerLabel(event.drawer)}抽牌`,
       };
-    case 'rouletteCardDrawn':
+    case 'rouletteCardDrawn': {
+      const card = event.card as UnoCard;
+      const label = unoCardTitle(card);
+      const prefix = `${playerLabel(event.player)}公开抽到 `;
       return {
-        text: `${playerLabel(event.player)}公开抽到 ${COLOR_NAMES[event.card.color ?? ''] ?? '四色'} ${event.card.value}`,
+        text: `${prefix}${label}`,
+        hover: { kind: 'uno', card, label, labelStart: prefix.length },
       };
+    }
     case 'colorRoulette':
       return {
         text: `${playerLabel(event.player)}的颜色轮盘结束，共抽 ${event.count} 张`,
@@ -196,6 +239,20 @@ export function attachActivityHover(
   item: HTMLElement,
   hover: NonNullable<ActivityEntry['hover']>
 ): void {
+  const text = item.textContent ?? '';
+  const labelStart = hover.labelStart;
+  if (text.slice(labelStart, labelStart + hover.label.length) !== hover.label) return;
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'activity-card-reference';
+  trigger.textContent = hover.label;
+  trigger.setAttribute('aria-label', `查看卡牌详情：${hover.label}`);
+  item.replaceChildren(
+    document.createTextNode(text.slice(0, labelStart)),
+    trigger,
+    document.createTextNode(text.slice(labelStart + hover.label.length))
+  );
+
   let tooltip: HTMLElement | null = null;
   const show = (): void => {
     if (tooltip || !container.isConnected) return;
@@ -203,32 +260,57 @@ export function attachActivityHover(
     tooltip = document.createElement('div');
     activeActivityTooltip = tooltip;
     tooltip.className = 'activity-hover-card';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.id = `activity-card-detail-${++activityTooltipSequence}`;
+    trigger.setAttribute('aria-describedby', tooltip.id);
+    const loading = document.createElement('span');
+    loading.className = 'activity-hover-loading';
+    loading.textContent = '加载卡牌详情…';
     const img = new Image();
+    img.hidden = true;
+    img.addEventListener('load', () => {
+      if (!tooltip) return;
+      img.hidden = false;
+      loading.remove();
+    });
     if (hover.kind === 'uno') {
       img.src = unoCardDataURL(hover.card);
       img.alt = unoCardTitle(hover.card);
     } else {
       img.alt = getEffect(hover.effectId)?.name ?? '';
       const owner = tooltip;
-      void hearthCardDataURL({ id: `activity-${hover.effectId}`, effectId: hover.effectId }).then(
+      void hearthCardDataURL({
+        id: `activity-${hover.effectId}`,
+        effectId: hover.effectId,
+        costOverride: hover.costOverride,
+      }).then(
         (src) => {
           if (tooltip === owner && owner.isConnected) img.src = src;
+        },
+        () => {
+          if (tooltip === owner && owner.isConnected) loading.textContent = '卡牌详情加载失败';
         }
       );
     }
-    tooltip.append(img);
+    tooltip.append(loading, img);
     document.body.append(tooltip);
-    const rect = item.getBoundingClientRect();
-    tooltip.style.left = `${Math.min(rect.right + 10, window.innerWidth - 150)}px`;
-    tooltip.style.top = `${Math.max(8, rect.top)}px`;
+    const containerRect = container.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const tooltipWidth = tooltipRect.width;
+    const tooltipHeight = tooltipRect.height;
+    const rightSide = containerRect.right + 10;
+    tooltip.style.left = `${rightSide + tooltipWidth <= window.innerWidth - 8 ? rightSide : Math.max(8, containerRect.left - tooltipWidth - 10)}px`;
+    const fixedTop = containerRect.top - tooltipHeight / 5;
+    tooltip.style.top = `${Math.max(8, Math.min(fixedTop, window.innerHeight - tooltipHeight - 8))}px`;
   };
   const hide = (): void => {
     tooltip?.remove();
     if (activeActivityTooltip === tooltip) activeActivityTooltip = null;
     tooltip = null;
+    trigger.removeAttribute('aria-describedby');
   };
-  item.addEventListener('pointerenter', show);
-  item.addEventListener('pointerleave', hide);
-  item.addEventListener('focus', show);
-  item.addEventListener('blur', hide);
+  trigger.addEventListener('pointerenter', show);
+  trigger.addEventListener('pointerleave', hide);
+  trigger.addEventListener('focus', show);
+  trigger.addEventListener('blur', hide);
 }
