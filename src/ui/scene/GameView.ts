@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
+import { getEffect } from '../../game/hearth/effects/registry';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
 import type { CardVisual } from '../effects/CardEffects';
@@ -31,10 +32,9 @@ export class GameView {
   private minionBoard: MinionBoardRenderer | null = null;
 
   // 回调（由 BattleScreen 注入）
-  private onCardClick: (id: string, isHearth: boolean) => void = () => {};
+  private onCardClick: (id: string, isHearth: boolean, position?: number) => void = () => {};
   private onEndClick: () => void = () => {};
   private onSelectAttacker: (id: string) => void = () => {};
-  private onPlaceAt: (index: number) => void = () => {};
   private onAttackMinion: (id: string) => void = () => {};
 
   constructor(container: HTMLElement) {
@@ -61,17 +61,15 @@ export class GameView {
 
   /** 注入操作回调（BattleScreen 调用） */
   bindCallbacks(cb: {
-    onCardClick?: (id: string, isHearth: boolean) => void;
+    onCardClick?: (id: string, isHearth: boolean, position?: number) => void;
     onEndClick?: () => void;
     onSelectAttacker?: (id: string) => void;
     onAttackMinion?: (id: string) => void;
-    onPlaceAt?: (index: number) => void;
   }): void {
     if (cb.onCardClick) this.onCardClick = cb.onCardClick;
     if (cb.onEndClick) this.onEndClick = cb.onEndClick;
     if (cb.onSelectAttacker) this.onSelectAttacker = cb.onSelectAttacker;
     if (cb.onAttackMinion) this.onAttackMinion = cb.onAttackMinion;
-    if (cb.onPlaceAt) this.onPlaceAt = cb.onPlaceAt;
   }
 
   start(): void {
@@ -105,14 +103,24 @@ export class GameView {
       this.scene,
       this.renderer,
       this.camera,
-      (entry) => {
-        this.onCardClick(entry.id, entry.isHearth);
+      (entry, clientX) => {
+        const effect = entry.hearth ? getEffect(entry.hearth.effectId) : null;
+        const position =
+          effect?.kind === 'minion' && clientX !== undefined
+            ? this.minionBoard?.placementIndexAt(clientX)
+            : undefined;
+        this.onCardClick(entry.id, entry.isHearth, position);
       },
       (entry) => this.detailPanel?.show(entry),
       (raycaster) => this.tableCenter?.hitTest(raycaster) ?? null,
       (entry) => {
         if (entry) this.detailPanel?.pin(entry);
         else this.detailPanel?.clearPinned();
+      },
+      (entry, clientX, _clientY, overTable) => {
+        const effectId = entry?.hearth?.effectId;
+        const isMinion = effectId && getEffect(effectId)?.kind === 'minion';
+        this.minionBoard?.previewPlacement(isMinion && overTable ? effectId : null, clientX ?? 0);
       }
     );
     this.detailPanel = new CardDetailPanel(container);
@@ -124,7 +132,6 @@ export class GameView {
       onAttackMinion: (id) => this.onAttackMinion(id),
       onHoverMinion: (minion) => this.detailPanel?.showMinion(minion),
       onPreviewMinion: (minion) => this.detailPanel?.pinMinion(minion),
-      onPlaceAt: (index) => this.onPlaceAt(index),
     });
     this.actionBar.addButton('结束回合', '结束回合并结算补牌', () => this.onEndClick(), 'primary');
   }
@@ -177,8 +184,7 @@ export class GameView {
     selectedAttackerId: string | null,
     canAct: boolean,
     playerCount: number,
-    spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null,
-    placementMode = false
+    spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null
   ): void {
     this.minionBoard?.sync(
       playerBoard,
@@ -186,8 +192,7 @@ export class GameView {
       selectedAttackerId,
       canAct,
       playerCount,
-      spellTargetSide,
-      placementMode
+      spellTargetSide
     );
   }
 

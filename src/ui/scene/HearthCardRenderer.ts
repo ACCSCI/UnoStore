@@ -60,6 +60,35 @@ const EFFECT_STATS: Record<string, { value: string; label: string }> = {
   equalityOfAll: { value: '1/1', label: '全场' },
 };
 
+type ArtCrop = {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+};
+
+const ART_FOCAL_POINTS: Record<string, { x: number; y: number }> = {
+  penaltyBulwark: { x: 0.5, y: 0.34 },
+  penitentChampion: { x: 0.5, y: 0.34 },
+};
+
+/** 计算等价于 object-fit: cover 的源图裁切区域，并让视觉焦点尽量留在画面内。 */
+export function hearthArtCoverCrop(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+  focusX = 0.5,
+  focusY = 0.38
+): ArtCrop {
+  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const sw = targetWidth / scale;
+  const sh = targetHeight / scale;
+  const sx = Math.max(0, Math.min(sourceWidth - sw, focusX * sourceWidth - sw / 2));
+  const sy = Math.max(0, Math.min(sourceHeight - sh, focusY * sourceHeight - sh / 2));
+  return { sx, sy, sw, sh };
+}
+
 function shade(hex: string, amt: number): string {
   const n = parseInt(hex.slice(1), 16);
   const r = Math.min(255, Math.max(0, ((n >> 16) & 0xff) + amt));
@@ -268,7 +297,8 @@ export function drawHearthArtInWindow(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  img: HTMLImageElement
+  img: HTMLImageElement,
+  effectId?: string
 ): void {
   ctx.save();
   ctx.beginPath();
@@ -276,11 +306,10 @@ export function drawHearthArtInWindow(
   ctx.clip();
   const aw = w * 0.68;
   const ah = h * 0.45;
-  // contain 适配：完整露出立绘（头与主体），避免 cover 居中裁剪切掉头部
-  const scale = Math.min(aw / img.width, ah / img.height);
-  const dw = img.width * scale;
-  const dh = img.height * scale;
-  ctx.drawImage(img, w * 0.16 + (aw - dw) / 2, h * 0.085 + (ah - dh) / 2, dw, dh);
+  const focus = effectId ? ART_FOCAL_POINTS[effectId] : undefined;
+  const crop = hearthArtCoverCrop(img.width, img.height, aw, ah, focus?.x, focus?.y);
+  // cover 裁切会完整铺满椭圆窗；偏上的视觉焦点避免竖版人物被切掉头部。
+  ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, w * 0.16, h * 0.085, aw, ah);
   ctx.restore();
   ctx.beginPath();
   ctx.ellipse(w / 2, h * 0.31, w * 0.34, h * 0.225, 0, 0, Math.PI * 2);
@@ -341,7 +370,7 @@ function composeCardFace(
   const description = getEffect(effectId)?.description ?? '按牌面效果结算。';
   drawHearthCardFace(ctx, 256, 352, effectId, name, cost, description);
   if (art) {
-    drawHearthArtInWindow(ctx, 256, 352, art);
+    drawHearthArtInWindow(ctx, 256, 352, art, effectId);
     drawHearthCardOverlay(ctx, 256, 352, effectId, name, cost, description);
   }
   const tex = new THREE.CanvasTexture(canvas);
@@ -470,7 +499,7 @@ export function hearthCardDataURL(
     // 插画异步加载完成后画入并导出（避免空窗快照）
     const img = new Image();
     img.onload = () => {
-      drawHearthArtInWindow(ctx, 512, 704, img);
+      drawHearthArtInWindow(ctx, 512, 704, img, card.effectId);
       drawHearthCardOverlay(
         ctx,
         512,

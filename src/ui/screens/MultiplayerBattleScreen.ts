@@ -4,7 +4,13 @@ import { NormalHeuristic } from '../../game/ai/strategies';
 import type { GameEvent } from '../../game/core/events';
 import { heroPowerCost, heroPowerError, playerCapabilities } from '../../game/core/reducer';
 import { Rng } from '../../game/core/rng';
-import type { GameAction, GameState, HearthCard, MinionState } from '../../game/core/state';
+import {
+  type GameAction,
+  type GameState,
+  type HearthCard,
+  MAX_MINIONS_PER_PLAYER,
+  type MinionState,
+} from '../../game/core/state';
 import {
   formatTurnClock,
   remainingTurnSeconds,
@@ -106,6 +112,7 @@ interface HearthSelection {
   effectId: string;
   selectedCardIds: Set<string>;
   selectedPlayerIds: Set<number>;
+  position?: number;
 }
 
 /** 房主权威多人战；规则只在房主结算，所有客户端本地重放同一公开事件流。 */
@@ -171,11 +178,10 @@ export class MultiplayerBattleScreen extends Screen {
     this.root.append(canvasHost);
     this.view = new GameView(canvasHost);
     this.view.bindCallbacks({
-      onCardClick: (id, isHearth) => void this.onCardClicked(id, isHearth),
+      onCardClick: (id, isHearth, position) => void this.onCardClicked(id, isHearth, position),
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
-      onPlaceAt: (index) => this.placeMinion(index),
     });
     this.view.start();
     this.view.setupScene(this.root);
@@ -738,7 +744,7 @@ export class MultiplayerBattleScreen extends Screen {
             owner: this.visualSeat(index, snapshot),
           }))
     );
-    // 罚抽链中随从不能攻击，不高亮；选中随从牌时进入放置模式
+    // 罚抽链中随从不能攻击，不高亮。
     const canAct =
       snapshot.turn === snapshot.viewer &&
       snapshot.phase !== 'gameOver' &&
@@ -746,17 +752,13 @@ export class MultiplayerBattleScreen extends Screen {
       !this.actionAnimating &&
       !snapshot.mustResolveRoulette &&
       mine.pendingDraw <= 0;
-    const placementMode = Boolean(
-      this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'
-    );
     this.view?.syncMinions(
       mine.board,
       enemies,
       this.selectedAttackerId,
       canAct,
       snapshot.players.length,
-      targeting?.type === 'minion' ? targeting.side : null,
-      placementMode
+      targeting?.type === 'minion' ? targeting.side : null
     );
     const hasAnyAction =
       snapshot.playableIds.length > 0 ||
@@ -1109,7 +1111,7 @@ export class MultiplayerBattleScreen extends Screen {
     );
   }
 
-  private async onCardClicked(id: string, isHearth: boolean): Promise<void> {
+  private async onCardClicked(id: string, isHearth: boolean, position?: number): Promise<void> {
     const snapshot = this.snapshot;
     if (!snapshot || this.actionAnimating || snapshot.turn !== snapshot.viewer) return;
     if (this.heroUnoSelection) {
@@ -1139,7 +1141,6 @@ export class MultiplayerBattleScreen extends Screen {
       return;
     }
     if (isHearth) {
-      if (!snapshot.playableIds.includes(id)) return;
       if (this.hearthSelection?.cardId === id) {
         this.cancelTargeting();
         return;
@@ -1147,13 +1148,23 @@ export class MultiplayerBattleScreen extends Screen {
       const card = snapshot.mine.hearthHand.find((entry) => entry.id === id);
       const effect = card ? getEffect(card.effectId) : null;
       if (!(card && effect)) return;
+      if (!snapshot.playableIds.includes(id)) {
+        this.setStatus(
+          effect.kind === 'minion' &&
+            snapshot.players[snapshot.viewer]!.board.length >= MAX_MINIONS_PER_PLAYER
+            ? `✗ 战场已满（最多 ${MAX_MINIONS_PER_PLAYER} 个随从）`
+            : `✗ 当前无法打出 ${effect.name}`,
+          true
+        );
+        return;
+      }
       const targeting = this.effectTargeting(effect);
       if (targeting) {
         if (
           targeting.type === 'ownUnoCards' &&
           requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length) === 0
         ) {
-          this.sendAction({ type: 'playHearth', cardId: id });
+          this.sendAction({ type: 'playHearth', cardId: id, position });
           return;
         }
         this.selectedAttackerId = null;
@@ -1164,31 +1175,17 @@ export class MultiplayerBattleScreen extends Screen {
           effectId: card.effectId,
           selectedCardIds: new Set(),
           selectedPlayerIds: new Set(),
+          ...(effect.kind === 'minion' && position !== undefined ? { position } : {}),
         };
         this.renderSnapshot(snapshot);
         return;
       }
       if (effect.requiresColor) {
         const color = await pickColor(this.root, { title: `${effect.name}：选择颜色` });
-        if (color) this.sendAction({ type: 'playHearth', cardId: id, color });
+        if (color) this.sendAction({ type: 'playHearth', cardId: id, color, position });
         return;
       }
-      if (effect.kind === 'minion') {
-        // 随从牌：进入放置模式，点击战场上的 ＋ 槽位选择精确位置
-        this.selectedAttackerId = null;
-        this.heroTargetSelection = null;
-        this.unoTargetCardId = null;
-        this.hearthSelection = {
-          cardId: id,
-          effectId: card.effectId,
-          selectedCardIds: new Set(),
-          selectedPlayerIds: new Set(),
-        };
-        this.renderSnapshot(snapshot);
-        this.setStatus(`已选 ${effect.name}：点击战场上的 ＋ 槽位选择放置位置`);
-        return;
-      }
-      this.sendAction({ type: 'playHearth', cardId: id });
+      this.sendAction({ type: 'playHearth', cardId: id, position });
       return;
     }
     if (!snapshot.playableIds.includes(id)) return;
@@ -1247,6 +1244,7 @@ export class MultiplayerBattleScreen extends Screen {
           type: 'playHearth',
           cardId: this.hearthSelection.cardId,
           targetMinionId,
+          position: this.hearthSelection.position,
         });
         this.cancelTargeting(false);
       }
@@ -1312,6 +1310,7 @@ export class MultiplayerBattleScreen extends Screen {
       cardId: this.hearthSelection.cardId,
       targets: [player],
       cardIds: [...this.hearthSelection.selectedCardIds],
+      position: this.hearthSelection.position,
     });
     this.cancelTargeting(false);
   }
@@ -1385,6 +1384,7 @@ export class MultiplayerBattleScreen extends Screen {
               type: 'playHearth',
               cardId: this.hearthSelection!.cardId,
               unoCardIds: [...this.hearthSelection!.selectedCardIds],
+              position: this.hearthSelection!.position,
             });
             this.cancelTargeting(false);
           })
@@ -1411,6 +1411,7 @@ export class MultiplayerBattleScreen extends Screen {
             type: 'playHearth',
             cardId: this.hearthSelection!.cardId,
             targets: [...this.hearthSelection!.selectedPlayerIds],
+            position: this.hearthSelection!.position,
           });
           this.cancelTargeting(false);
         });
@@ -1427,14 +1428,6 @@ export class MultiplayerBattleScreen extends Screen {
       this.targetingHudEl.append(this.btn('取消', () => this.cancelTargeting()));
     }
     this.targetingHudEl.classList.add('visible');
-  }
-
-  /** 放置位置系统：点击槽位，以该索引放置当前选中的随从牌。 */
-  private placeMinion(index: number): void {
-    if (!(this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'))
-      return;
-    this.sendAction({ type: 'playHearth', cardId: this.hearthSelection.cardId, position: index });
-    this.cancelTargeting(false);
   }
 
   private cancelTargeting(announce = true): void {
