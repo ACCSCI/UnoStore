@@ -170,7 +170,7 @@ export type GameEvent =
       player: number;
       minionId: string;
       effectId: string;
-      trigger: 'turnStart' | 'turnEnd';
+      trigger: 'turnStart' | 'turnEnd' | 'anyTurnStart';
     }
   | {
       type: 'penaltyRedirected';

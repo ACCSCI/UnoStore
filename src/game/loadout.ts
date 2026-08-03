@@ -1,4 +1,9 @@
-import { getDeck, HEARTH_EXPANSION_CARD_IDS, PRESET_DECKS } from './hearth/decks';
+import {
+  getDeck,
+  HEARTH_EXPANSION_CARD_COPIES,
+  HEARTH_EXPANSION_CARD_IDS,
+  PRESET_DECKS,
+} from './hearth/decks';
 import { allEffects } from './hearth/effects/registry';
 import { DEFAULT_HERO_ID, HEROES, type HeroId } from './heroes';
 import './hearth/cards';
@@ -55,9 +60,10 @@ export function loadLoadoutProfile(): LoadoutProfile {
           .slice(0, MAX_CUSTOM_DECK_SIZE);
         if (id.startsWith('starter-')) {
           for (const effectId of HEARTH_EXPANSION_CARD_IDS) {
+            const desiredCopies = HEARTH_EXPANSION_CARD_COPIES[effectId] ?? 2;
             for (
               let copies = cardIds.filter((entry) => entry === effectId).length;
-              copies < 2;
+              copies < desiredCopies;
               copies++
             ) {
               if (cardIds.length < MAX_CUSTOM_DECK_SIZE) cardIds.push(effectId);

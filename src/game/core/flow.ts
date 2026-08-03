@@ -97,6 +97,8 @@ export function drawStackValue(card: UnoCard): 0 | 2 | 4 | 6 | 10 {
 /** 带罚抽链约束的统一 UNO 合法性判断，供规则、AI 与 UI 共用。 */
 export function canPlayUnoCard(state: GameState, player: number, card: UnoCard): boolean {
   if (state.players[player]?.roulettePending) return false;
+  const rouletteTransfer = state.players[player]?.rouletteTransfer ?? 0;
+  if (rouletteTransfer > 0) return drawStackValue(card) > 0;
   const pendingMin = state.players[player]?.pendingDrawMin ?? 0;
   if (pendingMin > 0) {
     return drawStackValue(card) >= pendingMin;

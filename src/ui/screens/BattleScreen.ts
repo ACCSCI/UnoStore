@@ -700,7 +700,7 @@ export class BattleScreen extends Screen {
       this.refreshUI();
       this.setStatus(
         this.unoTargetCardId
-          ? '数字 7：直接点击桌上发光的对手席位，交换双方全部 UNO 与炉石手牌'
+          ? '数字 7：直接点击桌上发光的对手席位，只交换双方 UNO 手牌'
           : '已取消数字 7 的换牌目标选择'
       );
     } else if (card.color === null && card.value !== 'wildColorRoulette') {
@@ -1416,15 +1416,19 @@ export class BattleScreen extends Screen {
       0,
       p.roulettePending
         ? '请先结算颜色轮盘'
-        : p.pendingDrawMin > 0
+        : p.rouletteTransfer > 0
           ? playableIdx.length > 0
-            ? `累计罚抽 ${p.pendingDraw} 张 · 可继续叠加`
-            : `无法叠加 · 结束回合罚抽 ${p.pendingDraw} 张`
-          : shouldPromptEnd
-            ? s.unoPlayedThisTurn
-              ? '收工了 · 结束后抽 1 张炉石'
-              : '收工了 · 结束后抽 1 张 UNO + 1 张炉石'
-            : '结束当前回合'
+            ? `轮盘已抽 ${p.rouletteTransfer} 张 · 可用加牌转移`
+            : `轮盘已抽 ${p.rouletteTransfer} 张 · 可继续行动或结束回合`
+          : p.pendingDrawMin > 0
+            ? playableIdx.length > 0
+              ? `累计罚抽 ${p.pendingDraw} 张 · 可继续叠加`
+              : `无法叠加 · 结束回合罚抽 ${p.pendingDraw} 张`
+            : shouldPromptEnd
+              ? s.unoPlayedThisTurn
+                ? '收工了 · 结束后抽 1 张炉石'
+                : '收工了 · 结束后抽 1 张 UNO + 1 张炉石'
+              : '结束当前回合'
     );
     this.view?.setActionAttention(0, shouldPromptEnd);
     if (!shouldPromptEnd && this.workDoneTimer !== null) {
@@ -1546,7 +1550,11 @@ export class BattleScreen extends Screen {
         );
       } else if (event.type === 'handSwap' && (event.player === 0 || event.targetPlayer === 0)) {
         const other = event.player === 0 ? event.targetPlayer : event.player;
-        this.showTurnNotice('手牌已交换', `你与 ${playerLabel(other)} 交换了全部手牌。`, 'swap');
+        this.showTurnNotice(
+          'UNO 手牌已交换',
+          `你与 ${playerLabel(other)} 只交换了 UNO 手牌。`,
+          'swap'
+        );
       } else if (event.type === 'handPass') {
         this.showTurnNotice(
           '全桌传牌',
@@ -1577,8 +1585,8 @@ export class BattleScreen extends Screen {
     if (this.unoTargetCardId) {
       const copy = this.el('span', 'targeting-copy');
       copy.append(
-        this.el('strong', undefined, '数字 7 · 全手牌交换'),
-        this.el('small', undefined, '直接点击桌上发光的对手席位；交换双方全部 UNO 与炉石手牌')
+        this.el('strong', undefined, '数字 7 · UNO 手牌交换'),
+        this.el('small', undefined, '直接点击桌上发光的对手席位；双方炉石牌保持不变')
       );
       this.targetingHudEl.append(copy, cancel);
       this.targetingHudEl.classList.add('visible');
@@ -1726,7 +1734,13 @@ export class BattleScreen extends Screen {
                 : `罚抽链正在传向你，最低需要 +${player.pendingDrawMin} 才能反击。`,
             kind: 'penalty',
           }
-        : null;
+        : player.rouletteTransfer > 0
+          ? {
+              title: `颜色轮盘已抽 ${player.rouletteTransfer} 张`,
+              detail: '本回合可打出任意加牌，把已抽数量连同加值转给下一位。',
+              kind: 'roulette',
+            }
+          : null;
     const notice = persistent ?? this.transientNotice;
     this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
     this.turnNoticeEl.innerHTML = notice

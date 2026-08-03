@@ -75,7 +75,7 @@ export function unoCardTitle(card: UnoCard): string {
 
 export function unoCardDescription(card: UnoCard): string {
   if (card.value === '0') return '冻结 0 水晶；所有玩家按当前方向传递手牌。';
-  if (card.value === '7') return '冻结 7 水晶；必须指定一名玩家交换手牌。';
+  if (card.value === '7') return '冻结 7 水晶；必须指定一名玩家交换 UNO 手牌。';
   if (/^\d+$/.test(card.value)) return `冻结 ${card.value} 颗水晶，下回合转为可用水晶。`;
   return ACTION_INFO[card.value]?.description ?? '按牌面规则结算。';
 }

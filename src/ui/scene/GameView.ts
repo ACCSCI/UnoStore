@@ -152,7 +152,8 @@ export class GameView {
     this.hand?.clearPreviewSelection();
     this.hand?.setPlayable(new Set());
     this.hand?.setSelected(new Set());
-    this.detailPanel?.clearPinned();
+    // 行动演出会暂时清空手牌交互，但当前 hover/固定详情仍然有效；保留它，
+    // 等真正的 pointerleave 或下一次状态同步再更新。
   }
 
   /** 同步桌面中央（牌堆 + 弃牌堆） */
@@ -186,6 +187,7 @@ export class GameView {
     playerCount: number,
     spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null
   ): void {
+    this.detailPanel?.setSuppressed(Boolean(selectedAttackerId) || Boolean(spellTargetSide));
     this.minionBoard?.sync(
       playerBoard,
       enemyBoard,

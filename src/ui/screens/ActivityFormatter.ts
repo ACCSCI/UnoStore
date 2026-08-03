@@ -2,8 +2,8 @@ import type { GameEvent } from '../../game/core/events';
 import { getEffect } from '../../game/hearth/effects/registry';
 import { getHero } from '../../game/heroes';
 import type { UnoCard } from '../../game/uno/types';
-import { assetUrl } from '../assets/url';
 import { unoCardDataURL, unoCardTitle } from '../scene/CardRenderer';
+import { hearthCardDataURL } from '../scene/HearthCardRenderer';
 
 const COLOR_NAMES: Record<string, string> = {
   red: '红色',
@@ -75,7 +75,7 @@ export function formatActivity(
       };
     case 'minionTriggered':
       return {
-        text: `${getEffect(event.effectId)?.name ?? '随从'}触发其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}效果`,
+        text: `${getEffect(event.effectId)?.name ?? '随从'}触发${event.trigger === 'anyTurnStart' ? '任意玩家回合开始' : `其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}`}效果`,
         hover: { kind: 'hearth', effectId: event.effectId },
       };
     case 'minionTransformed':
@@ -152,7 +152,7 @@ export function formatActivity(
       };
     case 'handSwap':
       return {
-        text: `${playerLabel(event.player)}与${playerLabel(event.targetPlayer)}交换全部手牌`,
+        text: `${playerLabel(event.player)}与${playerLabel(event.targetPlayer)}交换 UNO 手牌`,
       };
     case 'handPass':
       return { text: '全桌按当前方向传递手牌' };
@@ -208,8 +208,13 @@ export function attachActivityHover(
       img.src = unoCardDataURL(hover.card);
       img.alt = unoCardTitle(hover.card);
     } else {
-      img.src = assetUrl(`/assets/images/hearth/${hover.effectId}.webp`);
       img.alt = getEffect(hover.effectId)?.name ?? '';
+      const owner = tooltip;
+      void hearthCardDataURL({ id: `activity-${hover.effectId}`, effectId: hover.effectId }).then(
+        (src) => {
+          if (tooltip === owner && owner.isConnected) img.src = src;
+        }
+      );
     }
     tooltip.append(img);
     document.body.append(tooltip);

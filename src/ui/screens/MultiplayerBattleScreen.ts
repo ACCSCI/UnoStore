@@ -64,6 +64,7 @@ interface PrivatePlayerState {
   pendingDrawMin: number;
   roulettePending: boolean;
   rouletteDrawer: number | null;
+  rouletteTransfer: number;
 }
 
 interface MultiplayerSnapshot {
@@ -545,6 +546,7 @@ export class MultiplayerBattleScreen extends Screen {
         hearthHand: mine.hearthHand,
         roulettePending: mine.roulettePending,
         rouletteDrawer: mine.rouletteDrawer,
+        rouletteTransfer: mine.rouletteTransfer,
         pendingDrawMin: mine.pendingDrawMin,
       },
       playableIds,
@@ -778,13 +780,17 @@ export class MultiplayerBattleScreen extends Screen {
       0,
       snapshot.mustResolveRoulette
         ? '请先结算颜色轮盘'
-        : canAct && mine.pendingDraw > 0
-          ? snapshot.playableIds.length > 0
-            ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
-            : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
-          : canAct
-            ? '结束回合并结算补牌'
-            : `等待玩家 ${snapshot.turn + 1}`
+        : snapshot.mine.rouletteTransfer > 0
+          ? snapshot.playableIds.some((id) => snapshot.mine.hand.some((card) => card.id === id))
+            ? `轮盘已抽 ${snapshot.mine.rouletteTransfer} 张 · 可用加牌转移`
+            : `轮盘已抽 ${snapshot.mine.rouletteTransfer} 张 · 可继续行动或结束回合`
+          : canAct && mine.pendingDraw > 0
+            ? snapshot.playableIds.length > 0
+              ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
+              : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
+            : canAct
+              ? '结束回合并结算补牌'
+              : `等待玩家 ${snapshot.turn + 1}`
     );
     if (this.heroPowerEl) {
       const hero = getHero(mine.heroId);
@@ -1200,7 +1206,7 @@ export class MultiplayerBattleScreen extends Screen {
       this.renderSnapshot(snapshot);
       this.setStatus(
         this.unoTargetCardId
-          ? '数字 7：直接点击桌上发光的对手席位，交换双方全部手牌'
+          ? '数字 7：直接点击桌上发光的对手席位，只交换双方 UNO 手牌'
           : '已取消数字 7 的换牌目标选择'
       );
       return;
@@ -1337,7 +1343,7 @@ export class MultiplayerBattleScreen extends Screen {
         this.el(
           'span',
           undefined,
-          '数字 7 · 全手牌交换：直接点击桌上发光的对手席位（UNO 与炉石全部交换）'
+          '数字 7 · UNO 手牌交换：直接点击桌上发光的对手席位（炉石牌保持不变）'
         ),
         this.btn('取消', () => this.cancelTargeting())
       );
@@ -1688,7 +1694,7 @@ export class MultiplayerBattleScreen extends Screen {
       (event.player === snapshot.viewer || event.targetPlayer === snapshot.viewer)
     ) {
       const other = event.player === snapshot.viewer ? event.targetPlayer : event.player;
-      this.showTurnNotice('手牌已交换', `你与 ${name(other)} 交换了全部手牌。`, 'swap');
+      this.showTurnNotice('UNO 手牌已交换', `你与 ${name(other)} 只交换了 UNO 手牌。`, 'swap');
     } else if (event.type === 'handPass') {
       this.showTurnNotice(
         '全桌传牌',
@@ -1771,7 +1777,13 @@ export class MultiplayerBattleScreen extends Screen {
                 : `罚抽链正在传向你，最低需要 +${minePrivate.pendingDrawMin} 才能反击。`,
             kind: 'penalty' as const,
           }
-        : null;
+        : minePrivate.rouletteTransfer > 0
+          ? {
+              title: `颜色轮盘已抽 ${minePrivate.rouletteTransfer} 张`,
+              detail: '本回合可打出任意加牌，把已抽数量连同加值转给下一位。',
+              kind: 'roulette' as const,
+            }
+          : null;
     this.turnNoticeEl.className = `turn-notice${persistent ? ` visible ${persistent.kind}` : ''}`;
     if (persistent) {
       const icon = this.el('span', 'notice-icon', '!');

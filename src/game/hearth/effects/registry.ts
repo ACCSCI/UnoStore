@@ -89,9 +89,10 @@ export interface HearthEffect {
   requiresColor?: boolean;
   /** 随从死亡并移入墓地后结算。 */
   deathrattle?: (ctx: EffectCtx) => void;
-  /** 该随从在拥有者回合开始/结束时结算的持续效果。 */
+  /** 该随从在拥有者回合开始/结束，或任意玩家回合开始时结算的持续效果。 */
   onTurnStart?: (ctx: EffectCtx) => void;
   onTurnEnd?: (ctx: EffectCtx) => void;
+  onAnyTurnStart?: (ctx: EffectCtx) => void;
   /** 拥有者受到强制罚抽时，由该随从承受等量伤害并吞掉全部罚抽。 */
   absorbsPenalty?: boolean;
   /** 攻击不造成伤害，改为拥有者随机弃掉等同攻击力的 UNO 牌。 */

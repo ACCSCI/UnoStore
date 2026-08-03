@@ -153,7 +153,10 @@ export class EasyRandom implements AiStrategy {
     if (state.players[player]!.roulettePending)
       return { type: 'resolveRoulette', player, color: randomColor(this.rng) };
     const playable = playableUno(state, player);
-    if (playable.length > 0 && state.unoActionsLeft > 0) {
+    if (
+      playable.length > 0 &&
+      (state.unoActionsLeft > 0 || state.players[player]!.rouletteTransfer > 0)
+    ) {
       const pick = playable[this.rng.int(playable.length)]!;
       return unoPlayAction(state, player, pick, this.rng);
     }
@@ -181,7 +184,10 @@ export class NormalHeuristic implements AiStrategy {
     if (state.players[player]!.roulettePending)
       return { type: 'resolveRoulette', player, color: randomColor(this.rng) };
     const playable = playableUno(state, player);
-    if (playable.length > 0 && state.unoActionsLeft > 0) {
+    if (
+      playable.length > 0 &&
+      (state.unoActionsLeft > 0 || state.players[player]!.rouletteTransfer > 0)
+    ) {
       const pick = strategicUnoPick(state, player, playable)!;
       return unoPlayAction(state, player, pick, this.rng);
     }
@@ -226,7 +232,10 @@ export class HardCombo implements AiStrategy {
     if (state.players[player]!.roulettePending)
       return { type: 'resolveRoulette', player, color: randomColor(this.rng) };
     const playable = playableUno(state, player);
-    if (playable.length > 0 && state.unoActionsLeft > 0) {
+    if (
+      playable.length > 0 &&
+      (state.unoActionsLeft > 0 || state.players[player]!.rouletteTransfer > 0)
+    ) {
       const pick = strategicUnoPick(state, player, playable)!;
       return unoPlayAction(state, player, pick, this.rng);
     }

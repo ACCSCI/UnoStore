@@ -317,6 +317,24 @@ registerEffect({
 });
 
 registerEffect({
+  id: 'doomDealer',
+  name: '厄运司牌者',
+  cost: 10,
+  description: '任意玩家的回合开始时：令所有仍在对局中的敌人各强制抽 2 张 UNO 牌。',
+  kind: 'minion',
+  attack: 7,
+  health: 9,
+  apply: () => {},
+  onAnyTurnStart: (ctx) => {
+    for (let player = 0; player < ctx.state.players.length; player++) {
+      if (player !== ctx.source && ctx.state.players[player]!.active) {
+        ctx.forceUnoDraw(player, 2, '厄运司牌者的任意玩家回合开始效果');
+      }
+    }
+  },
+});
+
+registerEffect({
   id: 'penaltyBulwark',
   name: '代罚壁垒',
   cost: 5,
