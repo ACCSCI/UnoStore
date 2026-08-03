@@ -7,6 +7,7 @@ type SpellTargetSide = 'friendly' | 'enemy' | 'any' | null;
 interface MinionBoardCallbacks {
   onSelectAttacker: (minionId: string) => void;
   onAttackMinion: (minionId: string) => void;
+  onInvalidAttackTarget: () => void;
   onHoverMinion: (minion: MinionState | null) => void;
   onPreviewMinion: (minion: MinionState) => void;
 }
@@ -17,6 +18,34 @@ export function minionInsertionIndex(pointerX: number, minionCenters: number[]):
 }
 
 type SeatAnchorResolver = (seat: number, playerCount: number) => { x: number; y: number };
+
+type RoutePoint = { x: number; y: number };
+
+/** 屏幕空间的大圆航线近似：弧线始终偏向桌面中心，并避免退化为直线。 */
+export function attackRouteGeometry(
+  from: RoutePoint,
+  to: RoutePoint,
+  viewportCenter: RoutePoint
+): { control: RoutePoint; path: string } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const midpoint = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  const normal = { x: -dy / distance, y: dx / distance };
+  const arc = Math.min(180, Math.max(64, distance * 0.28));
+  const candidates = [
+    { x: midpoint.x + normal.x * arc, y: midpoint.y + normal.y * arc },
+    { x: midpoint.x - normal.x * arc, y: midpoint.y - normal.y * arc },
+  ];
+  const distanceToCenter = (point: RoutePoint): number =>
+    (point.x - viewportCenter.x) ** 2 + (point.y - viewportCenter.y) ** 2;
+  const control =
+    distanceToCenter(candidates[0]!) <= distanceToCenter(candidates[1]!)
+      ? candidates[0]!
+      : candidates[1]!;
+  const path = `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} Q ${control.x.toFixed(1)} ${control.y.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
+  return { control, path };
+}
 
 /** DOM 战场层：原生按钮负责选择己方随从和攻击目标，状态仍完全来自规则引擎。 */
 export class MinionBoardRenderer {
@@ -153,7 +182,7 @@ export class MinionBoardRenderer {
     this.root.remove();
   }
 
-  /** 真实随从头像前冲、目标受击和伤害跳字；不使用无语义的几何弹体。 */
+  /** 真实随从头像沿实际 DOM 目标前冲；航线与前冲共用同一对端点。 */
   async playCombatAnimation(
     attackerId: string,
     targetMinionId: string | undefined,
@@ -165,15 +194,13 @@ export class MinionBoardRenderer {
     if (!attacker) return;
     const target = targetMinionId
       ? this.minionButtons.get(targetMinionId)
-      : (this.queryRoot.querySelector<HTMLElement>(
-          `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`
-        ) ??
-        (targetPlayer === 1 ? this.queryRoot.querySelector<HTMLElement>('.opponent-hero') : null));
+      : this.resolveHeroTarget(targetPlayer);
     if (!target) return;
     const from = attacker.getBoundingClientRect();
     const to = target.getBoundingClientRect();
     const dx = to.left + to.width / 2 - (from.left + from.width / 2);
     const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+    const route = this.playAttackRoute(attacker, target);
     attacker.style.zIndex = '60';
     const lunge = attacker.animate(
       [
@@ -217,8 +244,79 @@ export class MinionBoardRenderer {
         }, 140);
       }
     }, 430);
-    await lunge.finished.catch(() => undefined);
+    await Promise.all([lunge.finished.catch(() => undefined), route]);
     attacker.style.zIndex = '';
+  }
+
+  private resolveHeroTarget(targetPlayer: number): HTMLElement | null {
+    return (
+      this.queryRoot.querySelector<HTMLElement>(
+        `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`
+      ) ??
+      (targetPlayer === 0
+        ? this.queryRoot.querySelector<HTMLElement>('.player-hero .player-crest')
+        : targetPlayer === 1
+          ? this.queryRoot.querySelector<HTMLElement>('.opponent-hero')
+          : null)
+    );
+  }
+
+  /** 红色攻击提示采用类似地图大圆航线的弧线，并以光点沿路径飞行。 */
+  private playAttackRoute(attacker: HTMLElement, target: HTMLElement): Promise<void> {
+    const fromRect = attacker.getBoundingClientRect();
+    const toRect = target.getBoundingClientRect();
+    const from = { x: fromRect.left + fromRect.width / 2, y: fromRect.top + fromRect.height / 2 };
+    const to = { x: toRect.left + toRect.width / 2, y: toRect.top + toRect.height / 2 };
+    const geometry = attackRouteGeometry(from, to, {
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+    });
+    const ns = 'http://www.w3.org/2000/svg';
+    const overlay = document.createElementNS(ns, 'svg');
+    overlay.classList.add('combat-route-overlay');
+    overlay.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
+    overlay.setAttribute('aria-hidden', 'true');
+    const glow = document.createElementNS(ns, 'path');
+    glow.setAttribute('d', geometry.path);
+    glow.setAttribute('fill', 'none');
+    glow.setAttribute('stroke', '#ff2638');
+    glow.setAttribute('stroke-width', '9');
+    glow.setAttribute('stroke-linecap', 'round');
+    glow.setAttribute('opacity', '0.24');
+    const route = document.createElementNS(ns, 'path');
+    route.setAttribute('d', geometry.path);
+    route.setAttribute('fill', 'none');
+    route.setAttribute('stroke', '#ff5360');
+    route.setAttribute('stroke-width', '3');
+    route.setAttribute('stroke-linecap', 'round');
+    route.setAttribute('stroke-dasharray', '12 9');
+    const tracer = document.createElementNS(ns, 'circle');
+    tracer.setAttribute('r', '5');
+    tracer.setAttribute('fill', '#fff4d6');
+    tracer.setAttribute('stroke', '#ff2638');
+    tracer.setAttribute('stroke-width', '3');
+    overlay.append(glow, route, tracer);
+    document.body.append(overlay);
+    const length = route.getTotalLength();
+    const startedAt = performance.now();
+    const duration = 720;
+    return new Promise((resolve) => {
+      const step = (now: number): void => {
+        const t = Math.min((now - startedAt) / duration, 1);
+        const eased = 1 - (1 - t) ** 3;
+        const point = route.getPointAtLength(length * eased);
+        tracer.setAttribute('cx', point.x.toFixed(1));
+        tracer.setAttribute('cy', point.y.toFixed(1));
+        route.setAttribute('stroke-dashoffset', String(-t * 42));
+        overlay.style.opacity = String(t < 0.8 ? Math.min(1, t * 5) : (1 - t) / 0.2);
+        if (t < 1) requestAnimationFrame(step);
+        else {
+          overlay.remove();
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
   }
 
   private createRow(label: string, side: 'enemy' | 'player'): HTMLDivElement {
@@ -302,9 +400,10 @@ export class MinionBoardRenderer {
       button.setAttribute('aria-disabled', String(!actionable));
       const name = effect?.name ?? '未知随从';
       const status = minion.exhausted && side === 'player' ? '，休眠中' : '';
+      const tauntStatus = minionHasTaunt(minion) ? '，嘲讽' : '';
       button.setAttribute(
         'aria-label',
-        `${name}，${minion.attack} 点攻击，${minion.health} 点生命${status}`
+        `${name}，${minion.attack} 点攻击，${minion.health} 点生命${tauntStatus}${status}`
       );
       button.title =
         side === 'player'
@@ -314,16 +413,21 @@ export class MinionBoardRenderer {
           : selectedAttackerId
             ? legalAttackTarget
               ? `攻击 ${name}`
-              : '必须先攻击该玩家的嘲讽随从'
+              : '必须先攻击嘲讽随从'
             : '请先选择己方随从';
       button.innerHTML =
         `<span class="minion-art" aria-hidden="true"><img src="${assetUrl(`/assets/images/hearth/${encodeURIComponent(minion.effectId)}.webp`)}" alt=""></span>` +
-        (minionHasTaunt(minion) ? '<span class="minion-taunt" aria-label="嘲讽">◆</span>' : '') +
+        (minionHasTaunt(minion) ? '<span class="minion-taunt" aria-hidden="true"></span>' : '') +
         `<span class="minion-stat attack" aria-label="攻击力 ${minion.attack}">${minion.attack}</span>` +
         `<span class="minion-stat health" aria-label="生命值 ${minion.health}">${minion.health}</span>`;
       button.addEventListener('click', () => {
         if (!suppressDetails) this.callbacks.onPreviewMinion(minion);
-        if (!actionable) return;
+        if (!actionable) {
+          if (side === 'enemy' && selectedAttackerId && !legalAttackTarget) {
+            this.callbacks.onInvalidAttackTarget();
+          }
+          return;
+        }
         if (spellTargetSide) this.callbacks.onAttackMinion(minion.id);
         else if (side === 'player') this.callbacks.onSelectAttacker(minion.id);
         else this.callbacks.onAttackMinion(minion.id);

@@ -70,7 +70,8 @@ export const HEROES: HeroDefinition[] = [
     title: '孤注一掷',
     powerName: '清空口袋',
     powerCost: 2,
-    description: '从自己的 UNO 与炉石手牌中随机弃掉至多 2 张牌，并获得 1 层护盾。',
+    description:
+      '从自己的 UNO 与炉石手牌中随机弃掉至多 2 张牌，并获得 1 层持久护盾；抵消一次罚抽后消耗。',
     portrait: '/assets/images/heroes/thug.webp',
   },
   {

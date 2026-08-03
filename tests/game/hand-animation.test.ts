@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  advanceHandLayoutTimelineMs,
   HAND_LAYOUT_STAGGER_MS,
   HAND_LAYOUT_TRAVEL_MS,
+  handCardLayoutProgress,
   handLayoutTransitionDurationMs,
 } from '../../src/ui/scene/HandRenderer';
 
@@ -26,5 +28,19 @@ describe('hand collapse and expand timing', () => {
     expect(handLayoutTransitionDurationMs(2.9)).toBe(
       HAND_LAYOUT_TRAVEL_MS + HAND_LAYOUT_STAGGER_MS
     );
+  });
+
+  it('reverses from the current timeline position without restarting or jumping', () => {
+    const total = handLayoutTransitionDurationMs(8);
+    const partlyCollapsed = advanceHandLayoutTimelineMs(0, 190, true, total);
+    expect(partlyCollapsed).toBe(190);
+    expect(advanceHandLayoutTimelineMs(partlyCollapsed, 55, false, total)).toBe(135);
+  });
+
+  it('uses the same staggered card path in both playback directions', () => {
+    const timeline = HAND_LAYOUT_STAGGER_MS * 3 + HAND_LAYOUT_TRAVEL_MS / 2;
+    expect(handCardLayoutProgress(timeline, 3)).toBe(0.5);
+    expect(handCardLayoutProgress(timeline, 4)).toBeLessThan(0.5);
+    expect(handCardLayoutProgress(timeline, 2)).toBeGreaterThan(0.5);
   });
 });

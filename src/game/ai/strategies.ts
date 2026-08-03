@@ -2,7 +2,12 @@ import { canPlayUnoCard } from '../core/flow';
 import { canInitiateHearthPlay, heroPowerError } from '../core/reducer';
 import type { Rng } from '../core/rng';
 import type { GameAction, GameState } from '../core/state';
-import { getEffect, minionHasTaunt, requiredOwnUnoCardCount } from '../hearth/effects/registry';
+import {
+  getEffect,
+  hearthCardCost,
+  minionHasTaunt,
+  requiredOwnUnoCardCount,
+} from '../hearth/effects/registry';
 import type { AiStrategy, BossRules } from './types';
 
 const COLORS = ['red', 'yellow', 'green', 'blue'] as const;
@@ -84,7 +89,7 @@ function affordableHearth(state: GameState, player: number) {
         !(penaltyEffects.has(x.c.effectId) && largestEnemyHand <= 2) &&
         !(x.c.effectId === 'steal' && largestEnemyHand <= 1)
     )
-    .map((x) => ({ c: x.c, i: x.i, cost: x.effect!.cost }));
+    .map((x) => ({ c: x.c, i: x.i, cost: hearthCardCost(x.c) }));
 }
 
 /** 每次决策使用一个就绪随从；优先击杀能换掉的敌方随从，否则直击手牌最少的玩家。 */

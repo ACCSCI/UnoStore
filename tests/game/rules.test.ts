@@ -161,6 +161,51 @@ test('炉石牌消耗 free 水晶', () => {
   expect(s.players[1]!.pendingDraw).toBe(3); // 强化后的闪电箭造成 3 罚抽
 });
 
+test('回声复制全场上一张炉石牌到自己手中，复制牌为 0 费并可正常打出', () => {
+  const s = makeState([[{ color: 'red', value: '5' }], []]);
+  s.turn = 1;
+  s.players[1]!.free = 2;
+  s.players[1]!.hearthHand = [hearth('opponent-shield', 'shield')];
+  expect(dispatch(s, rng, { type: 'playHearth', player: 1, cardIdx: 0 }).ok).toBe(true);
+  expect(s.lastHearthPlayed?.effectId).toBe('shield');
+
+  s.turn = 0;
+  s.players[0]!.free = 4;
+  s.players[0]!.hearthHand = [hearth('own-echo', 'echo')];
+  const echoed = okEvents(dispatch(s, rng, { type: 'playHearth', player: 0, cardIdx: 0 }));
+  expect(echoed).toContainEqual({
+    type: 'hearthDrawn',
+    player: 0,
+    cardIds: ['echo-copy-1'],
+    reason: '回声',
+  });
+  expect(s.players[0]!.hearthHand).toEqual([
+    { id: 'echo-copy-1', effectId: 'shield', costOverride: 0 },
+  ]);
+  expect(s.players[0]!.free).toBe(0);
+
+  const copiedPlay = okEvents(dispatch(s, rng, { type: 'playHearth', player: 0, cardIdx: 0 }));
+  expect(copiedPlay[0]).toMatchObject({
+    type: 'hearthPlayed',
+    cardId: 'echo-copy-1',
+    effectId: 'shield',
+    cost: 0,
+  });
+  expect(s.players[0]!.free).toBe(0);
+  expect(s.players[0]!.shield).toBe(2);
+});
+
+test('回声可以复制随从牌，也可以复制另一张回声', () => {
+  for (const effectId of ['clockworkSquire', 'echo']) {
+    const s = makeState([[{ color: 'red', value: '5' }], []]);
+    s.lastHearthPlayed = hearth(`previous-${effectId}`, effectId);
+    s.players[0]!.free = 4;
+    s.players[0]!.hearthHand = [hearth(`echo-for-${effectId}`, 'echo')];
+    expect(dispatch(s, rng, { type: 'playHearth', player: 0, cardIdx: 0 }).ok).toBe(true);
+    expect(s.players[0]!.hearthHand).toEqual([{ id: 'echo-copy-1', effectId, costOverride: 0 }]);
+  }
+});
+
 test('水晶不足 → 打炉石牌失败', () => {
   const s = makeState([[{ color: 'red', value: '1' }]]);
   s.players[0]!.free = 0;
@@ -187,7 +232,7 @@ test('暂停/反转后本回合仍可打炉石牌（暂停不打断）', () => {
 });
 
 for (const color of ['red', 'yellow', 'green', 'blue'] as const satisfies readonly UnoColor[]) {
-  test(`Nomercy ${color} 全员跳过：跳过对手后仍可继续打同色牌`, () => {
+  test(`Nomercy ${color} 全员跳过：当前回合不重复奖励行动，结束后跳过全员并绕回`, () => {
     const s = makeState(
       [
         [
@@ -202,18 +247,25 @@ for (const color of ['red', 'yellow', 'green', 'blue'] as const satisfies readon
         chosenColor: color,
       }
     );
-    // 打 massSkip（2 个对手 → 跳过2人 → 额外+1）：applyUnoAction 在扣减前执行 → 1+1-1=1
+    // 打 massSkip 后当前回合的 UNO 行动正常耗尽，不立即再奖励一次行动。
     expect(dispatch(s, rng, { type: 'playUno', player: 0, cardIdx: 0 }).ok).toBe(true);
-    expect(s.unoActionsLeft).toBe(1);
+    expect(s.unoActionsLeft).toBe(0);
     expect(s.topCard.color).toBe(color);
     expect(s.chosenColor).toBe(color);
-    expect(playableUnoIndices(s)).toEqual([0]);
-    // 还能再打一张同色 UNO（splice 后剩余牌左移到 index 0）
-    expect(dispatch(s, rng, { type: 'playUno', player: 0, cardIdx: 0 }).ok).toBe(true);
+    expect(playableUnoIndices(s)).toEqual([]);
+    const ended = dispatch(s, rng, { type: 'endTurn', player: 0 });
+    expect(ended.ok).toBe(true);
+    if (!ended.ok) throw new Error(ended.error);
+    expect(ended.events.filter((event) => event.type === 'playerSkipped')).toEqual([
+      { type: 'playerSkipped', player: 1 },
+      { type: 'playerSkipped', player: 2 },
+    ]);
+    expect(s.turn).toBe(0);
+    expect(s.unoActionsLeft).toBe(1);
   });
 }
 
-test('Nomercy 2人局出完 → 直接获胜（额外行动不生效）', () => {
+test('Nomercy 2人局以全员跳过出完 → 直接获胜', () => {
   const s = makeState([[{ color: 'red', value: 'massSkip' }], []]);
   dispatch(s, rng, { type: 'playUno', player: 0, cardIdx: 0 });
   expect(s.phase).toBe('gameOver'); // 出完手牌直接获胜
@@ -1489,7 +1541,7 @@ test('嘲讽随从在场时禁止攻击非嘲讽随从和英雄', () => {
     attackerId: 'attacker',
     targetPlayer: 1,
   });
-  expect(blocked).toEqual({ ok: false, error: '必须先攻击具有嘲讽的随从' });
+  expect(blocked).toEqual({ ok: false, error: '必须先攻击嘲讽随从' });
   const nonTauntBlocked = dispatch(s, new Rng(51), {
     type: 'attackMinion',
     player: 0,
@@ -1497,7 +1549,7 @@ test('嘲讽随从在场时禁止攻击非嘲讽随从和英雄', () => {
     targetPlayer: 1,
     targetMinionId: 'plain-target',
   });
-  expect(nonTauntBlocked).toEqual({ ok: false, error: '必须先攻击具有嘲讽的随从' });
+  expect(nonTauntBlocked).toEqual({ ok: false, error: '必须先攻击嘲讽随从' });
   expect(
     dispatch(s, new Rng(51), {
       type: 'attackMinion',
@@ -1654,6 +1706,8 @@ test('暴徒以 2 费随机弃掉两张混合手牌，并给自己增加一层�
   expect(source.hand.length + source.hearthHand.length).toBe(before - 2);
   expect(source.shield).toBe(2);
   expect(events).toContainEqual(expect.objectContaining({ type: 'heroCardsDiscarded', player: 0 }));
+  expect(dispatch(s, new Rng(55), { type: 'endTurn', player: 0 }).ok).toBe(true);
+  expect(source.shield).toBe(2);
 });
 
 test('检察官洗混两名玩家的全部 UNO 与炉石手牌后完全随机分配', () => {

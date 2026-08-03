@@ -114,6 +114,12 @@ export interface HearthEffect {
 export interface HearthCard {
   id: string;
   effectId: string;
+  costOverride?: number;
+}
+
+/** 单张炉石牌实例的实际费用。 */
+export function hearthCardCost(card: Pick<HearthCard, 'effectId' | 'costOverride'>): number {
+  return card.costOverride ?? getEffect(card.effectId)?.cost ?? 0;
 }
 
 /** 预设牌组：炉石牌组由 effectId 列表构成 */

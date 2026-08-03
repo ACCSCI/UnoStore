@@ -193,7 +193,7 @@
       inset 0 0 0 0.18rem #e6c77e,
       inset 0 -0.55rem 0.9rem rgb(0 0 0 / 42%),
       0 0 0 0.13rem #17111d;
-    overflow: hidden;
+    overflow: visible;
   }
 
   .hero-portrait::after {
@@ -213,14 +213,15 @@
     display: block;
     inline-size: 100%;
     block-size: 100%;
+    border-radius: inherit;
     object-fit: cover;
   }
 
   .hero-shield-badge {
     position: absolute;
-    z-index: 3;
-    inset-block-end: 0.28rem;
-    inset-inline-start: 0.08rem;
+    z-index: 4;
+    inset-block-end: -0.48rem;
+    inset-inline-start: 50%;
     min-inline-size: 1.75rem;
     border: 1px solid #9de8ff;
     border-radius: 999px;
@@ -235,6 +236,18 @@
     pointer-events: none;
     text-align: center;
     text-shadow: 0 1px 1px rgb(0 0 0 / 65%);
+    translate: -50%;
+  }
+
+  .combat-route-overlay {
+    position: fixed;
+    z-index: 58;
+    inset: 0;
+    inline-size: 100vw;
+    block-size: 100vh;
+    overflow: visible;
+    filter: drop-shadow(0 0 0.35rem rgb(255 30 50 / 88%));
+    pointer-events: none;
   }
 
   .hero-shield-badge[hidden],
@@ -1474,26 +1487,35 @@
   }
 
   .board-minion.taunt {
-    border-color: #a7dff2;
+    isolation: isolate;
+    border-color: #d0d3d8;
     box-shadow:
-      0 0 0 0.15rem #496c82,
-      inset 0 0 0 0.12rem rgb(223 249 255 / 28%);
+      inset 0 0 0 0.12rem rgb(245 247 250 / 24%),
+      0 0.42rem 0 #111318,
+      0 0.7rem 1rem rgb(0 0 0 / 52%);
   }
 
   .minion-taunt {
     position: absolute;
-    inset-block-start: -0.42rem;
-    inset-inline-start: 50%;
-    display: grid;
-    place-items: center;
-    inline-size: 1.15rem;
-    aspect-ratio: 1;
-    border: 0.1rem solid #e7fbff;
-    border-radius: 0.3rem 0.3rem 0.55rem 0.55rem;
-    background: #547d96;
-    color: white;
-    font-size: 0.58rem;
-    translate: -50%;
+    z-index: -1;
+    inset: -0.58rem -0.48rem -0.72rem;
+    clip-path: polygon(50% 0, 92% 12%, 88% 65%, 73% 84%, 50% 100%, 27% 84%, 12% 65%, 8% 12%);
+    background: linear-gradient(145deg, #f0f1f3 0%, #9da2aa 42%, #575c64 72%, #d4d7dc 100%);
+    filter: drop-shadow(0 0.22rem 0.18rem rgb(0 0 0 / 70%));
+    pointer-events: none;
+  }
+
+  .minion-taunt::after {
+    position: absolute;
+    inset: 0.18rem;
+    clip-path: inherit;
+    background: linear-gradient(155deg, #3e4249, #171a20 72%);
+    content: "";
+  }
+
+  .board-minion.taunt:is(:hover, :focus-visible) .minion-taunt,
+  .board-minion.taunt.legal-target .minion-taunt {
+    filter: brightness(1.18) drop-shadow(0 0 0.5rem rgb(226 232 240 / 88%));
   }
 
   .board-minion.legal-target {
@@ -1846,7 +1868,9 @@
   .activity-hover-card {
     position: fixed;
     z-index: 60;
-    inline-size: 7.5rem;
+    display: grid;
+    place-items: center;
+    inline-size: 12.75rem;
     aspect-ratio: 2 / 3;
     border: 1px solid rgb(246 196 83 / 65%);
     border-radius: 0.55rem;
@@ -1861,6 +1885,13 @@
     inline-size: 100%;
     block-size: 100%;
     object-fit: cover;
+  }
+
+  .activity-hover-loading {
+    padding: 0.75rem;
+    color: #b9dffc;
+    font-size: 0.68rem;
+    text-align: center;
   }
 
   .minion-stat {
@@ -2150,6 +2181,29 @@
     line-height: 1.35;
   }
 
+  .activity-card-reference {
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: #58baff;
+    font: inherit;
+    font-weight: 800;
+    text-decoration: underline;
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.16em;
+    cursor: help;
+  }
+
+  .activity-card-reference:is(:hover, :focus-visible) {
+    color: #a7dcff;
+  }
+
+  .activity-card-reference:focus-visible {
+    border-radius: 0.15rem;
+    outline: 0.14rem solid #ffcb63;
+    outline-offset: 0.12rem;
+  }
+
   .seat-hand-fan {
     position: absolute;
     inset-block-end: -1.05rem;
@@ -2328,6 +2382,12 @@
     inline-size: min(11.5rem, 22vw);
     border-radius: 0.8rem;
     filter: drop-shadow(0 0.8rem 0.7rem rgb(0 0 0 / 55%));
+  }
+
+  .hand-reveal-card.is-selected img {
+    outline: 0.22rem solid #ff3f4f;
+    outline-offset: 0.18rem;
+    box-shadow: 0 0 0.95rem rgb(255 47 67 / 75%);
   }
 
   .hand-reveal-card-actions {

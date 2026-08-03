@@ -195,6 +195,7 @@ export class MultiplayerBattleScreen extends Screen {
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
+      onInvalidAttackTarget: () => this.setStatus('必须先攻击嘲讽随从', true),
       onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
       onCancelGameplaySelection: () => this.cancelTargeting(),
     });
@@ -1385,6 +1386,16 @@ export class MultiplayerBattleScreen extends Screen {
 
   private choosePlayerTarget(player: number): void {
     const snapshot = this.snapshot;
+    if (
+      snapshot &&
+      this.selectedAttackerId &&
+      player !== snapshot.viewer &&
+      snapshot.players[player]?.active &&
+      snapshot.players[player]!.board.some((minion) => minionHasTaunt(minion))
+    ) {
+      this.setStatus('必须先攻击嘲讽随从', true);
+      return;
+    }
     if (!(snapshot && this.isPlayerTargetable(player, snapshot))) return;
     if (this.unoTargetCardId) {
       this.sendAction({ type: 'playUno', cardId: this.unoTargetCardId, targetPlayer: player });
@@ -1692,7 +1703,7 @@ export class MultiplayerBattleScreen extends Screen {
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
         await this.view.playCardAnimation(source, snapshot.players.length, {
           kind: 'hearth',
-          card: { id: event.cardId, effectId: event.effectId },
+          card: { id: event.cardId, effectId: event.effectId, costOverride: event.cost },
         });
         if (effect?.kind !== 'minion') {
           const targetGlobal =
@@ -2038,10 +2049,26 @@ export class MultiplayerBattleScreen extends Screen {
     const list = this.el('div', 'hand-reveal-cards');
     let take = '';
     let discard = '';
+    const optionButtons: HTMLButtonElement[] = [];
+    const cardWrappers = new Map<string, HTMLElement>();
     const confirm = this.btn(choose ? '确认拿取与弃置' : '确认情报', () => {});
     confirm.disabled = choose;
+    const updateChoices = (): void => {
+      for (const [cardId, wrapper] of cardWrappers) {
+        wrapper.classList.toggle('is-selected', cardId === take || cardId === discard);
+      }
+      for (const button of optionButtons) {
+        const selected =
+          (button.dataset.choice === 'take' && button.dataset.cardId === take) ||
+          (button.dataset.choice === 'discard' && button.dataset.cardId === discard);
+        button.classList.toggle('selected', selected);
+        button.setAttribute('aria-pressed', String(selected));
+      }
+      confirm.disabled = choose && !(take && discard);
+    };
     for (const card of cards) {
       const wrap = this.el('div', 'hand-reveal-card');
+      cardWrappers.set(card.id, wrap);
       const image = new Image();
       image.src = unoCardDataURL(card as UnoCard);
       image.alt = `${card.color ?? '四色'} ${card.value}`;
@@ -2050,17 +2077,23 @@ export class MultiplayerBattleScreen extends Screen {
         const takeButton = this.btn('拿走', () => {
           take = card.id;
           if (discard === card.id) discard = '';
-          confirm.disabled = !(take && discard);
+          updateChoices();
         });
+        takeButton.dataset.cardId = card.id;
+        takeButton.dataset.choice = 'take';
         const discardButton = this.btn('弃掉', () => {
           discard = card.id;
           if (take === card.id) take = '';
-          confirm.disabled = !(take && discard);
+          updateChoices();
         });
+        discardButton.dataset.cardId = card.id;
+        discardButton.dataset.choice = 'discard';
+        optionButtons.push(takeButton, discardButton);
         wrap.append(takeButton, discardButton);
       }
       list.append(wrap);
     }
+    updateChoices();
     const form = document.createElement('form');
     form.method = 'dialog';
     confirm.type = 'submit';
