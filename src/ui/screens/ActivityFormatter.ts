@@ -13,7 +13,7 @@ const COLOR_NAMES: Record<string, string> = {
 };
 
 /** 对局记录条目：文本 + 可选的悬停牌面预览。 */
-type ActivityHover = (
+export type ActivityReference = (
   | { kind: 'uno'; card: UnoCard }
   | { kind: 'hearth'; effectId: string; costOverride?: number }
 ) & {
@@ -23,7 +23,32 @@ type ActivityHover = (
 
 export interface ActivityEntry {
   text: string;
-  hover?: ActivityHover;
+  references?: ActivityReference[];
+}
+
+type PendingActivityReference = (
+  | { kind: 'uno'; card: UnoCard }
+  | { kind: 'hearth'; effectId: string; costOverride?: number }
+) & { label: string };
+
+function activityEntry(text: string, references: PendingActivityReference[] = []): ActivityEntry {
+  let cursor = 0;
+  const resolved = references.flatMap((reference): ActivityReference[] => {
+    const labelStart = text.indexOf(reference.label, cursor);
+    if (labelStart < 0) return [];
+    cursor = labelStart + reference.label.length;
+    return [{ ...reference, labelStart } as ActivityReference];
+  });
+  return { text, ...(resolved.length > 0 ? { references: resolved } : {}) };
+}
+
+function hearthReference(effectId: string, costOverride?: number): PendingActivityReference {
+  return {
+    kind: 'hearth',
+    effectId,
+    ...(costOverride !== undefined ? { costOverride } : {}),
+    label: getEffect(effectId)?.name ?? effectId,
+  };
 }
 
 let activeActivityTooltip: HTMLElement | null = null;
@@ -46,106 +71,164 @@ export function formatActivity(
     case 'unoPlayed': {
       const card = event.card as UnoCard;
       const label = unoCardTitle(card);
-      const prefix = `${playerLabel(event.player)}打出 `;
-      return {
-        text: `${prefix}${label}`,
-        hover: { kind: 'uno', card, label, labelStart: prefix.length },
-      };
+      const penaltyResult = event.penaltyAdded
+        ? ` → ${playerLabel(event.penaltyTarget ?? event.player)}；结果：${event.penaltyPrevented ? `其护盾抵消了 ${event.penaltyAdded} 张罚抽` : `增加 ${event.penaltyAdded} 张罚抽${event.penaltyTransferred ? `，并转移原有 ${event.penaltyTransferred} 张` : ''}`}`
+        : `；结果：冻结 ${event.crystalFrozen} 水晶并更新桌面顶牌`;
+      return activityEntry(`${playerLabel(event.player)}使用 ${label}${penaltyResult}`, [
+        { kind: 'uno', card, label },
+      ]);
     }
     case 'hearthPlayed': {
-      const label = getEffect(event.effectId)?.name ?? event.effectId;
-      const prefix = `${playerLabel(event.player)}施放 `;
-      return {
-        text: `${prefix}${label}`,
-        hover: {
-          kind: 'hearth',
-          effectId: event.effectId,
-          costOverride: event.cost,
-          label,
-          labelStart: prefix.length,
-        },
-      };
+      const effect = getEffect(event.effectId);
+      const card = hearthReference(event.effectId, event.cost);
+      const targetMinion = event.targetMinionEffectId
+        ? hearthReference(event.targetMinionEffectId)
+        : null;
+      const target = targetMinion
+        ? `${playerLabel(event.targetMinionOwner ?? event.player)}的${targetMinion.label}`
+        : event.targets?.length
+          ? event.targets.map(playerLabel).join('、')
+          : effect?.boardClear
+            ? effect.boardClear.scope === 'all'
+              ? '全场随从'
+              : '其他随从'
+            : effect?.kind === 'minion'
+              ? '己方战场'
+              : '无指定目标';
+      return activityEntry(
+        `${playerLabel(event.player)}使用 ${card.label}（${event.cost} 费）→ ${target}；效果：${effect?.description ?? '已结算'}`,
+        [card, ...(targetMinion ? [targetMinion] : [])]
+      );
     }
     case 'hearthDrawn':
-      return { text: `${playerLabel(event.player)}抽取 ${event.cardIds.length} 张炉石牌` };
+      return {
+        text: `${playerLabel(event.player)}因${event.reason}抽取炉石牌；结果：获得 ${event.cardIds.length} 张`,
+      };
     case 'mixedCardsDrawn':
       return {
-        text: `${playerLabel(event.player)}混合抽牌：UNO ${event.unoCardIds.length} / 炉石 ${event.hearthCardIds.length}`,
+        text: `${playerLabel(event.player)}执行混合抽牌；结果：获得 UNO ${event.unoCardIds.length} 张、炉石 ${event.hearthCardIds.length} 张`,
       };
     case 'minionSummoned': {
-      const label = getEffect(event.effectId)?.name ?? '随从';
-      const prefix = `${playerLabel(event.player)}召唤 `;
-      return {
-        text: `${prefix}${label} ${event.attack}/${event.health}`,
-        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: prefix.length },
-      };
+      const minion = hearthReference(event.effectId);
+      return activityEntry(
+        `${playerLabel(event.player)}召唤 ${minion.label} → 己方第 ${event.position + 1} 个位置；结果：${event.attack}/${event.health} 进入战场`,
+        [minion]
+      );
     }
     case 'minionAttack': {
-      const label = getEffect(event.attackerEffectId)?.name ?? '随从';
-      const prefix = `${playerLabel(event.player)}的`;
-      return {
-        text: `${prefix}${label}攻击${event.targetMinionId ? '随从' : playerLabel(event.targetPlayer)}${event.discardCount ? `，改为弃 ${event.discardCount} 张` : event.drawCount ? `，罚抽 ${event.drawCount} 张` : ''}`,
-        hover: {
-          kind: 'hearth',
-          effectId: event.attackerEffectId,
-          label,
-          labelStart: prefix.length,
-        },
-      };
+      const attacker = hearthReference(event.attackerEffectId);
+      const defender = event.targetMinionEffectId
+        ? hearthReference(event.targetMinionEffectId)
+        : null;
+      const target = defender
+        ? `${playerLabel(event.targetPlayer)}的${defender.label}`
+        : playerLabel(event.targetPlayer);
+      const result = event.discardCount
+        ? `${playerLabel(event.player)}弃掉 ${event.discardCount} 张 UNO，目标未受伤`
+        : defender
+          ? `${attacker.label}生命 ${event.attackerHealthBefore}→${event.attackerHealthAfter}；${defender.label}生命 ${event.targetHealthBefore}→${event.targetHealthAfter}`
+          : `${target}实际罚抽 ${event.drawCount} 张 UNO`;
+      return activityEntry(
+        `${playerLabel(event.player)}命令 ${attacker.label}攻击 ${target}；结果：${result}`,
+        [attacker, ...(defender ? [defender, attacker, defender] : [])]
+      );
     }
-    case 'minionDestroyed':
-      return { text: `${playerLabel(event.player)}的随从被消灭` };
+    case 'minionDestroyed': {
+      const minion = hearthReference(event.effectId);
+      return activityEntry(
+        `${playerLabel(event.player)}的${minion.label}被消灭；结果：移入其炉石弃牌堆`,
+        [minion]
+      );
+    }
     case 'battlecry': {
-      const label = getEffect(event.effectId)?.name ?? '随从';
-      return {
-        text: `${label}触发战吼`,
-        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
-      };
+      const minion = hearthReference(event.effectId);
+      return activityEntry(`${playerLabel(event.player)}的${minion.label}触发战吼`, [minion]);
     }
     case 'deathrattle': {
-      const label = getEffect(event.effectId)?.name ?? '随从';
-      return {
-        text: `${label}触发亡语`,
-        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
-      };
+      const minion = hearthReference(event.effectId);
+      return activityEntry(`${playerLabel(event.player)}的${minion.label}被消灭后触发亡语`, [
+        minion,
+      ]);
     }
     case 'minionTriggered': {
-      const label = getEffect(event.effectId)?.name ?? '随从';
-      return {
-        text: `${label}触发${event.trigger === 'anyTurnStart' ? '任意玩家回合开始' : `其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}`}效果`,
-        hover: { kind: 'hearth', effectId: event.effectId, label, labelStart: 0 },
-      };
+      const minion = hearthReference(event.effectId);
+      return activityEntry(
+        `${playerLabel(event.player)}的${minion.label}触发${event.trigger === 'anyTurnStart' ? '任意玩家回合开始' : `其拥有者的${event.trigger === 'turnStart' ? '回合开始' : '回合结束'}`}效果`,
+        [minion]
+      );
     }
-    case 'minionTransformed':
-      return {
-        text: `${playerLabel(event.player)}将${playerLabel(event.targetPlayer)}的随从变成绵羊`,
-      };
-    case 'minionEmpowered':
-      return {
-        text: `${playerLabel(event.player)}将随从的${event.stat === 'attack' ? '攻击力' : '生命值'}从 ${event.before} 翻倍至 ${event.after}`,
-      };
-    case 'minionBuffed':
-      return {
-        text: `${playerLabel(event.player)}的随从获得 +${event.attackDelta}/+${event.healthDelta}${event.taunt ? ' 与嘲讽' : ''}`,
-      };
-    case 'minionsEqualized':
-      return {
-        text: `${playerLabel(event.player)}施放众生平等：全场 ${event.affected.length} 个随从变为 1/1`,
-      };
+    case 'minionTransformed': {
+      const from = hearthReference(event.fromEffectId);
+      const to = hearthReference(event.toEffectId);
+      return activityEntry(
+        `${playerLabel(event.player)}将${playerLabel(event.targetPlayer)}的${from.label}变形；结果：成为${to.label} 1/1，原有效果被清除`,
+        [from, to]
+      );
+    }
+    case 'minionEmpowered': {
+      const minion = hearthReference(event.targetEffectId);
+      return activityEntry(
+        `${playerLabel(event.player)}强化${playerLabel(event.targetPlayer)}的${minion.label}；结果：${event.stat === 'attack' ? '攻击力' : '生命值'} ${event.before}→${event.after}`,
+        [minion]
+      );
+    }
+    case 'minionBuffed': {
+      const minion = hearthReference(event.effectId);
+      return activityEntry(
+        `${playerLabel(event.player)}的${minion.label}获得 +${event.attackDelta}/+${event.healthDelta}${event.taunt ? ' 与嘲讽' : ''}`,
+        [minion]
+      );
+    }
+    case 'minionsEqualized': {
+      const refs = event.affected.map((target) => hearthReference(target.effectId));
+      const targets = event.affected.map(
+        (target, index) =>
+          `${playerLabel(target.targetPlayer)}的${refs[index]!.label} ${target.beforeAttack}/${target.beforeHealth}→1/1`
+      );
+      return activityEntry(
+        `${playerLabel(event.player)}结算众生平等；目标与结果：${targets.join('；') || '场上没有随从'}`,
+        refs
+      );
+    }
+    case 'minionsCleared': {
+      const source = hearthReference(event.effectId);
+      const targetRefs = event.affected.map((target) => hearthReference(target.effectId));
+      const targets = event.affected.map((target, index) => {
+        const targetRef = targetRefs[index]!;
+        return `${playerLabel(target.targetPlayer)}的${targetRef.label} ${target.beforeHealth}→${target.afterHealth}${target.destroyed ? '（消灭）' : ''}`;
+      });
+      const drawback = event.selfDrawback
+        ? `；副作用：${playerLabel(event.player)}应抽 ${event.selfDrawback} 张，实际抽 ${event.selfDrawn} 张 UNO`
+        : '';
+      return activityEntry(
+        `${playerLabel(event.player)}的${source.label}清场；目标与结果：${event.conditionMet ? targets.join('；') || '场上没有可影响的随从' : '条件未满足，未影响任何随从'}${drawback}`,
+        [source, ...targetRefs]
+      );
+    }
     case 'minionBoardsPassed':
-      return {
-        text: `全桌随从按${event.direction === 1 ? '顺时针' : '逆时针'}传给下一名玩家`,
-      };
-    case 'minionsExchanged':
-      return {
-        text: `${playerLabel(event.first)}与${playerLabel(event.second)}交换${event.mode === 'one' ? '各一个随机随从' : '全部随从'}`,
-      };
-    case 'minionsRedistributed':
-      return { text: `全场 ${event.assignments.length} 个随从已洗混并随机重新分配` };
+      return activityEntry(
+        `${playerLabel(event.player)}发动战场传递；结果：${(event.assignments ?? []).map((entry) => `${hearthReference(entry.effectId).label}由${playerLabel(entry.from)}交给${playerLabel(entry.to)}`).join('；') || '全桌随从已按当前方向传递'}`,
+        (event.assignments ?? []).map((entry) => hearthReference(entry.effectId))
+      );
+    case 'minionsExchanged': {
+      const minions = event.minions ?? [];
+      const refs = minions.map((entry) => hearthReference(entry.effectId));
+      return activityEntry(
+        `${playerLabel(event.player)}令${playerLabel(event.first)}与${playerLabel(event.second)}交换随从；结果：${minions.map((entry, index) => `${refs[index]!.label}由${playerLabel(entry.from)}转至${playerLabel(entry.to)}`).join('；') || `交换 ${event.minionIds.length} 个随从`}`,
+        refs
+      );
+    }
+    case 'minionsRedistributed': {
+      const refs = event.assignments.map((entry) => hearthReference(entry.effectId));
+      return activityEntry(
+        `${playerLabel(event.player)}洗混全场随从；结果：${event.assignments.map((entry, index) => `${refs[index]!.label}由${playerLabel(entry.from)}分给${playerLabel(entry.to)}`).join('；') || '场上没有随从'}`,
+        refs
+      );
+    }
     case 'drawUno':
-      return { text: `${playerLabel(event.player)}抽取 1 张 UNO` };
+      return { text: `${playerLabel(event.player)}执行普通抽牌；结果：获得 1 张 UNO` };
     case 'drawPenalty':
-      return { text: `${playerLabel(event.player)}罚抽 ${event.count} 张 UNO` };
+      return { text: `${playerLabel(event.player)}结算罚抽；结果：实际获得 ${event.count} 张 UNO` };
     case 'rouletteColorChosen':
       return {
         text: `${playerLabel(event.player)}选择${COLOR_NAMES[event.color] ?? event.color}，由${playerLabel(event.drawer)}抽牌`,
@@ -153,60 +236,70 @@ export function formatActivity(
     case 'rouletteCardDrawn': {
       const card = event.card as UnoCard;
       const label = unoCardTitle(card);
-      const prefix = `${playerLabel(event.player)}公开抽到 `;
-      return {
-        text: `${prefix}${label}`,
-        hover: { kind: 'uno', card, label, labelStart: prefix.length },
-      };
+      return activityEntry(`${playerLabel(event.player)}公开抽到 ${label}`, [
+        { kind: 'uno', card, label },
+      ]);
     }
     case 'colorRoulette':
       return {
         text: `${playerLabel(event.player)}的颜色轮盘结束，共抽 ${event.count} 张`,
       };
-    case 'heroPowerUsed':
+    case 'heroPowerUsed': {
+      const hero = getHero(event.heroId);
+      const targets = event.targets.length
+        ? event.targets.map(playerLabel).join('、')
+        : playerLabel(event.player);
       return {
-        text: `${playerLabel(event.player)}使用${getHero(event.heroId).powerName}（${event.cost} 费）`,
+        text: `${playerLabel(event.player)}使用英雄技能“${hero.powerName}”（${event.cost} 费）→ ${targets}；效果：${hero.description}`,
       };
+    }
     case 'heroEmote':
       return { text: `${playerLabel(event.player)}：${event.text}` };
     case 'heroCardsDiscarded':
       return {
-        text: `${playerLabel(event.player)}随机弃掉 ${event.unoCardIds.length + event.hearthCardIds.length} 张牌`,
+        text: `${playerLabel(event.player)}因${event.reason ?? '效果'}弃牌；结果：UNO ${event.unoCardIds.length} 张、炉石 ${event.hearthCardIds.length} 张`,
       };
     case 'handsRemixed':
       return {
-        text: `${playerLabel(event.first)}与${playerLabel(event.second)}的全部 UNO 与炉石手牌已洗混重分`,
+        text: `${playerLabel(event.player)}对${playerLabel(event.first)}与${playerLabel(event.second)}使用手牌洗混；结果：双方全部 UNO 与炉石手牌已随机重分`,
       };
     case 'cardsGifted':
       return {
-        text: `${playerLabel(event.player)}交给${playerLabel(event.targetPlayer)} ${event.unoCardIds.length + event.hearthCardIds.length} 张牌`,
+        text: `${playerLabel(event.player)}向${playerLabel(event.targetPlayer)}赠牌；结果：交付 UNO ${event.unoCardIds.length} 张、炉石 ${event.hearthCardIds.length} 张`,
       };
     case 'handRevealed':
       return {
-        text: `${playerLabel(event.player)}查看了${playerLabel(event.targetPlayer)}的 ${event.cards.length} 张手牌`,
+        text: `${playerLabel(event.player)}查看${playerLabel(event.targetPlayer)}的 UNO 手牌；结果：公开其中 ${event.cards.length} 张供选择`,
       };
     case 'oracleResolved':
       return {
-        text: `${playerLabel(event.player)}从${playerLabel(event.targetPlayer)}拿走 1 张并弃掉 1 张 UNO`,
+        text: `${playerLabel(event.player)}结算窥镜选择 → ${playerLabel(event.targetPlayer)}；结果：拿走 1 张并弃掉 1 张 UNO`,
       };
     case 'unoDiscarded':
       return {
-        text: `${playerLabel(event.player)}弃掉 ${event.cardIds.length} 张 UNO（${event.reason}）`,
+        text: `${playerLabel(event.player)}因${event.reason}弃牌；结果：弃掉 ${event.cardIds.length} 张 UNO`,
       };
     case 'handSwap':
       return {
-        text: `${playerLabel(event.player)}与${playerLabel(event.targetPlayer)}交换 UNO 手牌`,
+        text: `${playerLabel(event.player)}对${playerLabel(event.targetPlayer)}发动换牌；结果：双方全部 UNO 手牌互换`,
       };
     case 'handPass':
-      return { text: '全桌按当前方向传递手牌' };
+      return {
+        text: `${playerLabel(event.player)}发动全桌传牌；结果：全部 UNO 手牌按${event.direction === 1 ? '顺时针' : '逆时针'}交给下一名玩家`,
+      };
     case 'playerSkipped':
-      return { text: `${playerLabel(event.player)}被跳过` };
+      return { text: `${playerLabel(event.player)}受到跳过效果；结果：本次行动被直接跳过` };
     case 'colorDump':
       return {
-        text: `${playerLabel(event.player)}同色清场，额外弃 ${event.count} 张并冻结 ${event.crystalFrozen} 水晶`,
+        text: `${playerLabel(event.player)}结算同色清场；结果：额外弃 ${event.count} 张 UNO，并冻结 ${event.crystalFrozen} 水晶`,
       };
-    case 'penaltyRedirected':
-      return { text: `${playerLabel(event.player)}的随从承受 ${event.amount} 点罚抽伤害` };
+    case 'penaltyRedirected': {
+      const minion = hearthReference(event.effectId);
+      return activityEntry(
+        `${playerLabel(event.player)}的${minion.label}发动代罚；结果：承受 ${event.amount} 点伤害，英雄没有抽牌`,
+        [minion]
+      );
+    }
     case 'penaltyPrevented':
       return {
         text: `${playerLabel(event.player)}以${event.reason}抵消 ${event.amount} 张罚抽`,
@@ -216,9 +309,11 @@ export function formatActivity(
     case 'unoCaught':
       return { text: `${playerLabel(event.player)}未报 UNO，罚 ${event.penalty} 张` };
     case 'massSkip':
-      return { text: `${playerLabel(event.player)}发动全员跳过` };
+      return { text: `${playerLabel(event.player)}发动全员跳过；结果：其他活跃玩家各跳过一次行动` };
     case 'playerEliminated':
-      return { text: `${playerLabel(event.player)}被淘汰` };
+      return {
+        text: `${playerLabel(event.player)}的 UNO 手牌达到 ${event.cardCount} 张；结果：触发慈悲规则并被淘汰`,
+      };
     case 'endTurn':
       return { text: `${playerLabel(event.player)}结束回合` };
     case 'gameOver':
@@ -237,22 +332,41 @@ export function formatActivity(
 export function attachActivityHover(
   container: HTMLElement,
   item: HTMLElement,
-  hover: NonNullable<ActivityEntry['hover']>
+  references: NonNullable<ActivityEntry['references']>
 ): void {
   const text = item.textContent ?? '';
-  const labelStart = hover.labelStart;
-  if (text.slice(labelStart, labelStart + hover.label.length) !== hover.label) return;
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = 'activity-card-reference';
-  trigger.textContent = hover.label;
-  trigger.setAttribute('aria-label', `查看卡牌详情：${hover.label}`);
-  item.replaceChildren(
-    document.createTextNode(text.slice(0, labelStart)),
-    trigger,
-    document.createTextNode(text.slice(labelStart + hover.label.length))
-  );
+  const valid = [...references]
+    .sort((a, b) => a.labelStart - b.labelStart)
+    .filter(
+      (reference, index, all) =>
+        text.slice(reference.labelStart, reference.labelStart + reference.label.length) ===
+          reference.label &&
+        (index === 0 ||
+          reference.labelStart >= all[index - 1]!.labelStart + all[index - 1]!.label.length)
+    );
+  if (valid.length === 0) return;
+  const children: Node[] = [];
+  let cursor = 0;
+  for (const reference of valid) {
+    children.push(document.createTextNode(text.slice(cursor, reference.labelStart)));
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'activity-card-reference';
+    trigger.textContent = reference.label;
+    trigger.setAttribute('aria-label', `查看卡牌详情：${reference.label}`);
+    attachReferenceTooltip(container, trigger, reference);
+    children.push(trigger);
+    cursor = reference.labelStart + reference.label.length;
+  }
+  children.push(document.createTextNode(text.slice(cursor)));
+  item.replaceChildren(...children);
+}
 
+function attachReferenceTooltip(
+  container: HTMLElement,
+  trigger: HTMLButtonElement,
+  hover: ActivityReference
+): void {
   let tooltip: HTMLElement | null = null;
   const show = (): void => {
     if (tooltip || !container.isConnected) return;

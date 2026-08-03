@@ -45,6 +45,7 @@ import {
 } from './HandCountDelta';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
+import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
 import { Screen } from './Screen';
 
 interface PublicPlayerState {
@@ -171,6 +172,7 @@ export class MultiplayerBattleScreen extends Screen {
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
   private turnNoticeEl: HTMLElement | null = null;
   private turnNoticeTimer: number | null = null;
+  private transientNotice: { title: string; detail: string; kind: string } | null = null;
   private workDoneTimer: number | null = null;
   private workDoneAnnouncedTurn = -1;
   private cancelUiIntegrityCheck: () => void = () => {};
@@ -1767,7 +1769,8 @@ export class MultiplayerBattleScreen extends Screen {
         event.type === 'penaltyRedirected' ||
         event.type === 'minionTransformed' ||
         event.type === 'minionEmpowered' ||
-        event.type === 'minionsEqualized'
+        event.type === 'minionsEqualized' ||
+        event.type === 'minionsCleared'
       ) {
         await this.view.playSpellAnimation(source, null, snapshot.players.length);
       } else if (
@@ -1883,17 +1886,13 @@ export class MultiplayerBattleScreen extends Screen {
   }
 
   private showTurnNotice(title: string, detail: string, kind: string): void {
-    if (!this.turnNoticeEl) return;
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
-    const icon = this.el('span', 'notice-icon', kind === 'swap' ? '↔' : '!');
-    icon.setAttribute('aria-hidden', 'true');
-    const copy = this.el('span');
-    copy.append(this.el('strong', undefined, title), this.el('small', undefined, detail));
-    this.turnNoticeEl.replaceChildren(icon, copy);
-    this.turnNoticeEl.className = `turn-notice visible ${kind}`;
+    this.transientNotice = { title, detail, kind };
+    if (this.snapshot) this.refreshPersistentNotice(this.snapshot);
     this.turnNoticeTimer = window.setTimeout(() => {
-      if (this.turnNoticeEl) this.turnNoticeEl.className = 'turn-notice';
+      this.transientNotice = null;
       this.turnNoticeTimer = null;
+      if (this.snapshot) this.refreshPersistentNotice(this.snapshot);
     }, 3600);
   }
 
@@ -1908,26 +1907,26 @@ export class MultiplayerBattleScreen extends Screen {
           detail: `玩家 ${(minePrivate.rouletteDrawer ?? 0) + 1} 将持续抽牌直到抽中你选择的颜色。`,
           kind: 'roulette' as const,
         }
-      : mine && mine.pendingDraw > 0
-        ? {
-            title: `罚抽威胁 +${mine.pendingDraw}`,
-            detail:
-              snapshot.turn === snapshot.viewer
-                ? `只能叠加 +${minePrivate.pendingDrawMin} 或更大的罚抽牌，否则结束回合接受全部罚牌。`
-                : `罚抽链正在传向你，最低需要 +${minePrivate.pendingDrawMin} 才能反击。`,
-            kind: 'penalty' as const,
-          }
+      : mine
+        ? penaltyTurnNotice(
+            mine.pendingDraw,
+            minePrivate.pendingDrawMin,
+            snapshot.turn === snapshot.viewer
+          )
         : null;
-    this.turnNoticeEl.className = `turn-notice${persistent ? ` visible ${persistent.kind}` : ''}`;
-    if (persistent) {
-      const icon = this.el('span', 'notice-icon', '!');
+    const notice = resolveTurnNotice(persistent, this.transientNotice);
+    this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
+    if (notice) {
+      const icon = this.el('span', 'notice-icon', notice.kind === 'swap' ? '↔' : '!');
       icon.setAttribute('aria-hidden', 'true');
       const copy = this.el('span');
       copy.append(
-        this.el('strong', undefined, persistent.title),
-        this.el('small', undefined, persistent.detail)
+        this.el('strong', undefined, notice.title),
+        this.el('small', undefined, notice.detail)
       );
       this.turnNoticeEl.replaceChildren(icon, copy);
+    } else {
+      this.turnNoticeEl.replaceChildren();
     }
   }
 
@@ -1947,7 +1946,7 @@ export class MultiplayerBattleScreen extends Screen {
     this.activityLedgerEl.replaceChildren();
     for (const entry of this.activityEntries.slice(-80)) {
       const item = this.el('li', undefined, entry.text);
-      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
+      if (entry.references) attachActivityHover(this.activityLedgerEl, item, entry.references);
       this.activityLedgerEl.append(item);
     }
     this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;

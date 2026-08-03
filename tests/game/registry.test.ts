@@ -57,6 +57,11 @@ test('炉石 effect 注册表完整（无效果未知）', () => {
     'duelOfAllegiance',
     'armyExchange',
     'chaosConscription',
+    'cinderSweep',
+    'unstableNova',
+    'finalCollapse',
+    'dustchargeSapper',
+    'apocalypseHerald',
   ];
   for (const id of ids) {
     const effect = getEffect(id);
@@ -90,7 +95,11 @@ test('随从关键词由注册表统一推导并提供可复用释义', () => {
   expect(effectKeywords(getEffect('ashPhoenix'))).toContain('deathrattle');
   expect(effectKeywords(getEffect('warcryCommander'))).toContain('battlecry');
   expect(effectKeywords(getEffect('goldenCitadel'))).toContain('taunt');
+  expect(effectKeywords(getEffect('penaltyBulwark'))).toContain('penaltyProxy');
+  expect(effectKeywords(getEffect('cinderSweep'))).toContain('boardClear');
+  expect(effectKeywords(getEffect('dustchargeSapper'))).toContain('battlecry');
   expect(HEARTH_KEYWORDS.charge.description).toContain('立即攻击');
+  expect(HEARTH_KEYWORDS.penaltyProxy.name).toBe('代罚');
 });
 
 test('高费嘲讽与代罚随从拥有足够强的身材', () => {

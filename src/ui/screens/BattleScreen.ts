@@ -59,6 +59,7 @@ import {
 } from './HandCountDelta';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
+import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
 import { Screen } from './Screen';
 
 /**
@@ -521,7 +522,8 @@ export class BattleScreen extends Screen {
         event.type === 'penaltyRedirected' ||
         event.type === 'minionTransformed' ||
         event.type === 'minionEmpowered' ||
-        event.type === 'minionsEqualized'
+        event.type === 'minionsEqualized' ||
+        event.type === 'minionsCleared'
       ) {
         this.refreshUI();
         await this.view.playSpellAnimation(event.player, null, this.playerCount);
@@ -1687,17 +1689,8 @@ export class BattleScreen extends Screen {
           detail: `${playerLabel(player.rouletteDrawer ?? 0)}将持续抽牌直到抽中你选择的颜色；结算后控制权交还出牌者。`,
           kind: 'roulette',
         }
-      : player.pendingDrawMin > 0
-        ? {
-            title: `罚抽威胁 +${player.pendingDraw}`,
-            detail:
-              state.turn === 0
-                ? `只能叠加 +${player.pendingDrawMin} 或更大的罚抽牌，否则结束回合接受全部罚牌。`
-                : `罚抽链正在传向你，最低需要 +${player.pendingDrawMin} 才能反击。`,
-            kind: 'penalty',
-          }
-        : null;
-    const notice = persistent ?? this.transientNotice;
+      : penaltyTurnNotice(player.pendingDraw, player.pendingDrawMin, state.turn === 0);
+    const notice = resolveTurnNotice(persistent, this.transientNotice);
     this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
     this.turnNoticeEl.innerHTML = notice
       ? `<span class="notice-icon" aria-hidden="true">!</span><span><strong>${notice.title}</strong><small>${notice.detail}</small></span>`
@@ -1734,7 +1727,7 @@ export class BattleScreen extends Screen {
     this.activityLedgerEl.replaceChildren();
     for (const entry of this.activityEntries.slice(-80)) {
       const item = this.el('li', undefined, entry.text);
-      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
+      if (entry.references) attachActivityHover(this.activityLedgerEl, item, entry.references);
       this.activityLedgerEl.append(item);
     }
     this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;

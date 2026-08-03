@@ -14,6 +14,7 @@ export type GameEvent =
       penaltyTarget?: number;
       penaltyAdded?: number;
       penaltyTransferred?: number;
+      penaltyPrevented?: boolean;
     }
   | {
       type: 'colorDump';
@@ -51,6 +52,8 @@ export type GameEvent =
       cost: number;
       targets?: number[];
       targetMinionId?: string;
+      targetMinionEffectId?: string;
+      targetMinionOwner?: number;
     }
   | { type: 'heroPowerUsed'; player: number; heroId: string; cost: number; targets: number[] }
   | { type: 'heroEmote'; player: number; heroId: string; emoteId: string; text: string }
@@ -115,6 +118,11 @@ export type GameEvent =
       counterDamage?: number;
       drawCount: number;
       discardCount?: number;
+      targetMinionEffectId?: string;
+      attackerHealthBefore: number;
+      attackerHealthAfter: number;
+      targetHealthBefore?: number;
+      targetHealthAfter?: number;
     }
   | {
       type: 'minionTransformed';
@@ -129,6 +137,7 @@ export type GameEvent =
       player: number;
       targetPlayer: number;
       minionId: string;
+      targetEffectId: string;
       stat: 'attack' | 'health';
       before: number;
       after: number;
@@ -137,6 +146,7 @@ export type GameEvent =
       type: 'minionBuffed';
       player: number;
       minionId: string;
+      effectId: string;
       attackDelta: number;
       healthDelta: number;
       taunt: boolean;
@@ -147,13 +157,37 @@ export type GameEvent =
       affected: Array<{
         targetPlayer: number;
         minionId: string;
+        effectId: string;
         beforeAttack: number;
         beforeHealth: number;
         beforeMaxHealth: number;
       }>;
     }
-  | { type: 'minionDestroyed'; player: number; minionId: string }
-  | { type: 'minionBoardsPassed'; player: number; direction: 1 | -1 }
+  | {
+      type: 'minionsCleared';
+      player: number;
+      effectId: string;
+      mode: 'damage' | 'destroy';
+      damage?: number;
+      conditionMet: boolean;
+      affected: Array<{
+        targetPlayer: number;
+        minionId: string;
+        effectId: string;
+        beforeHealth: number;
+        afterHealth: number;
+        destroyed: boolean;
+      }>;
+      selfDrawback: number;
+      selfDrawn: number;
+    }
+  | { type: 'minionDestroyed'; player: number; minionId: string; effectId: string }
+  | {
+      type: 'minionBoardsPassed';
+      player: number;
+      direction: 1 | -1;
+      assignments?: Array<{ minionId: string; effectId: string; from: number; to: number }>;
+    }
   | {
       type: 'minionsExchanged';
       player: number;
@@ -161,11 +195,12 @@ export type GameEvent =
       second: number;
       mode: 'one' | 'all';
       minionIds: string[];
+      minions?: Array<{ minionId: string; effectId: string; from: number; to: number }>;
     }
   | {
       type: 'minionsRedistributed';
       player: number;
-      assignments: Array<{ minionId: string; from: number; to: number }>;
+      assignments: Array<{ minionId: string; effectId: string; from: number; to: number }>;
     }
   | {
       type: 'minionTriggered';

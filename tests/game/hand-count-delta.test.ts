@@ -32,6 +32,22 @@ test('罚抽链演出显示待结算增量，真正抽牌后显示 UNO 增量', 
   ]);
 });
 
+test('护盾抵消 UNO 加牌时不会错误显示待抽手牌增量', () => {
+  expect(
+    handCountDeltas({
+      type: 'unoPlayed',
+      player: 0,
+      cardId: 'shielded-draw-two',
+      card: { id: 'shielded-draw-two', color: 'red', value: 'draw2' },
+      crystalFrozen: 0,
+      penaltyTarget: 1,
+      penaltyAdded: 2,
+      penaltyTransferred: 0,
+      penaltyPrevented: true,
+    })
+  ).toEqual([{ player: 0, uno: -1, hearth: 0, pendingUno: 0 }]);
+});
+
 test('赠牌演出同时给来源与目标显示正负差额', () => {
   expect(
     handCountDeltas({

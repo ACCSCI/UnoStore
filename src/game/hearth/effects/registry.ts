@@ -22,7 +22,13 @@ export function requiredOwnUnoCardCount(
   return targeting.useAllWhenAtMostCount && available <= targeting.count ? 0 : targeting.count;
 }
 
-export type HearthKeywordId = 'charge' | 'taunt' | 'battlecry' | 'deathrattle';
+export type HearthKeywordId =
+  | 'charge'
+  | 'taunt'
+  | 'battlecry'
+  | 'deathrattle'
+  | 'penaltyProxy'
+  | 'boardClear';
 
 export const HEARTH_KEYWORDS: Record<HearthKeywordId, { name: string; description: string }> = {
   charge: { name: '冲锋', description: '该随从放置后可以立即攻击。' },
@@ -32,7 +38,24 @@ export const HEARTH_KEYWORDS: Record<HearthKeywordId, { name: string; descriptio
   },
   battlecry: { name: '战吼', description: '从手牌放置该随从时立即触发。' },
   deathrattle: { name: '亡语', description: '该随从死亡时触发。' },
+  penaltyProxy: {
+    name: '代罚',
+    description: '你的英雄受到罚抽时，由该随从承受等量伤害；过量伤害不会回到英雄。',
+  },
+  boardClear: {
+    name: '清场',
+    description: '会同时伤害或消灭多个场上随从；除非卡面另有说明，也会影响己方。',
+  },
 };
+
+/** 可复用的清场属性：由规则层统一处理伤害、死亡、亡语和副作用。 */
+export interface BoardClearEffect {
+  mode: 'damage' | 'destroy';
+  damage?: number;
+  scope: 'all' | 'allOther';
+  condition?: 'noOtherFriendlyMinions';
+  selfUnoDrawback?: number;
+}
 
 /**
  * 效果上下文：effect 执行时携带的信息。
@@ -89,6 +112,10 @@ export interface HearthEffect {
   requiresColor?: boolean;
   /** 随从死亡并移入墓地后结算。 */
   deathrattle?: (ctx: EffectCtx) => void;
+  /** 显式战吼属性；无须选目标的战吼也能进入统一事件与关键词体系。 */
+  battlecry?: boolean;
+  /** 同时作用于多个随从的声明式清场效果。 */
+  boardClear?: BoardClearEffect;
   /** 该随从在拥有者回合开始/结束，或任意玩家回合开始时结算的持续效果。 */
   onTurnStart?: (ctx: EffectCtx) => void;
   onTurnEnd?: (ctx: EffectCtx) => void;
@@ -151,9 +178,14 @@ export function effectKeywords(effect: HearthEffect | null): HearthKeywordId[] {
   const keywords: HearthKeywordId[] = [];
   if (effect.charge) keywords.push('charge');
   if (effect.taunt) keywords.push('taunt');
-  if (effect.kind === 'minion' && (effect.targeting || effect.requiresColor)) {
+  if (
+    effect.kind === 'minion' &&
+    (effect.battlecry || effect.targeting || effect.requiresColor || effect.boardClear)
+  ) {
     keywords.push('battlecry');
   }
   if (effect.deathrattle) keywords.push('deathrattle');
+  if (effect.absorbsPenalty) keywords.push('penaltyProxy');
+  if (effect.boardClear) keywords.push('boardClear');
   return keywords;
 }

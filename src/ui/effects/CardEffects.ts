@@ -80,6 +80,11 @@ export const CARD_PRESENTATION: Record<string, CardPresentation> = {
   duelOfAllegiance: { visual: 'transform', sound: 'transform' },
   armyExchange: { visual: 'time', sound: 'time' },
   chaosConscription: { visual: 'shadow', sound: 'shadow' },
+  cinderSweep: { visual: 'fire', sound: 'fire' },
+  unstableNova: { visual: 'arcane', sound: 'impact' },
+  finalCollapse: { visual: 'shadow', sound: 'impact' },
+  dustchargeSapper: { visual: 'fire', sound: 'impact' },
+  apocalypseHerald: { visual: 'shadow', sound: 'impact' },
 };
 
 export function cardPresentation(effectId: string): CardPresentation {

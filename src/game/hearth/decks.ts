@@ -18,12 +18,17 @@ export const HEARTH_EXPANSION_CARD_IDS = [
   'equalityOfAll',
   'formationCommander',
   'doomDealer',
+  'cinderSweep',
+  'unstableNova',
+  'finalCollapse',
+  'dustchargeSapper',
+  'apocalypseHerald',
 ] as const;
 
 /** 默认扩展牌补两张；极高压的厄运司牌者只补一张。 */
 export const HEARTH_EXPANSION_CARD_COPIES: Partial<
   Record<(typeof HEARTH_EXPANSION_CARD_IDS)[number], number>
-> = { doomDealer: 1 };
+> = { doomDealer: 1, finalCollapse: 1, apocalypseHerald: 1 };
 
 /**
  * 预设炉石牌组。强力随从均放入两张，避免在长牌池中迟迟抽不到。
@@ -105,6 +110,12 @@ export const PRESET_DECKS: HearthDeck[] = [
       'chaosConscription',
       'formationCommander',
       'formationCommander',
+      'cinderSweep',
+      'cinderSweep',
+      'dustchargeSapper',
+      'unstableNova',
+      'finalCollapse',
+      'apocalypseHerald',
     ],
   },
   {
@@ -183,6 +194,13 @@ export const PRESET_DECKS: HearthDeck[] = [
       'chaosConscription',
       'formationCommander',
       'formationCommander',
+      'cinderSweep',
+      'cinderSweep',
+      'dustchargeSapper',
+      'unstableNova',
+      'unstableNova',
+      'finalCollapse',
+      'apocalypseHerald',
     ],
   },
 ];

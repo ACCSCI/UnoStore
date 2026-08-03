@@ -158,6 +158,7 @@ export function doubleMinionStat(ctx: EffectCtx, stat: MinionStat): void {
       player: ctx.source,
       targetPlayer: owner,
       minionId: minion.id,
+      targetEffectId: minion.effectId,
       stat,
       before,
       after: before * 2,
@@ -173,16 +174,26 @@ export function passMinionBoards(ctx: EffectCtx): void {
     .filter((index) => index >= 0);
   if (active.length < 2) return;
   const original = new Map(active.map((owner) => [owner, [...ctx.state.players[owner]!.board]]));
+  const assignments = [];
   for (const source of active) {
     const target = nextActiveFrom(ctx.state, source);
     const board = original.get(source) ?? [];
-    for (const minion of board) minion.owner = target;
+    for (const minion of board) {
+      assignments.push({
+        minionId: minion.id,
+        effectId: minion.effectId,
+        from: source,
+        to: target,
+      });
+      minion.owner = target;
+    }
     ctx.state.players[target]!.board = board;
   }
   ctx.events.push({
     type: 'minionBoardsPassed',
     player: ctx.source,
     direction: ctx.state.direction,
+    assignments,
   });
 }
 
@@ -208,6 +219,10 @@ export function exchangeRandomMinions(ctx: EffectCtx): void {
     second,
     mode: 'one',
     minionIds: [firstMinion.id, secondMinion.id],
+    minions: [
+      { minionId: firstMinion.id, effectId: firstMinion.effectId, from: first, to: second },
+      { minionId: secondMinion.id, effectId: secondMinion.effectId, from: second, to: first },
+    ],
   });
 }
 
@@ -229,6 +244,20 @@ export function exchangeAllMinions(ctx: EffectCtx): void {
     second,
     mode: 'all',
     minionIds: [...firstBoard, ...secondBoard].map((minion) => minion.id),
+    minions: [
+      ...firstBoard.map((minion) => ({
+        minionId: minion.id,
+        effectId: minion.effectId,
+        from: first,
+        to: second,
+      })),
+      ...secondBoard.map((minion) => ({
+        minionId: minion.id,
+        effectId: minion.effectId,
+        from: second,
+        to: first,
+      })),
+    ],
   });
 }
 
@@ -249,7 +278,7 @@ export function redistributeAllMinions(ctx: EffectCtx): void {
     const to = recipients[index]!;
     minion.owner = to;
     ctx.state.players[to]!.board.push(minion);
-    return { minionId: minion.id, from, to };
+    return { minionId: minion.id, effectId: minion.effectId, from, to };
   });
   ctx.events.push({ type: 'minionsRedistributed', player: ctx.source, assignments });
 }

@@ -63,7 +63,9 @@ export function handCountDeltas(event: GameEvent): HandCountDelta[] {
     case 'unoPlayed':
       return [
         delta(event.player, -1),
-        ...(event.penaltyTarget !== undefined && (event.penaltyAdded ?? 0) > 0
+        ...(event.penaltyTarget !== undefined &&
+        (event.penaltyAdded ?? 0) > 0 &&
+        !event.penaltyPrevented
           ? [
               delta(
                 event.penaltyTarget,

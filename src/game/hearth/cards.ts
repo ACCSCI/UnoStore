@@ -483,6 +483,7 @@ registerEffect({
         const change = {
           targetPlayer,
           minionId: minion.id,
+          effectId: minion.effectId,
           beforeAttack: minion.attack,
           beforeHealth: minion.health,
           beforeMaxHealth: minion.maxHealth,
@@ -531,6 +532,7 @@ registerEffect({
         type: 'minionBuffed',
         player: ctx.source,
         minionId: neighbor.id,
+        effectId: neighbor.effectId,
         attackDelta: 1,
         healthDelta: 1,
         taunt: true,
@@ -648,4 +650,62 @@ registerEffect({
   description: '指定一名对手，立即向其手中塞入 5 张 UNO 牌。',
   targeting: { type: 'enemyPlayer', count: 1 },
   apply: (ctx) => ctx.forceUnoDraw(ctx.targets![0]!, 5, '强制征牌'),
+});
+
+registerEffect({
+  id: 'cinderSweep',
+  name: '余烬横扫',
+  cost: 2,
+  description: '对所有随从造成 2 点伤害。低费，但通常只能清掉残血随从。',
+  boardClear: { mode: 'damage', damage: 2, scope: 'all' },
+  apply: () => {},
+});
+
+registerEffect({
+  id: 'unstableNova',
+  name: '失稳新星',
+  cost: 4,
+  description: '对所有随从造成 5 点伤害；然后你强制抽 2 张 UNO。',
+  boardClear: { mode: 'damage', damage: 5, scope: 'all', selfUnoDrawback: 2 },
+  apply: () => {},
+});
+
+registerEffect({
+  id: 'finalCollapse',
+  name: '终局坍缩',
+  cost: 8,
+  description: '消灭所有随从；然后你强制抽 5 张 UNO。',
+  boardClear: { mode: 'destroy', scope: 'all', selfUnoDrawback: 5 },
+  apply: () => {},
+});
+
+registerEffect({
+  id: 'dustchargeSapper',
+  name: '尘爆工兵',
+  cost: 3,
+  description: '战吼：若你没有其他随从，对所有其他随从造成 3 点伤害。',
+  kind: 'minion',
+  attack: 3,
+  health: 4,
+  battlecry: true,
+  boardClear: {
+    mode: 'damage',
+    damage: 3,
+    scope: 'allOther',
+    condition: 'noOtherFriendlyMinions',
+  },
+  apply: () => {},
+});
+
+registerEffect({
+  id: 'apocalypseHerald',
+  name: '末日宣告者',
+  cost: 9,
+  description: '战吼：消灭所有其他随从；然后你强制抽 4 张 UNO。',
+  kind: 'minion',
+  attack: 8,
+  health: 8,
+  battlecry: true,
+  boardClear: { mode: 'destroy', scope: 'allOther', selfUnoDrawback: 4 },
+  apply: () => {},
 });
