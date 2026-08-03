@@ -105,7 +105,7 @@ export class LoadoutScreen extends Screen {
       ],
       [
         'No Mercy 特殊牌',
-        '包含 0 全桌传牌、7 指定交换手牌、+6、+10、反转+4、全员跳过、同色清场与颜色轮盘。',
+        '包含 0 全桌传牌、7 指定交换 UNO 手牌、+6、+10、反转+4、全员跳过、同色清场与颜色轮盘。',
       ],
     ];
     for (const [title, description] of rules) {

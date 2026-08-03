@@ -5,6 +5,7 @@ import {
   createGame,
   dispatch,
   getHero,
+  heroPowerCost,
   playableUnoIndices,
   Rng,
 } from '../../src/game';
@@ -737,6 +738,45 @@ test('灾厄发牌官在拥有者回合开始时给所有敌人各塞三张 UNO'
   expect(events.some((event) => event.type === 'minionTriggered')).toBe(true);
 });
 
+test('厄运司牌者在任意玩家回合开始时给所有敌人各塞两张 UNO', () => {
+  const s = createGame(3, ['doomDealer'], 271);
+  s.players[0]!.board = [
+    {
+      id: 'doom-dealer',
+      cardId: 'doom-dealer-card',
+      effectId: 'doomDealer',
+      owner: 0,
+      attack: 7,
+      health: 9,
+      maxHealth: 9,
+      exhausted: true,
+    },
+  ];
+
+  const beforeEnemyTurn = s.players.map((player) => player.hand.length);
+  const enemyTurnEvents = okEvents(dispatch(s, new Rng(271), { type: 'endTurn', player: 0 }));
+  expect(s.turn).toBe(1);
+  expect(s.players[0]!.hand).toHaveLength(beforeEnemyTurn[0]! + 1);
+  expect(s.players[1]!.hand).toHaveLength(beforeEnemyTurn[1]! + 2);
+  expect(s.players[2]!.hand).toHaveLength(beforeEnemyTurn[2]! + 2);
+  expect(enemyTurnEvents).toContainEqual({
+    type: 'minionTriggered',
+    player: 0,
+    minionId: 'doom-dealer',
+    effectId: 'doomDealer',
+    trigger: 'anyTurnStart',
+  });
+
+  s.turn = 2;
+  const beforeOwnerTurn = s.players.map((player) => player.hand.length);
+  const ownerTurnEvents = okEvents(dispatch(s, new Rng(272), { type: 'endTurn', player: 2 }));
+  expect(s.turn).toBe(0);
+  expect(s.players[0]!.hand).toHaveLength(beforeOwnerTurn[0]!);
+  expect(s.players[1]!.hand).toHaveLength(beforeOwnerTurn[1]! + 2);
+  expect(s.players[2]!.hand).toHaveLength(beforeOwnerTurn[2]! + 3);
+  expect(ownerTurnEvents.some((event) => event.type === 'minionTriggered')).toBe(true);
+});
+
 test('代罚壁垒吞掉整次罚抽，过量伤害只会摧毁随从', () => {
   const s = createGame(2, ['penaltyBulwark'], 28);
   s.players[0]!.board = [
@@ -984,7 +1024,7 @@ test('No Mercy 罚抽链支持彩色 +4、万能 +6、万能 +10 向上叠加', 
   expect(s.players[0]!.pendingDrawMin).toBe(10);
 });
 
-test('No Mercy 数字 7 必须指定玩家并交换剩余手牌', () => {
+test('No Mercy 数字 7 必须指定玩家且只交换剩余 UNO 手牌', () => {
   const s = makeState([
     [
       { color: 'red', value: '7' },
@@ -1009,11 +1049,11 @@ test('No Mercy 数字 7 必须指定玩家并交换剩余手牌', () => {
   );
   expect(s.players[0]!.hand.map((card) => card.id)).toEqual(['p1-a', 'p1-b', 'p1-c']);
   expect(s.players[1]!.hand.map((card) => card.id)).toEqual(['t-0-1']);
-  expect(s.players[0]!.hearthHand.map((card) => card.id)).toEqual([
+  expect(s.players[0]!.hearthHand.map((card) => card.id)).toEqual(['own-hearth']);
+  expect(s.players[1]!.hearthHand.map((card) => card.id)).toEqual([
     'target-hearth-a',
     'target-hearth-b',
   ]);
-  expect(s.players[1]!.hearthHand.map((card) => card.id)).toEqual(['own-hearth']);
   expect(events.some((event) => event.type === 'handSwap')).toBe(true);
 });
 
@@ -1127,6 +1167,7 @@ test('四人局反转 +4：被罚玩家无可叠加牌时仍可结束回合接�
   expect(playerCapabilities(s, 3)).toMatchObject({
     playableUnoIndices: [],
     hasAnyAction: false,
+    canEndTurn: true,
   });
 
   const accepted = okEvents(dispatch(s, rng, { type: 'endTurn', player: 3 }));
@@ -1135,6 +1176,83 @@ test('四人局反转 +4：被罚玩家无可叠加牌时仍可结束回合接�
   );
   expect(s.players[3]!.pendingDraw).toBe(0);
   expect(s.turn).toBe(2);
+});
+
+test('+10 与 +6 威胁下没有同级或更大加牌时，结束回合会接受完整罚抽', () => {
+  for (const minimum of [10, 6] as const) {
+    const s = makeState([
+      [
+        { color: 'red', value: '1' },
+        { color: 'blue', value: '3' },
+      ],
+    ]);
+    const player = s.players[0]!;
+    player.pendingDraw = minimum;
+    player.pendingDrawMin = minimum;
+    s.unoActionsLeft = 0;
+
+    expect(playerCapabilities(s, 0)).toMatchObject({
+      playableUnoIndices: [],
+      playableHearthIndices: [],
+      readyMinionIds: [],
+      heroPowerUsable: false,
+      hasAnyAction: false,
+      canEndTurn: true,
+    });
+
+    const events = okEvents(dispatch(s, new Rng(600 + minimum), { type: 'endTurn', player: 0 }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'drawPenalty', player: 0, count: minimum })
+    );
+    expect(player.pendingDraw).toBe(0);
+    expect(Number(player.pendingDrawMin)).toBe(0);
+    expect(s.turn).toBe(1);
+  }
+});
+
+test('所有罚抽门槛在无合法叠加时都保留结束回合出口', () => {
+  for (const minimum of [2, 4, 6, 10] as const) {
+    const s = makeState([
+      [
+        { color: 'green', value: '5' },
+        { color: 'null', value: minimum === 10 ? 'wildDraw6' : 'wild' },
+      ],
+    ]);
+    const player = s.players[0]!;
+    player.pendingDraw = minimum + 4;
+    player.pendingDrawMin = minimum;
+
+    const capabilities = playerCapabilities(s, 0);
+    expect(capabilities.playableUnoIndices).toEqual([]);
+    expect(capabilities.hasAnyAction).toBe(false);
+    expect(capabilities.canEndTurn).toBe(true);
+
+    const events = okEvents(dispatch(s, new Rng(700 + minimum), { type: 'endTurn', player: 0 }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'drawPenalty', player: 0, count: minimum + 4 })
+    );
+  }
+});
+
+test('颜色轮盘转移没有加牌可用时也能放弃转移并结束回合', () => {
+  const s = makeState([
+    [
+      { color: 'red', value: '2' },
+      { color: 'blue', value: '4' },
+    ],
+  ]);
+  const player = s.players[0]!;
+  player.rouletteTransfer = 3;
+  s.unoActionsLeft = 0;
+
+  expect(playerCapabilities(s, 0)).toMatchObject({
+    playableUnoIndices: [],
+    hasAnyAction: false,
+    canEndTurn: true,
+  });
+  expect(dispatch(s, new Rng(803), { type: 'endTurn', player: 0 }).ok).toBe(true);
+  expect(player.rouletteTransfer).toBe(0);
+  expect(s.turn).toBe(1);
 });
 
 test('最后一张罚抽牌必须等整条罚抽链结算完才确认获胜', () => {
@@ -1234,6 +1352,7 @@ test('颜色轮盘临时交给下家选色，逐张公开抽牌后把行动权�
     ],
     [],
   ]);
+  s.rules.rouletteStacking = false;
   s.unoDraw = [
     { id: 'roulette-red', color: 'red', value: '5' },
     { id: 'roulette-blue', color: 'blue', value: '2' },
@@ -1260,6 +1379,49 @@ test('颜色轮盘临时交给下家选色，逐张公开抽牌后把行动权�
   expect(s.turn).toBe(0);
   expect(s.unoActionsLeft).toBe(0);
   expect(s.players[1]!.roulettePending).toBe(false);
+  expect(s.players[0]!.rouletteTransfer).toBe(0);
+});
+
+test('颜色轮盘叠加规则允许用加牌把已抽数量转给下一位', () => {
+  const s = makeState([
+    [
+      { color: 'null', value: 'wildColorRoulette' },
+      { color: 'null', value: 'wildReverseDraw4' },
+      { color: 'blue', value: '1' },
+    ],
+    [],
+  ]);
+  expect(s.rules.rouletteStacking).toBe(true);
+  s.unoDraw = [
+    { id: 'roulette-transfer-red', color: 'red', value: '5' },
+    { id: 'roulette-transfer-blue', color: 'blue', value: '2' },
+  ];
+
+  okEvents(dispatch(s, new Rng(441), { type: 'playUno', player: 0, cardIdx: 0 }));
+  okEvents(dispatch(s, new Rng(441), { type: 'resolveRoulette', player: 1, color: 'red' }));
+  expect(s.players[0]!.rouletteTransfer).toBe(2);
+  expect(playableUnoIndices(s)).toEqual([0]);
+
+  const events = okEvents(
+    dispatch(s, new Rng(441), {
+      type: 'playUno',
+      player: 0,
+      cardIdx: 0,
+      color: 'blue',
+    })
+  );
+  expect(s.players[0]!.rouletteTransfer).toBe(0);
+  expect(s.players[0]!.hand.map((card) => card.id)).toEqual([
+    't-0-2',
+    'roulette-transfer-blue',
+    'roulette-transfer-red',
+  ]);
+  expect(s.players[1]!.pendingDraw).toBe(6);
+  expect(s.players[1]!.pendingDrawMin).toBe(4);
+  expect(events.find((event) => event.type === 'unoPlayed')).toMatchObject({
+    penaltyTransferred: 2,
+    penaltyAdded: 4,
+  });
 });
 
 test('最后一张颜色轮盘必须完成选色与公开抽牌，抽回手牌后不会提前获胜', () => {
@@ -1403,6 +1565,34 @@ test('英雄技能默认每回合一次，减费与无限次数随从会实时�
     }).ok
   ).toBe(true);
   expect(s.players[0]!.free).toBe(4);
+});
+
+test('多个灵能侍祭累计降低英雄技能费用，检察官可降至 0 费', () => {
+  const s = createGame(2, ['powerAcolyte'], 53, {}, ['inspector', 'thug']);
+  s.players[0]!.free = 0;
+  s.players[0]!.board = ['first', 'second'].map((id) => ({
+    id,
+    cardId: `${id}-card`,
+    effectId: 'powerAcolyte',
+    owner: 0,
+    attack: 4,
+    health: 5,
+    maxHealth: 5,
+    exhausted: false,
+  }));
+
+  expect(heroPowerCost(s, 0)).toBe(0);
+  const events = okEvents(
+    dispatch(s, new Rng(53), { type: 'useHeroPower', player: 0, targets: [0, 1] })
+  );
+  expect(s.players[0]!.free).toBe(0);
+  expect(events).toContainEqual({
+    type: 'heroPowerUsed',
+    player: 0,
+    heroId: 'inspector',
+    cost: 0,
+    targets: [0, 1],
+  });
 });
 
 test('卡牌大师以 1 费选择一张己方 UNO，换取所有玩家牌池中的一张随机炉石', () => {
@@ -1817,7 +2007,6 @@ test('七费 UNO 湮灭弃五张己方 UNO，四费强制征牌给对手塞五�
       type: 'playHearth',
       player: 0,
       cardIdx: 0,
-      unoCardIds: purge.players[0]!.hand.map((card) => card.id),
     })
   );
   expect(purge.players[0]!.hand).toHaveLength(0);
@@ -1836,6 +2025,36 @@ test('七费 UNO 湮灭弃五张己方 UNO，四费强制征牌给对手塞五�
     })
   );
   expect(burden.players[1]!.hand).toHaveLength(before + 5);
+});
+
+test('UNO 湮灭超过五张时仍必须明确选择五张', () => {
+  const purge = createGame(2, ['unoAnnihilation'], 631);
+  purge.players[0]!.free = 7;
+  purge.players[0]!.hand = Array.from({ length: 6 }, (_, index) => ({
+    id: `long-purge-${index}`,
+    color: 'green' as const,
+    value: String(index) as UnoCard['value'],
+  }));
+  purge.players[0]!.hearthHand = [hearth('long-purge-card', 'unoAnnihilation')];
+
+  const missingSelection = dispatch(purge, new Rng(631), {
+    type: 'playHearth',
+    player: 0,
+    cardIdx: 0,
+  });
+  expect(missingSelection).toMatchObject({ ok: false });
+
+  const selectedIds = purge.players[0]!.hand.slice(0, 5).map((card) => card.id);
+  okEvents(
+    dispatch(purge, new Rng(631), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      unoCardIds: selectedIds,
+    })
+  );
+  expect(purge.players[0]!.hand).toHaveLength(1);
+  expect(purge.players[0]!.hand[0]!.id).toBe('long-purge-5');
 });
 
 test('UNO 湮灭只检查费用，UNO 不足五张时弃掉现有全部手牌', () => {

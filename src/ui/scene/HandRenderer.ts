@@ -2,6 +2,13 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import type { UnoCard } from '../../game/uno/types';
 import { createCardMesh, unoCardDataURL } from './CardRenderer';
+import { type CursorState, handCursorState } from './CursorState';
+import {
+  HAND_CANDIDATE_OUTLINE,
+  type HandInteractionMode,
+  resolveHandCardOutline,
+  shouldSelectHandCard,
+} from './HandInteractionMode';
 import { createHearthCardMesh, hearthCardDataURL } from './HearthCardRenderer';
 
 /**
@@ -12,7 +19,7 @@ import { createHearthCardMesh, hearthCardDataURL } from './HearthCardRenderer';
  * - 触屏：轻点只选中/预览，长按拖到桌面后释放才打出
  */
 
-const BASE_Y = 0.94;
+const BASE_Y = 0.1;
 const HOVER_LIFT = 0.12;
 const HOVER_FORWARD = 0.08;
 /** 合法牌常驻向牌桌外缘抽出，不能只靠颜色区分。 */
@@ -25,7 +32,6 @@ const ROW_Z = 3.58;
 const CARD_TILT = 0.38;
 const HAND_SCALE_BOOST = 1.1;
 const HAND_FAN_DROP = 0.22;
-const PLAYABLE_OUTLINE = 0xffdc64;
 const TOUCH_HOLD_MS = 180;
 const TABLE_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.48);
 const COLLAPSED_X = -3.55;
@@ -66,6 +72,7 @@ export class HandRenderer {
   private pointer = new THREE.Vector2();
   private stagedId: string | null = null;
   private previewOnlyId: string | null = null;
+  private interactionMode: HandInteractionMode = 'play';
   private touchGesture: {
     pointerId: number;
     cardId: string;
@@ -82,10 +89,16 @@ export class HandRenderer {
     private scene: THREE.Scene,
     private renderer: THREE.WebGLRenderer,
     private camera: THREE.PerspectiveCamera,
-    private onClick: (entry: HandCardEntry) => void,
+    private onClick: (entry: HandCardEntry, clientX?: number, clientY?: number) => void,
     private onHover?: (entry: HandCardEntry | null) => void,
     private findExtraHover?: (raycaster: THREE.Raycaster) => UnoCard | null,
-    private onPreviewSelect?: (entry: HandCardEntry | null) => void
+    private onPreviewSelect?: (entry: HandCardEntry | null) => void,
+    private onStagedPointer?: (
+      entry: HandCardEntry | null,
+      clientX?: number,
+      clientY?: number,
+      overTable?: boolean
+    ) => void
   ) {
     this.scene.add(this.group);
     this.stackBase.name = 'collapsed-hand-thickness';
@@ -136,6 +149,7 @@ export class HandRenderer {
     this.extraHoverId = null;
     this.cancelTouchGesture();
     this.removeFloatingPreview();
+    this.onStagedPointer?.(null);
     delete this.renderer.domElement.dataset.cursor;
     this.stackBase.geometry.dispose();
     for (const material of this.stackMaterials) material.dispose();
@@ -160,6 +174,7 @@ export class HandRenderer {
       this.stagedId = null;
       this.removeFloatingPreview();
       this.onPreviewSelect?.(null);
+      this.onStagedPointer?.(null);
     }
     for (const [id, mesh] of this.meshes) {
       if (!ids.has(id)) {
@@ -193,7 +208,7 @@ export class HandRenderer {
         const outline = new THREE.LineSegments(
           new THREE.EdgesGeometry(mesh.geometry),
           new THREE.LineBasicMaterial({
-            color: PLAYABLE_OUTLINE,
+            color: HAND_CANDIDATE_OUTLINE,
             transparent: false,
             depthTest: false,
             depthWrite: false,
@@ -265,9 +280,12 @@ export class HandRenderer {
           if (!entry.playable) material.color.multiplyScalar(0.6);
           const hasPlayableFace = entry.playable && Boolean(material.map);
           material.emissive.set(hasPlayableFace ? 0xffffff : 0x000000);
-          material.emissiveMap = hasPlayableFace ? material.map : null;
+          const nextEmissiveMap = hasPlayableFace ? material.map : null;
+          if (material.emissiveMap !== nextEmissiveMap) {
+            material.emissiveMap = nextEmissiveMap;
+            material.needsUpdate = true;
+          }
           material.emissiveIntensity = hasPlayableFace ? 0.3 : 0;
-          material.needsUpdate = true;
         }
       }
     }
@@ -282,17 +300,45 @@ export class HandRenderer {
       const entry = mesh.userData.entry as HandCardEntry | undefined;
       if (!entry) continue;
       entry.selected = ids.has(id);
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      for (const material of materials) {
-        if (material instanceof THREE.MeshStandardMaterial && entry.selected) {
-          material.emissive.set(0x087ca8);
-          material.emissiveIntensity = 0.42;
-        }
-      }
     }
     for (let i = 0; i < this.orderedIds.length; i++) {
       this.layoutCard(this.orderedIds[i]!, i, this.orderedIds.length);
     }
+  }
+
+  /** 所有从手牌选择卡牌的技能共用同一交互模式。 */
+  setInteractionMode(mode: HandInteractionMode): void {
+    if (this.interactionMode === mode) return;
+    this.interactionMode = mode;
+    if (mode === 'select') this.clearPreviewSelection();
+  }
+
+  /** 当前牌在鼠标下或已固定时，牌堆更新必须原位刷新详情，不能闪退或保留旧牌。 */
+  refreshExtraPreview(card: UnoCard | null): void {
+    const entry = card ? tableCardEntry(card) : null;
+    if (this.extraHoverId !== null) {
+      this.extraHoverId = card ? extraCardKey(card) : null;
+      this.onHover?.(entry);
+    }
+    if (this.previewOnlyId?.startsWith('table-')) {
+      this.previewOnlyId = entry?.id ?? null;
+      this.onPreviewSelect?.(entry);
+    }
+  }
+
+  /** 行动演出清理拿牌/拖牌状态，但保留玩家固定查看的当前牌详情。 */
+  clearGameplayInteraction(): void {
+    const preserveTablePreview = Boolean(this.previewOnlyId?.startsWith('table-'));
+    this.stagedId = null;
+    this.cancelTouchGesture();
+    this.removeFloatingPreview();
+    this.onStagedPointer?.(null);
+    if (!preserveTablePreview) {
+      this.previewOnlyId = null;
+      this.onPreviewSelect?.(null);
+    }
+    this.layoutAll();
+    this.setCursor('default');
   }
 
   private layoutCard(id: string, index: number, total: number): void {
@@ -338,13 +384,14 @@ export class HandRenderer {
     mesh.renderOrder = isHover ? 1000 : index * 2;
     const outline = mesh.getObjectByName('playable-outline');
     if (outline instanceof THREE.LineSegments) {
-      outline.visible = playable;
+      const outlineVisual = resolveHandCardOutline(playable, selected);
+      outline.visible = outlineVisual.visible;
       outline.renderOrder = mesh.renderOrder + 1;
       const material = outline.material as THREE.LineBasicMaterial;
-      material.color.setHex(PLAYABLE_OUTLINE);
-      material.opacity = 0.96;
-      outline.scale.setScalar(1.055);
-      outline.scale.y = 1.18;
+      material.color.setHex(outlineVisual.color);
+      material.opacity = 1;
+      outline.scale.setScalar(outlineVisual.scale);
+      outline.scale.y = outlineVisual.scaleY;
     }
 
     // 命中代理始终留在基础扇形槽位；视觉卡上浮后不会改变下一帧的命中结果。
@@ -363,6 +410,10 @@ export class HandRenderer {
       return;
     }
     this.updateRaycaster(e);
+    if (this.stagedId && e.pointerType !== 'touch') {
+      this.setCursor('grabbing');
+      return;
+    }
     if (
       e.pointerType === 'touch' &&
       this.touchGesture?.pointerId === e.pointerId &&
@@ -370,6 +421,7 @@ export class HandRenderer {
     ) {
       e.preventDefault();
       this.updateFloatingCard(this.touchGesture.cardId, e.clientX, e.clientY);
+      this.notifyStagedPointer(this.touchGesture.cardId, e.clientX, e.clientY);
       return;
     }
     const hit =
@@ -379,7 +431,14 @@ export class HandRenderer {
     const hoveredEntry = id
       ? (this.meshes.get(id)?.userData.entry as HandCardEntry | undefined)
       : undefined;
-    this.setCursor(id ? (hoveredEntry?.playable ? 'pointer' : 'forbidden') : 'default');
+    this.setCursor(
+      handCursorState({
+        carrying: false,
+        overCard: Boolean(id),
+        playable: Boolean(hoveredEntry?.playable),
+        overDetail: false,
+      })
+    );
     if (id) {
       this.extraHoverId = null;
       this.setHover(id);
@@ -388,7 +447,14 @@ export class HandRenderer {
 
     this.setHover(null);
     const extraCard = this.findExtraHover?.(this.raycaster) ?? null;
-    this.setCursor(extraCard ? 'help' : 'default');
+    this.setCursor(
+      handCursorState({
+        carrying: false,
+        overCard: false,
+        playable: false,
+        overDetail: Boolean(extraCard),
+      })
+    );
     const extraId = extraCard ? `${extraCard.id}:${extraCard.color ?? 'wild'}` : null;
     if (extraId === this.extraHoverId) return;
     this.extraHoverId = extraId;
@@ -405,7 +471,7 @@ export class HandRenderer {
     this.extraHoverId = null;
     if (!(this.stagedId || this.touchGesture?.held)) this.removeFloatingPreview();
     this.onHover?.(null);
-    this.setCursor(this.stagedId ? 'grab' : 'default');
+    this.setCursor(this.stagedId ? 'grabbing' : 'default');
     for (let i = 0; i < this.orderedIds.length; i++) {
       this.layoutCard(this.orderedIds[i]!, i, this.orderedIds.length);
     }
@@ -414,7 +480,10 @@ export class HandRenderer {
   private handleGlobalPointerMove = (event: PointerEvent): void => {
     if (!(this.stagedId && event.pointerType !== 'touch')) return;
     // 捕获阶段覆盖整个视口：无论指针位于 Canvas、HUD 或其他覆盖层，卡牌都持续跟手。
+    this.updateRaycaster(event);
     this.updateFloatingCard(this.stagedId, event.clientX, event.clientY);
+    this.notifyStagedPointer(this.stagedId, event.clientX, event.clientY);
+    this.setCursor('grabbing');
   };
 
   private handleGlobalPointerDown = (event: PointerEvent): void => {
@@ -443,7 +512,7 @@ export class HandRenderer {
     this.cancelTouchGesture();
     this.updateRaycaster(e);
     const entry = this.hitEntry();
-    if (!entry || this.hasGameplaySelection()) return;
+    if (!entry || this.interactionMode === 'select') return;
     const gesture = {
       pointerId: e.pointerId,
       cardId: entry.id,
@@ -451,7 +520,7 @@ export class HandRenderer {
       timer: 0,
     };
     gesture.timer = window.setTimeout(() => {
-      if (this.touchGesture !== gesture || !entry.playable) return;
+      if (this.touchGesture !== gesture) return;
       gesture.held = true;
       this.stage(entry, e.clientX, e.clientY);
       this.setCursor('grabbing');
@@ -472,16 +541,17 @@ export class HandRenderer {
       if (gesture) window.clearTimeout(gesture.timer);
       if (gesture?.held) {
         const draggedEntry = this.entryById(gesture.cardId);
-        const shouldPlay = Boolean(draggedEntry?.playable && this.isOverTable());
+        const shouldPlay = Boolean(draggedEntry && this.isOverTable());
         this.touchGesture = null;
         this.renderer.domElement.releasePointerCapture?.(e.pointerId);
         this.removeFloatingPreview();
         if (shouldPlay) {
           this.stagedId = null;
           this.onPreviewSelect?.(null);
+          this.onStagedPointer?.(null);
         }
         this.layoutAll();
-        if (shouldPlay) this.commit(gesture.cardId);
+        if (shouldPlay) this.commit(gesture.cardId, e.clientX, e.clientY);
         return;
       }
       this.touchGesture = null;
@@ -494,33 +564,25 @@ export class HandRenderer {
       this.stagedId = null;
       this.onPreviewSelect?.(null);
       this.removeFloatingPreview();
+      this.onStagedPointer?.(null);
       this.layoutAll();
-      this.commit(id);
+      this.commit(id, e.clientX, e.clientY);
       return;
     }
     if (!entry) {
       const tableCard = this.findExtraHover?.(this.raycaster) ?? null;
       if (tableCard) {
-        const previewEntry: HandCardEntry = {
-          id: `table-${tableCard.id}:${tableCard.color ?? 'wild'}`,
-          isHearth: false,
-          uno: tableCard,
-          playable: false,
-        };
-        if (this.previewOnlyId === previewEntry.id) {
-          this.clearPreviewSelection();
-        } else {
-          this.stagedId = null;
-          this.previewOnlyId = previewEntry.id;
-          this.onPreviewSelect?.(previewEntry);
-          this.layoutAll();
-        }
+        const previewEntry = tableCardEntry(tableCard);
+        this.stagedId = null;
+        this.previewOnlyId = previewEntry.id;
+        this.onPreviewSelect?.(previewEntry);
+        this.layoutAll();
         return;
       }
       this.clearPreviewSelection();
       return;
     }
-    if (this.hasGameplaySelection() && entry.playable) {
+    if (shouldSelectHandCard(this.interactionMode, entry.playable)) {
       this.onClick(entry);
       return;
     }
@@ -528,9 +590,7 @@ export class HandRenderer {
   };
 
   private handlePointerCancel = (): void => {
-    this.cancelTouchGesture();
-    this.removeFloatingPreview();
-    this.layoutAll();
+    this.clearPreviewSelection();
   };
 
   private handleContextMenu = (event: MouseEvent): void => {
@@ -545,12 +605,7 @@ export class HandRenderer {
     if (!entry) {
       const tableCard = this.findExtraHover?.(this.raycaster) ?? null;
       if (tableCard) {
-        const previewEntry: HandCardEntry = {
-          id: `table-${tableCard.id}:${tableCard.color ?? 'wild'}`,
-          isHearth: false,
-          uno: tableCard,
-          playable: false,
-        };
+        const previewEntry = tableCardEntry(tableCard);
         this.stagedId = null;
         this.previewOnlyId = previewEntry.id;
         this.onPreviewSelect?.(previewEntry);
@@ -560,7 +615,7 @@ export class HandRenderer {
       this.clearPreviewSelection();
       return;
     }
-    if (this.hasGameplaySelection() && entry.playable) {
+    if (shouldSelectHandCard(this.interactionMode, entry.playable)) {
       this.onClick(entry);
       return;
     }
@@ -573,8 +628,9 @@ export class HandRenderer {
     this.removeFloatingPreview();
     this.onPreviewSelect?.(null);
     this.layoutAll();
-    this.setCursor(entry.playable ? 'grab' : 'forbidden');
+    this.setCursor('grabbing');
     this.updateFloatingCard(entry.id, clientX, clientY);
+    this.notifyStagedPointer(entry.id, clientX, clientY);
   }
 
   private updateRaycaster(e: PointerEvent): void {
@@ -596,13 +652,6 @@ export class HandRenderer {
 
   private entryById(id: string): HandCardEntry | null {
     return (this.meshes.get(id)?.userData.entry as HandCardEntry | undefined) ?? null;
-  }
-
-  private hasGameplaySelection(): boolean {
-    for (const mesh of this.meshes.values()) {
-      if ((mesh.userData.entry as HandCardEntry | undefined)?.selected) return true;
-    }
-    return false;
   }
 
   private isOverTable(): boolean {
@@ -648,9 +697,15 @@ export class HandRenderer {
     this.floatingPreview = null;
   }
 
-  private commit(id: string): void {
+  private notifyStagedPointer(id: string, clientX: number, clientY: number): void {
+    const entry = this.entryById(id);
+    if (!entry) return;
+    this.onStagedPointer?.(entry, clientX, clientY, this.isOverTable() && this.hitEntry() === null);
+  }
+
+  private commit(id: string, clientX: number, clientY: number): void {
     const entry = this.meshes.get(id)?.userData.entry as HandCardEntry | undefined;
-    if (entry?.playable) this.onClick(entry);
+    if (entry) this.onClick(entry, clientX, clientY);
   }
 
   private layoutAll(): void {
@@ -749,6 +804,7 @@ export class HandRenderer {
     this.cancelTouchGesture();
     this.removeFloatingPreview();
     this.onPreviewSelect?.(null);
+    this.onStagedPointer?.(null);
     this.layoutAll();
     this.setCursor('default');
   }
@@ -765,7 +821,9 @@ export class HandRenderer {
     }
     this.hitMeshes.clear();
     this.orderedIds = [];
+    this.interactionMode = 'play';
     this.stagedId = null;
+    this.onStagedPointer?.(null);
     this.previewOnlyId = null;
     this.cancelTouchGesture();
     this.removeFloatingPreview();
@@ -773,9 +831,7 @@ export class HandRenderer {
     this.setCursor('default');
   }
 
-  private setCursor(
-    state: 'default' | 'pointer' | 'forbidden' | 'grab' | 'grabbing' | 'help'
-  ): void {
+  private setCursor(state: CursorState): void {
     this.renderer.domElement.dataset.cursor = state;
   }
 }
@@ -876,6 +932,19 @@ function createHitMesh(entry: HandCardEntry): THREE.Mesh {
   mesh.userData.entry = entry;
   mesh.name = `hand-hit-${entry.id}`;
   return mesh;
+}
+
+function extraCardKey(card: UnoCard): string {
+  return `${card.id}:${card.color ?? 'wild'}`;
+}
+
+function tableCardEntry(card: UnoCard): HandCardEntry {
+  return {
+    id: `table-${extraCardKey(card)}`,
+    isHearth: false,
+    uno: card,
+    playable: false,
+  };
 }
 
 function disposeHitMesh(mesh: THREE.Mesh): void {

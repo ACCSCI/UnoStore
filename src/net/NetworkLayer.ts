@@ -23,6 +23,7 @@ export const VIBE_SDK_CHANNEL = 'beta' as const;
 export const MIN_ROOM_PLAYERS = 2;
 export const MAX_ROOM_PLAYERS = 8;
 const LOADOUT_RETRY_MS = 1_200;
+const IDENTITY_RETRY_MS = 750;
 
 interface PendingLoadoutSubmission {
   requestId: string;
@@ -131,6 +132,9 @@ export class NetworkLayer {
   private readonly departedPeerIds = new Set<string>();
   private pendingLoadout: PendingLoadoutSubmission | null = null;
   private loadoutRetryTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private identityRetryTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private roomShutdownPromise: Promise<void> | null = null;
+  private localIdentityConfirmed = false;
   private localLoadoutConfirmed = false;
   private confirmedLoadoutFingerprint: string | null = null;
   private localLoadoutError: string | null = null;
@@ -222,14 +226,23 @@ export class NetworkLayer {
   }
 
   logout(): void {
+    const api = this.api;
+    const waitForHostClose = this.room?.isHost === true;
     this.leaveRoom();
-    this.api?.logout();
+    if (waitForHostClose && this.roomShutdownPromise) {
+      void this.roomShutdownPromise.finally(() => api?.logout());
+      return;
+    }
+    api?.logout();
   }
 
   async joinRoom(rawRoomId: string): Promise<RoomHandle> {
     if (!this.api) throw new Error('VibeHub 尚未初始化');
     if (!this.api.isLoggedIn()) throw new Error('请先登录 VibeHub');
-    if (this.room) this.leaveRoom();
+    if (this.room) {
+      this.leaveRoom();
+      await this.roomShutdownPromise;
+    }
     const roomId = safeRoomId(rawRoomId);
     const meta = await this.api.rooms.get(roomId);
     if (meta) {
@@ -252,6 +265,7 @@ export class NetworkLayer {
     this.playerLoadouts.clear();
     this.loadoutReadyUserIds.clear();
     this.departedPeerIds.clear();
+    this.localIdentityConfirmed = this.room.isHost;
     this.playerIndex = this.room.isHost ? 0 : -1;
     if (this.room.isHost && this.api.user) this.rememberSeatUser(0, this.api.user);
     this.room.onMessage((message, fromId) => this.handleMessage(message, fromId));
@@ -261,7 +275,7 @@ export class NetworkLayer {
     this.playerCount = this.humanCount;
     if (this.room.isHost) this.rebuildSeatsAndIdentities();
     if (!this.room.isHost) {
-      this.sendGuestIdentity();
+      this.restartGuestHandshake();
       this.requestSnapshot();
     }
     this.ensureLocalLoadoutSync();
@@ -430,8 +444,8 @@ export class NetworkLayer {
       this.onRoomUpdate?.(this.playerCount);
       void this.refreshLobbyAnnouncement();
     }
-    if (!this.room?.isHost && event.type === 'join') {
-      this.sendGuestIdentity();
+    if (!this.room?.isHost && (event.type === 'join' || event.type === 'reconnecting')) {
+      this.restartGuestHandshake();
       this.requestSnapshot();
       this.restartLocalLoadoutSync();
     }
@@ -517,10 +531,12 @@ export class NetworkLayer {
     if (!message || typeof message !== 'object') return;
     const msg = message as Record<string, unknown>;
     if (msg.type === 'state' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       this.onStateReceived?.(msg.state);
       return;
     }
     if (msg.type === 'seat' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       const player = Number(msg.player);
       if (Number.isInteger(player) && player >= 1 && player < MAX_ROOM_PLAYERS) {
         const seatChanged = this.playerIndex !== player;
@@ -532,7 +548,28 @@ export class NetworkLayer {
       }
       return;
     }
+    if (msg.type === 'identityAck' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
+      const player = Number(msg.player);
+      const userId = typeof msg.userId === 'string' ? msg.userId : '';
+      if (
+        Number.isInteger(player) &&
+        player >= 1 &&
+        player < MAX_ROOM_PLAYERS &&
+        userId === this.api?.user?.id
+      ) {
+        const seatChanged = this.playerIndex !== player;
+        this.playerIndex = player;
+        if (this.api?.user) this.rememberSeatUser(player, this.api.user);
+        this.localIdentityConfirmed = true;
+        this.stopIdentityRetry();
+        if (seatChanged || !this.localLoadoutConfirmed) this.restartLocalLoadoutSync();
+        this.onRoomUpdate?.(this.playerCount);
+      }
+      return;
+    }
     if (msg.type === 'loadoutAck' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       const requestId = typeof msg.requestId === 'string' ? msg.requestId : '';
       const userId = typeof msg.userId === 'string' ? msg.userId : '';
       if (
@@ -551,6 +588,7 @@ export class NetworkLayer {
       return;
     }
     if (msg.type === 'loadoutRejected' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       if (this.pendingLoadout?.requestId === msg.requestId) {
         this.localLoadoutError =
           typeof msg.reason === 'string' ? msg.reason : '房主拒绝了无效的出战构筑';
@@ -559,6 +597,7 @@ export class NetworkLayer {
       return;
     }
     if (msg.type === 'gameStart' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       const count = Number(msg.playerCount);
       if (Number.isInteger(count) && count >= MIN_ROOM_PLAYERS && count <= MAX_ROOM_PLAYERS) {
         this.gameStarted = true;
@@ -567,6 +606,7 @@ export class NetworkLayer {
       return;
     }
     if (msg.type === 'roomState' && !this.room?.isHost) {
+      if (!this.isMessageFromHost(fromId)) return;
       const count = Number(msg.playerCount);
       if (Number.isInteger(count) && count >= 1 && count <= MAX_ROOM_PLAYERS) {
         this.playerCount = count;
@@ -613,6 +653,15 @@ export class NetworkLayer {
         if (this.playerIndex >= 1 && this.api?.user && !this.seatUsers.has(this.playerIndex)) {
           this.rememberSeatUser(this.playerIndex, this.api.user);
         }
+        const localUserId = this.api?.user?.id;
+        const localIdentity = localUserId
+          ? [...this.seatUsers.values()].find((identity) => identity.id === localUserId)
+          : undefined;
+        if (localIdentity && localIdentity.seat >= 1) {
+          this.playerIndex = localIdentity.seat;
+          this.localIdentityConfirmed = true;
+          this.stopIdentityRetry();
+        }
         this.onRoomUpdate?.(count);
       }
       return;
@@ -623,10 +672,25 @@ export class NetworkLayer {
       if (!user) return;
       // hello 可能早于 onPeer(join) 或 peers() 列表更新；先缓存，座位建立后再绑定。
       this.peerUsers.set(fromId, user);
-      this.assignSeat(fromId);
+      if (this.gameStarted) {
+        const reconnectSeat = [...this.seatUsers.values()].find(
+          (identity) => !identity.isBot && identity.id === user.id && identity.seat > 0
+        )?.seat;
+        if (reconnectSeat !== undefined) {
+          const stalePeer = this.seatPeers.get(reconnectSeat);
+          if (stalePeer) this.peerSeats.delete(stalePeer);
+          this.peerSeats.set(fromId, reconnectSeat);
+          this.seatPeers.set(reconnectSeat, fromId);
+        } else {
+          this.assignSeat(fromId);
+        }
+      } else {
+        this.assignSeat(fromId);
+      }
       const player = this.peerSeats.get(fromId);
       if (player !== undefined) {
         this.rememberSeatUser(player, user);
+        this.room.send({ type: 'identityAck', player, userId: user.id }, fromId);
         this.broadcastRoomState();
         this.onRoomUpdate?.(this.playerCount);
       }
@@ -761,10 +825,35 @@ export class NetworkLayer {
     this.loadoutRetryTimer = null;
   }
 
+  private restartGuestHandshake(): void {
+    if (!this.room || this.room.isHost) return;
+    this.localIdentityConfirmed = false;
+    this.sendGuestIdentity();
+    if (this.identityRetryTimer !== null) return;
+    this.identityRetryTimer = globalThis.setInterval(() => {
+      if (this.localIdentityConfirmed) {
+        this.stopIdentityRetry();
+        return;
+      }
+      this.sendGuestIdentity();
+    }, IDENTITY_RETRY_MS);
+  }
+
+  private stopIdentityRetry(): void {
+    if (this.identityRetryTimer === null) return;
+    globalThis.clearInterval(this.identityRetryTimer);
+    this.identityRetryTimer = null;
+  }
+
+  private isMessageFromHost(fromId: string): boolean {
+    return Boolean(this.room?.hostId && fromId === this.room.hostId);
+  }
+
   leaveRoom(): void {
-    this.stopLoadoutRetry();
-    this.room?.leave();
+    const room = this.room;
     this.room = null;
+    this.stopLoadoutRetry();
+    this.stopIdentityRetry();
     this.gameStarted = false;
     this.playerCount = 0;
     this.humanCount = 0;
@@ -780,14 +869,32 @@ export class NetworkLayer {
     this.loadoutReadyUserIds.clear();
     this.departedPeerIds.clear();
     this.pendingLoadout = null;
+    this.localIdentityConfirmed = false;
     this.localLoadoutConfirmed = false;
     this.confirmedLoadoutFingerprint = null;
     this.localLoadoutError = null;
+    if (!room) return;
+    if (room.isHost) {
+      // `close()` removes the announced room; only leave the P2P session after
+      // that request settles so a host departure cannot leave a joinable ghost.
+      this.roomShutdownPromise = room
+        .close()
+        .catch((error: unknown) => {
+          console.warn('关闭 VibeHub 房间失败，将继续退出当前连接。', error);
+        })
+        .then(() => {
+          room.leave();
+        });
+      return;
+    }
+    room.leave();
+    this.roomShutdownPromise = Promise.resolve();
   }
 
   async closeRoom(): Promise<void> {
-    if (this.room?.isHost) await this.room.close();
+    if (!this.room) return;
     this.leaveRoom();
+    await this.roomShutdownPromise;
   }
 
   async getSave<T>(keys: string[]): Promise<Record<string, T>> {

@@ -317,6 +317,24 @@ registerEffect({
 });
 
 registerEffect({
+  id: 'doomDealer',
+  name: '厄运司牌者',
+  cost: 10,
+  description: '任意玩家的回合开始时：令所有仍在对局中的敌人各强制抽 2 张 UNO 牌。',
+  kind: 'minion',
+  attack: 7,
+  health: 9,
+  apply: () => {},
+  onAnyTurnStart: (ctx) => {
+    for (let player = 0; player < ctx.state.players.length; player++) {
+      if (player !== ctx.source && ctx.state.players[player]!.active) {
+        ctx.forceUnoDraw(player, 2, '厄运司牌者的任意玩家回合开始效果');
+      }
+    }
+  },
+});
+
+registerEffect({
   id: 'penaltyBulwark',
   name: '代罚壁垒',
   cost: 5,
@@ -610,8 +628,8 @@ registerEffect({
   id: 'unoAnnihilation',
   name: 'UNO 湮灭',
   cost: 7,
-  description: '拥有至少 5 张 UNO 时选择并弃掉 5 张；不足 5 张时无需选择，直接弃掉全部。',
-  targeting: { type: 'ownUnoCards', count: 5, useAllWhenShort: true },
+  description: '拥有超过 5 张 UNO 时选择并弃掉 5 张；5 张及以下无需选择，直接弃掉全部。',
+  targeting: { type: 'ownUnoCards', count: 5, useAllWhenAtMostCount: true },
   apply: (ctx) => discardSelectedUno(ctx, 'UNO 湮灭'),
 });
 

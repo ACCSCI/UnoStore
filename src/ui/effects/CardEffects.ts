@@ -56,6 +56,7 @@ export const CARD_PRESENTATION: Record<string, CardPresentation> = {
   spyglassOracle: { visual: 'arcane', sound: 'arcane' },
   ashPhoenix: { visual: 'fire', sound: 'fire' },
   calamityDealer: { visual: 'shadow', sound: 'shadow' },
+  doomDealer: { visual: 'shadow', sound: 'draw' },
   penaltyBulwark: { visual: 'shield', sound: 'shield' },
   formationCommander: { visual: 'arcane', sound: 'impact' },
   voidGambler: { visual: 'shadow', sound: 'shadow' },

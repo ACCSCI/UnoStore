@@ -130,6 +130,10 @@ export class TableCenterRenderer {
       : null;
   }
 
+  displayedCard(): UnoCard | null {
+    return this.displayCard;
+  }
+
   dispose(): void {
     if (this.deckTopMesh) {
       this.deckTopMesh.geometry.dispose();

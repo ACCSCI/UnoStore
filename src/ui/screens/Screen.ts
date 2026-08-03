@@ -5,6 +5,8 @@
  * UI 只处理菜单/对话/按钮，3D 场景由 GameView 独立驱动。
  */
 
+import { audio } from '../audio/AudioManager';
+
 export interface ScreenOptions {
   /** 屏幕根容器 id（默认 #app） */
   rootId?: string;
@@ -27,7 +29,12 @@ export abstract class Screen {
     Screen.active = this;
     // 先挂载横屏提示，避免异步加载期间短暂露出不可用的竖屏界面。
     this.root.replaceChildren(this.createOrientationGuard());
-    await this.render();
+    this.root.setAttribute('aria-busy', 'true');
+    try {
+      await this.render();
+    } finally {
+      if (Screen.active === this) this.root.setAttribute('aria-busy', 'false');
+    }
     if (Screen.active === this && !this.root.querySelector(':scope > .mobile-orientation-guard')) {
       this.root.append(this.createOrientationGuard());
     }
@@ -37,6 +44,9 @@ export abstract class Screen {
 
   /** 离开屏幕（清理事件监听等） */
   exit(): void {
+    // SFX, speech, decoded one-shots and ambience belong to a Screen lifetime.
+    // BGM is managed separately so menu music may intentionally span menus.
+    audio.stopScreenAudio();
     if (Screen.active === this) Screen.active = null;
     this.root.replaceChildren();
   }

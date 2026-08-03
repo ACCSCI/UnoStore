@@ -1,4 +1,4 @@
-import type { MinionState } from '../../game/core/state';
+import { MAX_MINIONS_PER_PLAYER, type MinionState } from '../../game/core/state';
 import { getEffect, minionHasTaunt } from '../../game/hearth/effects/registry';
 import { assetUrl } from '../assets/url';
 
@@ -9,8 +9,11 @@ interface MinionBoardCallbacks {
   onAttackMinion: (minionId: string) => void;
   onHoverMinion: (minion: MinionState | null) => void;
   onPreviewMinion: (minion: MinionState) => void;
-  /** 放置位置系统：玩家点击某个槽位，以该索引放置当前选中的随从牌。 */
-  onPlaceAt: (index: number) => void;
+}
+
+/** 指针越过几个随从中心，就插入到第几个位置。 */
+export function minionInsertionIndex(pointerX: number, minionCenters: number[]): number {
+  return minionCenters.filter((center) => pointerX >= center).length;
 }
 
 type SeatAnchorResolver = (seat: number, playerCount: number) => { x: number; y: number };
@@ -18,15 +21,19 @@ type SeatAnchorResolver = (seat: number, playerCount: number) => { x: number; y:
 /** DOM 战场层：原生按钮负责选择己方随从和攻击目标，状态仍完全来自规则引擎。 */
 export class MinionBoardRenderer {
   private readonly root: HTMLDivElement;
+  private readonly queryRoot: ParentNode;
   private readonly enemyLayer: HTMLDivElement;
   private readonly playerRow: HTMLDivElement;
   private readonly minionButtons = new Map<string, HTMLButtonElement>();
+  private placementPreview: HTMLSpanElement | null = null;
+  private placementIndex: number | null = null;
 
   constructor(
     host: HTMLElement,
     private readonly callbacks: MinionBoardCallbacks,
     private readonly resolveSeatAnchor: SeatAnchorResolver
   ) {
+    this.queryRoot = host.parentElement ?? host;
     this.root = document.createElement('div');
     this.root.className = 'minion-board';
     this.root.setAttribute('aria-label', '随从战场');
@@ -45,12 +52,11 @@ export class MinionBoardRenderer {
     selectedAttackerId: string | null,
     canAct: boolean,
     playerCount: number,
-    spellTargetSide: SpellTargetSide = null,
-    placementMode = false
+    spellTargetSide: SpellTargetSide = null
   ): void {
+    this.clearPlacementPreview();
     this.callbacks.onHoverMinion(null);
     this.root.dataset.playerCount = String(playerCount);
-    this.root.dataset.placement = String(placementMode);
     this.minionButtons.clear();
     this.renderEnemyZones(enemyBoard, selectedAttackerId, canAct, spellTargetSide, playerCount);
     const playerAnchor = this.resolveSeatAnchor(0, playerCount);
@@ -63,9 +69,69 @@ export class MinionBoardRenderer {
       selectedAttackerId,
       canAct,
       spellTargetSide,
-      false,
-      placementMode
+      false
     );
+  }
+
+  /** 拿起随从牌后，按指针横向位置预览插入点；幽灵随从让两侧自动让位。 */
+  previewPlacement(effectId: string | null, pointerX = 0): void {
+    if (!effectId) {
+      this.clearPlacementPreview();
+      return;
+    }
+    const buttons = this.playerMinionButtons();
+    if (buttons.length >= MAX_MINIONS_PER_PLAYER) {
+      this.clearPlacementPreview();
+      this.root.dataset.placement = 'blocked';
+      return;
+    }
+    const nextIndex = minionInsertionIndex(
+      pointerX,
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.left + rect.width / 2;
+      })
+    );
+    if (this.placementPreview?.dataset.effectId === effectId && this.placementIndex === nextIndex)
+      return;
+
+    const previousRects = new Map(
+      buttons.map((button) => [button, button.getBoundingClientRect()] as const)
+    );
+    const preview = this.placementPreview ?? document.createElement('span');
+    preview.className = 'board-placement-preview';
+    preview.dataset.effectId = effectId;
+    preview.setAttribute('aria-hidden', 'true');
+    preview.innerHTML = `<img src="${assetUrl(`/assets/images/hearth/${encodeURIComponent(effectId)}.webp`)}" alt=""><span>＋</span>`;
+    this.playerRow.insertBefore(preview, buttons[nextIndex] ?? null);
+    this.placementPreview = preview;
+    this.placementIndex = nextIndex;
+    this.root.dataset.placement = 'preview';
+    this.playerRow.dataset.placement = 'preview';
+    this.animatePlacementShift(previousRects);
+  }
+
+  placementIndexAt(pointerX: number): number {
+    return minionInsertionIndex(
+      pointerX,
+      this.playerMinionButtons().map((button) => {
+        const rect = button.getBoundingClientRect();
+        return rect.left + rect.width / 2;
+      })
+    );
+  }
+
+  clearPlacementPreview(): void {
+    const buttons = this.playerMinionButtons();
+    const previousRects = this.placementPreview
+      ? new Map(buttons.map((button) => [button, button.getBoundingClientRect()] as const))
+      : null;
+    this.placementPreview?.remove();
+    this.placementPreview = null;
+    this.placementIndex = null;
+    delete this.root.dataset.placement;
+    delete this.playerRow.dataset.placement;
+    if (previousRects) this.animatePlacementShift(previousRects);
   }
 
   layout(playerCount: number): void {
@@ -82,6 +148,7 @@ export class MinionBoardRenderer {
   }
 
   remove(): void {
+    this.clearPlacementPreview();
     this.callbacks.onHoverMinion(null);
     this.root.remove();
   }
@@ -98,11 +165,10 @@ export class MinionBoardRenderer {
     if (!attacker) return;
     const target = targetMinionId
       ? this.minionButtons.get(targetMinionId)
-      : document.querySelector<HTMLElement>(
-          targetPlayer === 1
-            ? '.opponent-hero'
-            : `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`
-        );
+      : (this.queryRoot.querySelector<HTMLElement>(
+          `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`
+        ) ??
+        (targetPlayer === 1 ? this.queryRoot.querySelector<HTMLElement>('.opponent-hero') : null));
     if (!target) return;
     const from = attacker.getBoundingClientRect();
     const to = target.getBoundingClientRect();
@@ -190,7 +256,7 @@ export class MinionBoardRenderer {
       );
       const ownerChip = document.createElement('span');
       ownerChip.className = 'minion-owner-chip';
-      ownerChip.textContent = `AI ${owner}`;
+      ownerChip.textContent = `玩家 ${owner}`;
       ownerChip.setAttribute('aria-hidden', 'true');
       row.appendChild(ownerChip);
       this.enemyLayer.appendChild(row);
@@ -204,18 +270,12 @@ export class MinionBoardRenderer {
     selectedAttackerId: string | null,
     canAct: boolean,
     spellTargetSide: SpellTargetSide,
-    attackRequiresTaunt = false,
-    placementMode = false
+    attackRequiresTaunt = false
   ): void {
     row.replaceChildren();
     // 正在选择攻击者/法术目标时，抑制详情面板（会遮挡战场）
     const suppressDetails = Boolean(selectedAttackerId) || Boolean(spellTargetSide);
-    for (let index = 0; index <= minions.length; index++) {
-      if (side === 'player' && placementMode) {
-        row.appendChild(this.buildPlacementSlot(index, minions.length));
-      }
-      const minion = minions[index];
-      if (!minion) continue;
+    for (const minion of minions) {
       const effect = getEffect(minion.effectId);
       const legalAttackTarget = !attackRequiresTaunt || minionHasTaunt(minion);
       const legalSpellTarget =
@@ -232,18 +292,13 @@ export class MinionBoardRenderer {
         legalSpellTarget || (side === 'enemy' && Boolean(selectedAttackerId) && legalAttackTarget)
       );
       button.classList.toggle('exhausted', minion.exhausted);
-      button.classList.toggle(
-        'actionable',
-        !placementMode && side === 'player' && canAct && !minion.exhausted
-      );
+      button.classList.toggle('actionable', side === 'player' && canAct && !minion.exhausted);
       button.classList.toggle('taunt', minionHasTaunt(minion));
-      const actionable = placementMode
-        ? false
-        : spellTargetSide
-          ? canAct && legalSpellTarget
-          : side === 'player'
-            ? canAct && !minion.exhausted
-            : canAct && selectedAttackerId !== null && legalAttackTarget;
+      const actionable = spellTargetSide
+        ? canAct && legalSpellTarget
+        : side === 'player'
+          ? canAct && !minion.exhausted
+          : canAct && selectedAttackerId !== null && legalAttackTarget;
       button.setAttribute('aria-disabled', String(!actionable));
       const name = effect?.name ?? '未知随从';
       const status = minion.exhausted && side === 'player' ? '，休眠中' : '';
@@ -283,19 +338,23 @@ export class MinionBoardRenderer {
     }
   }
 
-  /** 放置槽位：随从牌选中后出现在己方随从行之间，点击即在该索引放置。 */
-  private buildPlacementSlot(index: number, total: number): HTMLButtonElement {
-    const slot = document.createElement('button');
-    slot.type = 'button';
-    slot.className = 'board-slot';
-    slot.textContent = index === total ? '＋ 末尾' : `＋ ${index + 1}`;
-    slot.setAttribute(
-      'aria-label',
-      index === total
-        ? `放置到战场末尾（第 ${total + 1} 位）`
-        : `插入到第 ${index + 1} 位（在现有随从之间）`
+  private playerMinionButtons(): HTMLButtonElement[] {
+    return [...this.playerRow.children].filter(
+      (child): child is HTMLButtonElement =>
+        child instanceof HTMLButtonElement && child.classList.contains('board-minion')
     );
-    slot.addEventListener('click', () => this.callbacks.onPlaceAt(index));
-    return slot;
+  }
+
+  private animatePlacementShift(previousRects: Map<HTMLButtonElement, DOMRect>): void {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    for (const [button, previous] of previousRects) {
+      const next = button.getBoundingClientRect();
+      const deltaX = previous.left - next.left;
+      if (Math.abs(deltaX) < 1) continue;
+      button.animate([{ transform: `translateX(${deltaX}px)` }, { transform: 'translateX(0)' }], {
+        duration: 150,
+        easing: 'cubic-bezier(.2,.8,.2,1)',
+      });
+    }
   }
 }

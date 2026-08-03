@@ -28,6 +28,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import {
   type ActivityEntry,
@@ -42,6 +43,7 @@ import {
   pendingDrawHandCountDelta,
   renderHandCountLabel,
 } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -85,6 +87,7 @@ interface MultiplayerSnapshot {
   playableIds: string[];
   readyMinionIds: string[];
   heroPowerUsable: boolean;
+  canEndTurn: boolean;
   heroPowerCost: number;
   heroPowerReason: string | null;
   mustResolveRoulette: boolean;
@@ -115,6 +118,7 @@ interface HearthSelection {
   effectId: string;
   selectedCardIds: Set<string>;
   selectedPlayerIds: Set<number>;
+  position?: number;
 }
 
 /** 房主权威多人战；规则只在房主结算，所有客户端本地重放同一公开事件流。 */
@@ -187,11 +191,10 @@ export class MultiplayerBattleScreen extends Screen {
     this.root.append(canvasHost);
     this.view = new GameView(canvasHost);
     this.view.bindCallbacks({
-      onCardClick: (id, isHearth) => void this.onCardClicked(id, isHearth),
+      onCardClick: (id, isHearth, position) => void this.onCardClicked(id, isHearth, position),
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
-      onPlaceAt: (index) => this.placeMinion(index),
       onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
       onCancelGameplaySelection: () => this.cancelTargeting(),
     });
@@ -583,6 +586,7 @@ export class MultiplayerBattleScreen extends Screen {
       playableIds,
       readyMinionIds: capabilities.readyMinionIds,
       heroPowerUsable: capabilities.heroPowerUsable,
+      canEndTurn: capabilities.canEndTurn,
       heroPowerCost: heroPowerCost(this.hostState, player),
       heroPowerReason: capabilities.heroPowerUsable
         ? null
@@ -788,7 +792,18 @@ export class MultiplayerBattleScreen extends Screen {
     if (selection) selectedCardIds.add(selection.cardId);
     if (this.unoTargetCardId) selectedCardIds.add(this.unoTargetCardId);
     for (const id of this.heroUnoSelection ?? []) selectedCardIds.add(id);
-    this.view?.syncHand(snapshot.mine.hand, snapshot.mine.hearthHand, playable, selectedCardIds);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(
+      snapshot.mine.hand,
+      snapshot.mine.hearthHand,
+      playable,
+      selectedCardIds,
+      handInteractionMode
+    );
     this.view?.syncTable(snapshot.deckCount, snapshot.topCard, snapshot.chosenColor);
     // 圆桌席位已经按实际手牌数渲染牌背，不再保留旧的正前方重复手牌。
     this.view?.syncOpponentHand(0);
@@ -800,25 +815,21 @@ export class MultiplayerBattleScreen extends Screen {
             owner: this.visualSeat(index, snapshot),
           }))
     );
-    // 罚抽链中随从不能攻击，不高亮；选中随从牌时进入放置模式
-    const canAct =
+    // 罚抽链中随从不能攻击，不高亮。
+    const canUseBoardActions =
       snapshot.turn === snapshot.viewer &&
       snapshot.phase !== 'gameOver' &&
       mine.active &&
       !this.actionAnimating &&
       !snapshot.mustResolveRoulette &&
-      mine.pendingDraw <= 0;
-    const placementMode = Boolean(
-      this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'
-    );
+      snapshot.mine.pendingDrawMin <= 0;
     this.view?.syncMinions(
       mine.board,
       enemies,
       this.selectedAttackerId,
-      canAct,
+      canUseBoardActions,
       snapshot.players.length,
-      targeting?.type === 'minion' ? targeting.side : null,
-      placementMode
+      targeting?.type === 'minion' ? targeting.side : null
     );
     const hasAnyAction =
       snapshot.playableIds.length > 0 ||
@@ -831,18 +842,19 @@ export class MultiplayerBattleScreen extends Screen {
         this.heroTargetSelection ||
         this.heroUnoSelection
     );
-    const shouldPromptEnd = canAct && !hasAnyAction && !hasPendingSelection;
-    this.view?.setActionEnabled(0, canAct);
+    const canEndTurn = snapshot.canEndTurn && !this.actionAnimating;
+    const shouldPromptEnd = canEndTurn && !hasAnyAction && !hasPendingSelection;
+    this.view?.setActionEnabled(0, canEndTurn);
     this.view?.setActionAttention(0, shouldPromptEnd);
     this.view?.setActionHint(
       0,
       snapshot.mustResolveRoulette
         ? '请先结算颜色轮盘'
-        : canAct && mine.pendingDraw > 0
+        : canEndTurn && snapshot.mine.pendingDrawMin > 0
           ? snapshot.playableIds.length > 0
             ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
             : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
-          : canAct
+          : canEndTurn
             ? '结束回合并结算补牌'
             : `等待玩家 ${snapshot.turn + 1}`
     );
@@ -867,7 +879,9 @@ export class MultiplayerBattleScreen extends Screen {
             this.hearthSelection?.selectedPlayerIds.has(snapshot.viewer)
         )
       );
-      this.playerHeroPortraitEl.setAttribute('aria-disabled', String(!ownTargetable));
+      // The portrait always opens hero emotes even when it is not a legal
+      // gameplay target, so it must remain an actionable pointer—not forbidden.
+      this.playerHeroPortraitEl.setAttribute('aria-disabled', 'false');
     }
     if (this.playerCrystalEl) this.playerCrystalEl.textContent = String(mine.free);
     if (this.playerFrozenEl) this.playerFrozenEl.textContent = String(mine.frozen);
@@ -919,13 +933,13 @@ export class MultiplayerBattleScreen extends Screen {
       this.routeEl.replaceChildren(directionEl, current, arrow, next);
       this.routeEl.dataset.direction = String(snapshot.direction);
     }
-    this.renderBattleStatus(snapshot, canAct);
+    this.renderBattleStatus(snapshot, canEndTurn);
     this.scheduleWorkDone(snapshot, shouldPromptEnd);
     this.refreshPersistentNotice(snapshot);
     this.refreshTurnTimer();
   }
 
-  private renderBattleStatus(snapshot: MultiplayerSnapshot, canAct: boolean): void {
+  private renderBattleStatus(snapshot: MultiplayerSnapshot, canEndTurn: boolean): void {
     if (!this.statusEl) return;
     if (snapshot.error) {
       this.setStatus(snapshot.error, true);
@@ -936,10 +950,10 @@ export class MultiplayerBattleScreen extends Screen {
     const colorLabel = activeColor ? COLOR_NAMES[activeColor] : '四色';
     const turn = this.el(
       'span',
-      `turn-tag ${canAct ? 'mine' : 'opponent'}`,
+      `turn-tag ${canEndTurn ? 'mine' : 'opponent'}`,
       snapshot.mustResolveRoulette
         ? `颜色轮盘：由你为玩家 ${(snapshot.mine.rouletteDrawer ?? 0) + 1} 选色`
-        : canAct
+        : canEndTurn
           ? '你的回合'
           : `${snapshot.players[snapshot.turn]?.userName ?? `玩家 ${snapshot.turn + 1}`} 思考中`
     );
@@ -995,6 +1009,7 @@ export class MultiplayerBattleScreen extends Screen {
         this.actionAnimating ||
         latest.turnSerial !== scheduledTurn ||
         latest.turn !== latest.viewer ||
+        !latest.canEndTurn ||
         latest.playableIds.length > 0 ||
         latest.readyMinionIds.length > 0 ||
         latest.heroPowerUsable ||
@@ -1085,6 +1100,7 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderRoster(snapshot: MultiplayerSnapshot): void {
     if (!this.rosterEl) return;
+    clearHeroDetailHover();
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
     snapshot.players.forEach((player, index) => {
@@ -1112,12 +1128,23 @@ export class MultiplayerBattleScreen extends Screen {
         'aria-label',
         `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}`
       );
-      if (targetable) {
-        target.tabIndex = 0;
-      } else {
-        target.tabIndex = -1;
-      }
       const hero = getHero(player.heroId);
+      target.tabIndex = targetable || index !== snapshot.viewer ? 0 : -1;
+      if (index !== snapshot.viewer) {
+        const currentCost = Math.max(
+          0,
+          hero.powerCost -
+            player.board.reduce(
+              (total, minion) => total + (getEffect(minion.effectId)?.heroPowerCostReduction ?? 0),
+              0
+            )
+        );
+        target.setAttribute(
+          'aria-label',
+          `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}，${hero.name}，技能${hero.powerName}，${currentCost}费；悬停查看说明`
+        );
+        attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+      }
       const heroPortrait = new Image();
       heroPortrait.src = assetUrl(hero.portrait);
       heroPortrait.alt = '';
@@ -1212,7 +1239,7 @@ export class MultiplayerBattleScreen extends Screen {
     );
   }
 
-  private async onCardClicked(id: string, isHearth: boolean): Promise<void> {
+  private async onCardClicked(id: string, isHearth: boolean, position?: number): Promise<void> {
     const snapshot = this.snapshot;
     if (!snapshot || this.actionAnimating || snapshot.turn !== snapshot.viewer) return;
     if (this.heroUnoSelection) {
@@ -1256,7 +1283,7 @@ export class MultiplayerBattleScreen extends Screen {
           targeting.type === 'ownUnoCards' &&
           requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length) === 0
         ) {
-          this.sendAction({ type: 'playHearth', cardId: id });
+          this.sendAction({ type: 'playHearth', cardId: id, position });
           return;
         }
         this.selectedAttackerId = null;
@@ -1267,31 +1294,17 @@ export class MultiplayerBattleScreen extends Screen {
           effectId: card.effectId,
           selectedCardIds: new Set(),
           selectedPlayerIds: new Set(),
+          ...(effect.kind === 'minion' && position !== undefined ? { position } : {}),
         };
         this.renderSnapshot(snapshot);
         return;
       }
       if (effect.requiresColor) {
         const color = await pickColor(this.root, { title: `${effect.name}：选择颜色` });
-        if (color) this.sendAction({ type: 'playHearth', cardId: id, color });
+        if (color) this.sendAction({ type: 'playHearth', cardId: id, color, position });
         return;
       }
-      if (effect.kind === 'minion') {
-        // 随从牌：进入放置模式，点击战场上的 ＋ 槽位选择精确位置
-        this.selectedAttackerId = null;
-        this.heroTargetSelection = null;
-        this.unoTargetCardId = null;
-        this.hearthSelection = {
-          cardId: id,
-          effectId: card.effectId,
-          selectedCardIds: new Set(),
-          selectedPlayerIds: new Set(),
-        };
-        this.renderSnapshot(snapshot);
-        this.setStatus(`已选 ${effect.name}：点击战场上的 ＋ 槽位选择放置位置`);
-        return;
-      }
-      this.sendAction({ type: 'playHearth', cardId: id });
+      this.sendAction({ type: 'playHearth', cardId: id, position });
       return;
     }
     if (!snapshot.playableIds.includes(id)) return;
@@ -1350,6 +1363,7 @@ export class MultiplayerBattleScreen extends Screen {
           type: 'playHearth',
           cardId: this.hearthSelection.cardId,
           targetMinionId,
+          position: this.hearthSelection.position,
         });
         this.cancelTargeting(false);
       }
@@ -1415,6 +1429,7 @@ export class MultiplayerBattleScreen extends Screen {
       cardId: this.hearthSelection.cardId,
       targets: [player],
       cardIds: [...this.hearthSelection.selectedCardIds],
+      position: this.hearthSelection.position,
     });
     this.cancelTargeting(false);
   }
@@ -1488,6 +1503,7 @@ export class MultiplayerBattleScreen extends Screen {
               type: 'playHearth',
               cardId: this.hearthSelection!.cardId,
               unoCardIds: [...this.hearthSelection!.selectedCardIds],
+              position: this.hearthSelection!.position,
             });
             this.cancelTargeting(false);
           })
@@ -1514,6 +1530,7 @@ export class MultiplayerBattleScreen extends Screen {
             type: 'playHearth',
             cardId: this.hearthSelection!.cardId,
             targets: [...this.hearthSelection!.selectedPlayerIds],
+            position: this.hearthSelection!.position,
           });
           this.cancelTargeting(false);
         });
@@ -1530,14 +1547,6 @@ export class MultiplayerBattleScreen extends Screen {
       this.targetingHudEl.append(this.btn('取消', () => this.cancelTargeting()));
     }
     this.targetingHudEl.classList.add('visible');
-  }
-
-  /** 放置位置系统：点击槽位，以该索引放置当前选中的随从牌。 */
-  private placeMinion(index: number): void {
-    if (!(this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'))
-      return;
-    this.sendAction({ type: 'playHearth', cardId: this.hearthSelection.cardId, position: index });
-    this.cancelTargeting(false);
   }
 
   private cancelTargeting(announce = true): boolean {
@@ -1649,7 +1658,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = unoPresentation(event.card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         if (!(event.penaltyAdded ?? 0)) audio.playSfx(soundAsset(presentation.sound), 0.55);
-        await this.view.playCardAnimation(source, snapshot.players.length);
+        await this.view.playCardAnimation(source, snapshot.players.length, {
+          kind: 'uno',
+          card: event.card,
+        });
         if ((event.penaltyAdded ?? 0) > 0 && event.penaltyTarget !== undefined) {
           const target = this.visualSeat(event.penaltyTarget, snapshot);
           if ((event.penaltyTransferred ?? 0) > 0)
@@ -1678,7 +1690,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
-        await this.view.playCardAnimation(source, snapshot.players.length);
+        await this.view.playCardAnimation(source, snapshot.players.length, {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const targetGlobal =
             event.targets?.[0] ??
@@ -1711,7 +1726,11 @@ export class MultiplayerBattleScreen extends Screen {
         );
         await this.view.playHeroPowerAnimation(event.heroId, source, snapshot.players.length);
       } else if (event.type === 'unoAlert') {
-        audio.playSfx('/assets/audio/sfx/uno_cheer.mp3', 1);
+        void audio.playSfxClip('/assets/audio/sfx/uno_cheer.mp3', 0.92, {
+          durationMs: 1250,
+          fadeInMs: 45,
+          fadeOutMs: 260,
+        });
         await this.view.animationPause(180);
       } else if (event.type === 'minionSummoned') {
         audio.playSfx(`/assets/audio/voice/minions/${event.effectId}_summon.mp3`, 0.95);
@@ -2070,6 +2089,7 @@ export class MultiplayerBattleScreen extends Screen {
       Number.isInteger(candidate.turnSerial) &&
       Number.isInteger(candidate.viewer) &&
       Number.isInteger(candidate.turn) &&
+      typeof candidate.canEndTurn === 'boolean' &&
       Array.isArray(candidate.players) &&
       Boolean(
         candidate.mine &&
@@ -2127,6 +2147,7 @@ export class MultiplayerBattleScreen extends Screen {
     document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
     document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     const net = this.transport;
     net.onInputReceived = undefined;

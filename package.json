@@ -11,6 +11,7 @@
     "test": "bun test tests",
     "check:card-art": "bun run scripts/check-card-art.ts",
     "check:text-selection": "bun run scripts/check-text-selection.ts",
+    "analyze:roulette": "bun run scripts/roulette-ab.ts",
     "optimize:media": "pwsh -NoProfile -File scripts/optimize-media.ps1",
     "replay": "bun run scripts/replay.ts",
     "lint": "biome check .",

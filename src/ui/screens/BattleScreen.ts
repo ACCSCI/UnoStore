@@ -42,6 +42,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
@@ -56,6 +57,7 @@ import {
   pendingDrawHandCountDelta,
   renderHandCountLabel,
 } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -95,6 +97,7 @@ export class BattleScreen extends Screen {
     effectId: string;
     selectedCardIds: Set<string>;
     selectedPlayerIds: Set<number>;
+    position?: number;
   } | null = null;
   private selectedAttackerId: string | null = null;
   private unoTargetCardId: string | null = null;
@@ -144,11 +147,10 @@ export class BattleScreen extends Screen {
     this.view = new GameView(canvasHost);
     // 注入 3D 交互回调
     this.view.bindCallbacks({
-      onCardClick: (id, isHearth) => this.onCardClicked(id, isHearth),
+      onCardClick: (id, isHearth, position) => this.onCardClicked(id, isHearth, position),
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
-      onPlaceAt: (index) => this.placeMinion(index),
       onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
       onCancelGameplaySelection: () => this.cancelTargeting(),
     });
@@ -196,6 +198,15 @@ export class BattleScreen extends Screen {
     this.opponentCardsEl = this.el('span', 'hero-counter', 'UNO 5 · 炉石 3 · 💎 0');
     this.opponentCardsEl.title = '对手 UNO、炉石手牌数量与可用水晶';
     opponentCard.append(opponentPortrait, opponentCopy, this.opponentCardsEl);
+    opponentCard.setAttribute('aria-label', `${this.match.opponentName}的英雄卡；悬停查看英雄技能`);
+    attachHeroDetailHover(opponentCard, () => {
+      const state = this.session?.state;
+      const opponentHero = getHero(state?.players[1]?.heroId ?? 'thug');
+      return {
+        hero: opponentHero,
+        cost: state ? heroPowerCost(state, 1) : opponentHero.powerCost,
+      };
+    });
     this.root.appendChild(opponentCard);
 
     const hero = getHero(this.heroId);
@@ -342,6 +353,7 @@ export class BattleScreen extends Screen {
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     audio.stopTavernAmbience();
     audio.stopMusic();
@@ -399,12 +411,12 @@ export class BattleScreen extends Screen {
     for (const event of events) {
       this.applyAnimationHandDeltas(event);
       if (event.type === 'unoPlayed') {
-        const card = this.session?.state.unoDiscard.find((entry) => entry.id === event.cardId);
-        const presentation = unoPresentation(card?.value ?? 'number');
+        const card = event.card;
+        const presentation = unoPresentation(card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         const penaltyCount = event.penaltyAdded ?? 0;
         if (penaltyCount === 0) audio.playSfx(soundAsset(presentation.sound), 0.4);
-        await this.view.playCardAnimation(event.player, this.playerCount);
+        await this.view.playCardAnimation(event.player, this.playerCount, { kind: 'uno', card });
         if (penaltyCount > 0) {
           const target = event.penaltyTarget ?? nextActiveFrom(this.session!.state, event.player);
           if ((event.penaltyTransferred ?? 0) > 0) {
@@ -418,7 +430,7 @@ export class BattleScreen extends Screen {
           }
           audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.72);
           await this.view.playPenaltyDealAnimation(target, penaltyCount, this.playerCount);
-        } else if (card && !/^\d$/.test(card.value)) {
+        } else if (!/^\d$/.test(card.value)) {
           await this.view.playCardEffectAnimation(
             presentation.visual,
             event.player,
@@ -431,7 +443,10 @@ export class BattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.6);
-        await this.view.playCardAnimation(event.player, this.playerCount);
+        await this.view.playCardAnimation(event.player, this.playerCount, {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const minionOwner = event.targetMinionId
             ? this.session?.state.players.findIndex((player) =>
@@ -473,7 +488,11 @@ export class BattleScreen extends Screen {
         this.view.playHeroEmoteAnimation(event.player, event.emoteId, 4200);
         await this.showHeroEmote(event.player, event.text);
       } else if (event.type === 'unoAlert') {
-        audio.playSfx('/assets/audio/sfx/uno_cheer.mp3', 1);
+        void audio.playSfxClip('/assets/audio/sfx/uno_cheer.mp3', 0.92, {
+          durationMs: 1250,
+          fadeInMs: 45,
+          fadeOutMs: 260,
+        });
         await this.view.animationPause(180);
       } else if (event.type === 'minionSummoned') {
         this.playMinionVoice(event.effectId, 'summon');
@@ -706,7 +725,7 @@ export class BattleScreen extends Screen {
   }
 
   /** 3D 卡牌点击：Uno 出牌 / 炉石出牌 */
-  private onCardClicked(id: string, isHearth: boolean): void {
+  private onCardClicked(id: string, isHearth: boolean, position?: number): void {
     if (this.session?.phase !== 'playing' || this.actionAnimating) return;
     if (this.session.state.turn !== 0) return;
     if (this.heroUnoSelection) {
@@ -757,7 +776,7 @@ export class BattleScreen extends Screen {
           ? requiredOwnUnoCardCount(targeting, this.session.state.players[0]!.hand.length)
           : null;
       if (targeting?.type === 'ownUnoCards' && ownUnoTargetCount === 0) {
-        this.playHearthCard(id);
+        this.playHearthCard(id, undefined, undefined, undefined, position);
         return;
       }
       if (targeting) {
@@ -773,6 +792,7 @@ export class BattleScreen extends Screen {
           effectId: card.effectId,
           selectedCardIds: new Set(),
           selectedPlayerIds: new Set(),
+          ...(effect.kind === 'minion' && position !== undefined ? { position } : {}),
         };
         this.refreshUI();
         this.setStatus(
@@ -789,28 +809,11 @@ export class BattleScreen extends Screen {
       } else if (effect.requiresColor) {
         void pickColor(this.root, { title: `${effect.name}：重新指定当前 UNO 颜色` }).then(
           (color) => {
-            if (color) this.playHearthCard(id, undefined, undefined, color);
+            if (color) this.playHearthCard(id, undefined, undefined, color, position);
           }
         );
-      } else if (effect.kind === 'minion') {
-        // 随从牌：进入放置模式，点击战场上的 ＋ 槽位选择精确位置
-        if (this.hearthSelection?.cardId === id) {
-          this.cancelTargeting();
-          return;
-        }
-        this.selectedAttackerId = null;
-        this.unoTargetCardId = null;
-        this.heroTargetSelection = null;
-        this.hearthSelection = {
-          cardId: id,
-          effectId: card.effectId,
-          selectedCardIds: new Set(),
-          selectedPlayerIds: new Set(),
-        };
-        this.refreshUI();
-        this.setStatus(`已选 ${effect.name}：点击战场上的 ＋ 槽位选择放置位置`);
       } else {
-        this.playHearthCard(id);
+        this.playHearthCard(id, undefined, undefined, undefined, position);
       }
       return;
     }
@@ -1070,7 +1073,9 @@ export class BattleScreen extends Screen {
       unoCardIds: this.hearthSelection ? [...this.hearthSelection.selectedCardIds] : undefined,
       cardIds: this.hearthSelection ? [...this.hearthSelection.selectedCardIds] : undefined,
       color,
-      ...(position !== undefined ? { position } : {}),
+      ...((position ?? this.hearthSelection?.position) !== undefined
+        ? { position: position ?? this.hearthSelection?.position }
+        : {}),
     });
     if (r.ok) {
       this.hearthSelection = null;
@@ -1078,13 +1083,6 @@ export class BattleScreen extends Screen {
     } else {
       this.setStatus(`✗ ${r.error}`);
     }
-  }
-
-  /** 放置位置系统：点击槽位，以该索引放置当前选中的随从牌。 */
-  private placeMinion(index: number): void {
-    if (!(this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'))
-      return;
-    this.playHearthCard(this.hearthSelection.cardId, undefined, undefined, undefined, index);
   }
 
   private cancelTargeting(announce = true): boolean {
@@ -1248,7 +1246,12 @@ export class BattleScreen extends Screen {
       for (const id of this.heroUnoSelection) selectedCards.add(id);
       interactionCards = new Set(p.hand.map((card) => card.id));
     }
-    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards, handInteractionMode);
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
     this.view?.syncOpponentHand(opp.hand.length + opp.hearthHand.length);
     const selected = p.board.find(
@@ -1261,10 +1264,6 @@ export class BattleScreen extends Screen {
       : null;
     const targetMinionSide = selectedTargeting?.type === 'minion' ? selectedTargeting.side : null;
     const targetingMinion = Boolean(targetMinionSide);
-    // 选中随从牌 → 进入放置模式：己方随从行显示插入槽位
-    const placementMode = Boolean(
-      this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'
-    );
     this.view?.syncMinions(
       p.board,
       enemyBoard,
@@ -1274,8 +1273,7 @@ export class BattleScreen extends Screen {
         (capabilities.readyMinionIds.length > 0 || targetingMinion) &&
         (!this.hearthSelection || targetingMinion),
       s.players.length,
-      targetMinionSide,
-      placementMode
+      targetMinionSide
     );
     const selectingPlayer = Boolean(
       this.selectedAttackerId ||
@@ -1377,14 +1375,9 @@ export class BattleScreen extends Screen {
       this.playerHeroPowerEl.title = powerError ?? getHero(p.heroId).description;
     }
     // 炉石式单按钮：无牌可出时，结束回合自动抽一张。
-    this.view?.setActionEnabled(
-      0,
-      s.turn === 0 && !p.roulettePending && !s.oraclePending && !this.actionAnimating
-    );
+    this.view?.setActionEnabled(0, capabilities.canEndTurn && !this.actionAnimating);
     const shouldPromptEnd =
-      s.turn === 0 &&
-      !p.roulettePending &&
-      !s.oraclePending &&
+      capabilities.canEndTurn &&
       !this.actionAnimating &&
       !capabilities.hasAnyAction &&
       !this.unoTargetCardId;

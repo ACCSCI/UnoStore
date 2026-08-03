@@ -36,6 +36,7 @@ test('炉石 effect 注册表完整（无效果未知）', () => {
     'graveArchivist',
     'arcaneArchive',
     'calamityDealer',
+    'doomDealer',
     'penaltyBulwark',
     'voidGambler',
     'penitentChampion',
@@ -79,6 +80,7 @@ test('回合触发描述必须明确是拥有者还是任意玩家的回合', ()
     );
   }
   expect(getEffect('calamityDealer')?.description).toMatch(/^你的回合开始时/);
+  expect(getEffect('doomDealer')?.description).toMatch(/^任意玩家的回合开始时/);
   expect(getEffect('voidGambler')?.description).toMatch(/^你的回合结束时/);
 });
 

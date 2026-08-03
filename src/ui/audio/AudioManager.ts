@@ -5,6 +5,7 @@
 
 import { assetUrl } from '../assets/url';
 import type { BattleMusicTier } from './BattleMusicState';
+import { resolveSfxClipEnvelope, type SfxClipEnvelopeOptions } from './SfxClipEnvelope';
 
 type VolumeChannel = 'music' | 'sfx' | 'voice';
 
@@ -45,6 +46,8 @@ class AudioManager {
   private adaptiveRequestedTier: BattleMusicTier | null = null;
   private adaptiveFadeRaf = 0;
   private readonly spatialBuffers = new Map<string, Promise<AudioBuffer>>();
+  private readonly screenAudioStops = new Set<() => void>();
+  private screenAudioGeneration = 0;
   private readonly tavernLoops: SpatialAudioHandle[] = [];
   private readonly tavernTimers = new Set<number>();
   private tavernRequested = false;
@@ -191,6 +194,43 @@ class AudioManager {
     });
   }
 
+  /** Play only the useful opening of a long one-shot, with a click-free envelope. */
+  async playSfxClip(
+    src: string,
+    volume = 0.7,
+    options: SfxClipEnvelopeOptions = {}
+  ): Promise<void> {
+    if (this.muted || !this.userActivated) return;
+    const generation = this.screenAudioGeneration;
+    const context = this.ensureAudioContext();
+    if (context.state === 'suspended') await context.resume().catch(() => {});
+    const resolvedSrc = this.resolveAudioAsset(src);
+    const buffer = await this.loadSpatialBuffer(resolvedSrc).catch(() => null);
+    if (!buffer || generation !== this.screenAudioGeneration) return;
+    const envelope = resolveSfxClipEnvelope(buffer.duration * 1000, options);
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    const isVoice = resolvedSrc.includes('/voice/');
+    const channel = isVoice ? this.volumes.voice * VOICE_MIX_GAIN : this.volumes.sfx;
+    const peak = Math.max(0, Math.min(1.15, volume * channel));
+    const now = context.currentTime;
+    const fadeInEnd = now + envelope.fadeInMs / 1000;
+    const fadeOutStart = now + envelope.fadeOutStartMs / 1000;
+    const end = now + envelope.durationMs / 1000;
+    source.buffer = buffer;
+    gain.gain.setValueAtTime(envelope.fadeInMs > 0 ? 0 : peak, now);
+    if (envelope.fadeInMs > 0) gain.gain.linearRampToValueAtTime(peak, fadeInEnd);
+    gain.gain.setValueAtTime(peak, Math.max(fadeInEnd, fadeOutStart));
+    if (envelope.fadeOutMs > 0) gain.gain.linearRampToValueAtTime(0, end);
+    source.connect(gain).connect(context.destination);
+    source.start(now, 0, envelope.durationMs / 1000);
+    source.stop(end + 0.02);
+    this.trackScreenSource(source, () => {
+      source.disconnect();
+      gain.disconnect();
+    });
+  }
+
   /** Decode once and spatialize at runtime with HRTF distance cues. */
   async playSpatialSfx(
     src: string,
@@ -199,11 +239,12 @@ class AudioManager {
     options: { loop?: boolean; refDistance?: number; maxDistance?: number } = {}
   ): Promise<SpatialAudioHandle | null> {
     if (this.muted || !this.userActivated) return null;
+    const generation = this.screenAudioGeneration;
     const context = this.ensureAudioContext();
     if (context.state === 'suspended') await context.resume().catch(() => {});
     const resolvedSrc = this.resolveAudioAsset(src);
     const buffer = await this.loadSpatialBuffer(resolvedSrc).catch(() => null);
-    if (!buffer) return null;
+    if (!buffer || generation !== this.screenAudioGeneration) return null;
     const source = context.createBufferSource();
     const gain = context.createGain();
     const panner = context.createPanner();
@@ -221,14 +262,16 @@ class AudioManager {
     source.connect(gain).connect(panner).connect(context.destination);
     source.start();
     let disconnected = false;
+    let stop: () => void = () => {};
     const disconnect = (): void => {
       if (disconnected) return;
       disconnected = true;
+      this.screenAudioStops.delete(stop);
       source.disconnect();
       gain.disconnect();
       panner.disconnect();
     };
-    const stop = (): void => {
+    stop = (): void => {
       try {
         source.stop();
       } catch {
@@ -236,8 +279,29 @@ class AudioManager {
       }
       disconnect();
     };
+    this.screenAudioStops.add(stop);
     source.onended = disconnect;
     return { stop, setPosition: (next) => setPannerPosition(panner, next) };
+  }
+
+  /** Stop every non-BGM source owned by the departing Screen. */
+  stopScreenAudio(): void {
+    this.screenAudioGeneration++;
+    this.stopTavernAmbience();
+    this.serverVoiceRequest++;
+    this.serverVoiceHandle?.stop();
+    this.serverVoiceHandle = null;
+    for (const element of this.sfxEls.values()) {
+      element.pause();
+      try {
+        element.currentTime = 0;
+      } catch {
+        /* Metadata may not have loaded yet. */
+      }
+    }
+    for (const stop of [...this.screenAudioStops]) stop();
+    this.screenAudioStops.clear();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }
 
   async startTavernAmbience(): Promise<void> {
@@ -410,8 +474,11 @@ class AudioManager {
     toneGain.gain.exponentialRampToValueAtTime(0.001, now + 0.46);
     oscillator.connect(toneGain).connect(master);
     oscillator.start(now);
-    oscillator.stop(now + 0.48);
+    oscillator.stop(now + 0.56);
 
+    let noise: AudioBufferSourceNode | null = null;
+    let filter: BiquadFilterNode | null = null;
+    let noiseGain: GainNode | null = null;
     if (kind === 'lightning' || kind === 'fire' || kind === 'impact') {
       const buffer = context.createBuffer(
         1,
@@ -420,17 +487,30 @@ class AudioManager {
       );
       const data = buffer.getChannelData(0);
       for (let index = 0; index < data.length; index++) data[index] = Math.random() * 2 - 1;
-      const noise = context.createBufferSource();
+      noise = context.createBufferSource();
       noise.buffer = buffer;
-      const filter = context.createBiquadFilter();
+      filter = context.createBiquadFilter();
       filter.type = kind === 'fire' ? 'lowpass' : 'highpass';
       filter.frequency.value = kind === 'fire' ? 900 : 1700;
-      const noiseGain = context.createGain();
+      noiseGain = context.createGain();
       noiseGain.gain.setValueAtTime(kind === 'lightning' ? 0.8 : 0.45, now);
       noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34);
       noise.connect(filter).connect(noiseGain).connect(master);
       noise.start(now);
     }
+    this.trackScreenSource(oscillator, () => {
+      try {
+        noise?.stop();
+      } catch {
+        /* Noise may have already ended. */
+      }
+      oscillator.disconnect();
+      toneGain.disconnect();
+      noise?.disconnect();
+      filter?.disconnect();
+      noiseGain?.disconnect();
+      master.disconnect();
+    });
   }
 
   toggleMute(): boolean {
@@ -498,6 +578,23 @@ class AudioManager {
       .then((data) => this.ensureAudioContext().decodeAudioData(data));
     this.spatialBuffers.set(src, pending);
     return pending;
+  }
+
+  private trackScreenSource(source: AudioScheduledSourceNode, disconnectNodes: () => void): void {
+    let stopped = false;
+    const stop = (): void => {
+      if (stopped) return;
+      stopped = true;
+      this.screenAudioStops.delete(stop);
+      try {
+        source.stop();
+      } catch {
+        /* Source has already ended. */
+      }
+      disconnectNodes();
+    };
+    this.screenAudioStops.add(stop);
+    source.onended = stop;
   }
 
   private scheduleTavernOneShot(
