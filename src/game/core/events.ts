@@ -210,6 +210,14 @@ export type GameEvent =
       trigger: 'turnStart' | 'turnEnd' | 'anyTurnStart';
     }
   | {
+      /** 一次从公共 UNO 牌库同时向多名仍在场英雄发牌的公开演出事件。 */
+      type: 'massUnoDealt';
+      player: number;
+      effectId: string;
+      targets: number[];
+      countPerTarget: number;
+    }
+  | {
       type: 'penaltyRedirected';
       player: number;
       minionId: string;
@@ -218,7 +226,14 @@ export type GameEvent =
     }
   | { type: 'penaltyPrevented'; player: number; amount: number; reason: string }
   | { type: 'drawUno'; player: number; cardId: string }
-  | { type: 'drawPenalty'; player: number; count: number; cardIds: string[] }
+  | {
+      type: 'drawPenalty';
+      player: number;
+      count: number;
+      cardIds: string[];
+      /** 已由群体发牌事件统一演出，避免再逐个播放一次普通抽牌动画。 */
+      groupEffectId?: string;
+    }
   | { type: 'unoAlert'; player: number }
   | { type: 'unoCaught'; player: number; penalty: number }
   | { type: 'massSkip'; player: number }

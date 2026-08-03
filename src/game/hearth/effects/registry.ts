@@ -57,6 +57,12 @@ export interface BoardClearEffect {
   selfUnoDrawback?: number;
 }
 
+/** 可复用的群体发牌属性：从公共 UNO 牌库向所有仍在场的敌方英雄发牌。 */
+export interface MassUnoDealEffect {
+  trigger: 'turnStart' | 'turnEnd' | 'anyTurnStart';
+  countPerTarget: number;
+}
+
 /**
  * 效果上下文：effect 执行时携带的信息。
  * 所有 effect 都是纯函数 —— 只通过 ctx.state 读写，不产生副作用。
@@ -84,7 +90,7 @@ export interface EffectCtx {
   /** 效果可用的随机源（确定性） */
   rng: Rng;
   /** 统一强制抽牌入口；会结算护盾、罚抽替代随从、淘汰与公开事件。 */
-  forceUnoDraw: (player: number, count: number, reason: string) => number;
+  forceUnoDraw: (player: number, count: number, reason: string, groupEffectId?: string) => number;
 }
 
 /**
@@ -116,6 +122,8 @@ export interface HearthEffect {
   battlecry?: boolean;
   /** 同时作用于多个随从的声明式清场效果。 */
   boardClear?: BoardClearEffect;
+  /** 同时向所有仍在场敌方英雄发 UNO 牌的声明式持续效果。 */
+  massUnoDeal?: MassUnoDealEffect;
   /** 该随从在拥有者回合开始/结束，或任意玩家回合开始时结算的持续效果。 */
   onTurnStart?: (ctx: EffectCtx) => void;
   onTurnEnd?: (ctx: EffectCtx) => void;

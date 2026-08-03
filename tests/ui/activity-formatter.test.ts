@@ -101,3 +101,19 @@ test('护盾文案明确为抵消一整次罚抽，而不是按张抵消', () =>
   expect(entry.text).toContain('抵消一整次罚抽（原本 10 张）');
   expect(entry.text).toContain('消耗 1 层护盾');
 });
+
+test('群体发牌记录明确列出所有仍在场的目标英雄', () => {
+  const entry = formatActivity(
+    {
+      type: 'massUnoDealt',
+      player: 0,
+      effectId: 'calamityDealer',
+      targets: [1, 3],
+      countPerTarget: 3,
+    },
+    playerLabel
+  )!;
+  expect(entry.text).toContain('灾厄发牌官向 玩家2、玩家4 群体发牌');
+  expect(entry.text).toContain('每名目标应获得 3 张 UNO');
+  expect(entry.references?.map((reference) => reference.label)).toEqual(['灾厄发牌官']);
+});

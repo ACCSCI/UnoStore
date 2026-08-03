@@ -314,14 +314,8 @@ registerEffect({
   kind: 'minion',
   attack: 8,
   health: 11,
+  massUnoDeal: { trigger: 'turnStart', countPerTarget: 3 },
   apply: () => {},
-  onTurnStart: (ctx) => {
-    for (let player = 0; player < ctx.state.players.length; player++) {
-      if (player !== ctx.source && ctx.state.players[player]!.active) {
-        ctx.forceUnoDraw(player, 3, '灾厄发牌官的回合开始效果');
-      }
-    }
-  },
 });
 
 registerEffect({
@@ -332,14 +326,8 @@ registerEffect({
   kind: 'minion',
   attack: 7,
   health: 9,
+  massUnoDeal: { trigger: 'anyTurnStart', countPerTarget: 2 },
   apply: () => {},
-  onAnyTurnStart: (ctx) => {
-    for (let player = 0; player < ctx.state.players.length; player++) {
-      if (player !== ctx.source && ctx.state.players[player]!.active) {
-        ctx.forceUnoDraw(player, 2, '厄运司牌者的任意玩家回合开始效果');
-      }
-    }
-  },
 });
 
 registerEffect({

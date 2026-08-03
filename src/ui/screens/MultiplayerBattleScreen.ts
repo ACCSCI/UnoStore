@@ -1796,11 +1796,24 @@ export class MultiplayerBattleScreen extends Screen {
         event.type === 'minionsEqualized'
       ) {
         const effectId = 'effectId' in event ? event.effectId : undefined;
-        if (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) {
+        if (
+          (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) ||
+          (event.type === 'minionTriggered' && getEffect(event.effectId)?.massUnoDeal)
+        ) {
           await this.view.animationPause(60);
         } else {
           await this.view.playSpellAnimation(source, null, snapshot.players.length, effectId);
         }
+      } else if (event.type === 'massUnoDealt') {
+        audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.8);
+        await this.view.playMassUnoDealAnimation(
+          event.targets.map((target) => this.visualSeat(target, snapshot)),
+          event.countPerTarget,
+          snapshot.players.length
+        );
+      } else if (event.type === 'drawPenalty' && event.groupEffectId) {
+        // 房主事件已给出完整公开目标；客户端不再为每个目标重复播放一次普通抽牌。
+        await this.view.animationPause(30);
       } else if (
         event.type === 'drawUno' ||
         event.type === 'drawPenalty' ||

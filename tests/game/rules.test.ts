@@ -816,7 +816,7 @@ test('奥术档案抽四张炉石，水晶充能一费换下回合五水晶', ()
 });
 
 test('灾厄发牌官在拥有者回合开始时给所有敌人各塞三张 UNO', () => {
-  const s = createGame(3, ['calamityDealer'], 27);
+  const s = createGame(4, ['calamityDealer'], 27);
   s.players[0]!.board = [
     {
       id: 'dealer',
@@ -829,13 +829,29 @@ test('灾厄发牌官在拥有者回合开始时给所有敌人各塞三张 UNO'
       exhausted: true,
     },
   ];
-  s.turn = 2;
-  const before = [s.players[1]!.hand.length, s.players[2]!.hand.length];
-  const events = okEvents(dispatch(s, new Rng(27), { type: 'endTurn', player: 2 }));
+  s.players[2]!.active = false;
+  s.turn = 3;
+  const before = s.players.map((player) => player.hand.length);
+  const events = okEvents(dispatch(s, new Rng(27), { type: 'endTurn', player: 3 }));
   expect(s.turn).toBe(0);
-  expect(s.players[1]!.hand).toHaveLength(before[0]! + 3);
-  expect(s.players[2]!.hand).toHaveLength(before[1]! + 4);
+  expect(s.players[0]!.hand).toHaveLength(before[0]!);
+  expect(s.players[1]!.hand).toHaveLength(before[1]! + 3);
+  expect(s.players[2]!.hand).toHaveLength(before[2]!);
+  expect(s.players[3]!.hand).toHaveLength(before[3]! + 4);
   expect(events.some((event) => event.type === 'minionTriggered')).toBe(true);
+  expect(events).toContainEqual({
+    type: 'massUnoDealt',
+    player: 0,
+    effectId: 'calamityDealer',
+    targets: [1, 3],
+    countPerTarget: 3,
+  });
+  expect(
+    events
+      .filter((event) => event.type === 'drawPenalty')
+      .filter((event) => event.groupEffectId === 'calamityDealer')
+      .map((event) => event.player)
+  ).toEqual([1, 3]);
 });
 
 test('厄运司牌者在任意玩家回合开始时给所有敌人各塞两张 UNO', () => {

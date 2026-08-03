@@ -157,6 +157,14 @@ export function formatActivity(
         [minion]
       );
     }
+    case 'massUnoDealt': {
+      const minion = hearthReference(event.effectId);
+      const targets = event.targets.map(playerLabel).join('、') || '没有仍在场的敌方英雄';
+      return activityEntry(
+        `${playerLabel(event.player)}的${minion.label}向 ${targets} 群体发牌；结果：每名目标应获得 ${event.countPerTarget} 张 UNO`,
+        [minion]
+      );
+    }
     case 'minionTransformed': {
       const from = hearthReference(event.fromEffectId);
       const to = hearthReference(event.toEffectId);

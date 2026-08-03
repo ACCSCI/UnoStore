@@ -505,6 +505,18 @@ export class GameView {
     });
   }
 
+  /** 群体发牌：同一时间从公共 UNO 牌库向所有实际目标英雄各发指定张数。 */
+  playMassUnoDealAnimation(
+    targets: number[],
+    countPerTarget: number,
+    playerCount: number
+  ): Promise<void> {
+    if (targets.length === 0) return this.animationPause(80);
+    return Promise.all(
+      targets.map((target) => this.playPenaltyDealAnimation(target, countPerTarget, playerCount))
+    ).then(() => undefined);
+  }
+
   /** 英雄技能使用可读的专属道具演出：抓牌手、弃牌与洗牌，不生成几何占位物。 */
   playHeroPowerAnimation(heroId: string, player: number, playerCount: number): Promise<void> {
     const overlay = document.createElement('div');

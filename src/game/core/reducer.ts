@@ -828,8 +828,8 @@ function createEffectContext(
     source,
     events,
     rng,
-    forceUnoDraw: (player, count, reason) =>
-      resolveForcedUnoDraw(state, rng, player, count, events, reason),
+    forceUnoDraw: (player, count, reason, groupEffectId) =>
+      resolveForcedUnoDraw(state, rng, player, count, events, reason, groupEffectId),
     sourceIndex: () => {
       const minionId = extras.sourceMinionId;
       if (!minionId) return -1;
@@ -850,7 +850,8 @@ function resolveForcedUnoDraw(
   player: number,
   count: number,
   events: GameEvent[],
-  reason: string
+  reason: string,
+  groupEffectId?: string
 ): number {
   const target = state.players[player];
   if (!(target?.active && count > 0)) return 0;
@@ -881,10 +882,44 @@ function resolveForcedUnoDraw(
     player,
     count: drawn.length,
     cardIds: drawn.map((card) => card.id),
+    ...(groupEffectId ? { groupEffectId } : {}),
   });
   state.log.push(`玩家 ${player} 因${reason}强制抽取 ${drawn.length} 张 UNO`);
   applyMercyRule(state, events);
   return drawn.length;
+}
+
+/** 声明式群体发牌：先公开全部实际目标，再逐个走统一罚抽入口结算护盾与代罚。 */
+function applyMassUnoDealEffect(
+  state: GameState,
+  rng: Rng,
+  owner: number,
+  effect: NonNullable<ReturnType<typeof getEffect>>,
+  events: GameEvent[]
+): void {
+  const deal = effect.massUnoDeal;
+  if (!deal) return;
+  const targets = state.players.flatMap((player, index) =>
+    index !== owner && player.active ? [index] : []
+  );
+  events.push({
+    type: 'massUnoDealt',
+    player: owner,
+    effectId: effect.id,
+    targets,
+    countPerTarget: deal.countPerTarget,
+  });
+  for (const target of targets) {
+    resolveForcedUnoDraw(
+      state,
+      rng,
+      target,
+      deal.countPerTarget,
+      events,
+      `${effect.name}的群体发牌效果`,
+      effect.id
+    );
+  }
 }
 
 function runMinionTrigger(
@@ -899,7 +934,8 @@ function runMinionTrigger(
     if (!state.players[player]!.board.some((entry) => entry.id === minion.id)) continue;
     const effect = getEffect(minion.effectId);
     const hook = trigger === 'turnStart' ? effect?.onTurnStart : effect?.onTurnEnd;
-    if (!hook) continue;
+    const massDeal = effect?.massUnoDeal?.trigger === trigger;
+    if (!(hook || massDeal)) continue;
     events.push({
       type: 'minionTriggered',
       player,
@@ -907,7 +943,8 @@ function runMinionTrigger(
       effectId: minion.effectId,
       trigger,
     });
-    hook(createEffectContext(state, rng, player, events, { sourceMinionId: minion.id }));
+    if (massDeal) applyMassUnoDealEffect(state, rng, player, effect, events);
+    hook?.(createEffectContext(state, rng, player, events, { sourceMinionId: minion.id }));
     if (state.phase === 'gameOver') return;
   }
 }
@@ -919,8 +956,10 @@ function runAnyTurnStartTriggers(state: GameState, rng: Rng, events: GameEvent[]
     if (!state.players[owner]!.active) continue;
     for (const minion of boards[owner]!) {
       if (!state.players[owner]!.board.some((entry) => entry.id === minion.id)) continue;
-      const hook = getEffect(minion.effectId)?.onAnyTurnStart;
-      if (!hook) continue;
+      const effect = getEffect(minion.effectId);
+      const hook = effect?.onAnyTurnStart;
+      const massDeal = effect?.massUnoDeal?.trigger === 'anyTurnStart';
+      if (!(hook || massDeal)) continue;
       events.push({
         type: 'minionTriggered',
         player: owner,
@@ -928,7 +967,8 @@ function runAnyTurnStartTriggers(state: GameState, rng: Rng, events: GameEvent[]
         effectId: minion.effectId,
         trigger: 'anyTurnStart',
       });
-      hook(createEffectContext(state, rng, owner, events, { sourceMinionId: minion.id }));
+      if (massDeal) applyMassUnoDealEffect(state, rng, owner, effect, events);
+      hook?.(createEffectContext(state, rng, owner, events, { sourceMinionId: minion.id }));
       if (state.phase === 'gameOver') return;
     }
   }

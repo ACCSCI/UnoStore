@@ -551,11 +551,24 @@ export class BattleScreen extends Screen {
       ) {
         this.refreshUI();
         const effectId = 'effectId' in event ? event.effectId : undefined;
-        if (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) {
+        if (
+          (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) ||
+          (event.type === 'minionTriggered' && getEffect(event.effectId)?.massUnoDeal)
+        ) {
           await this.view.animationPause(60);
         } else {
           await this.view.playSpellAnimation(event.player, null, this.playerCount, effectId);
         }
+      } else if (event.type === 'massUnoDealt') {
+        audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.78);
+        await this.view.playMassUnoDealAnimation(
+          event.targets,
+          event.countPerTarget,
+          this.playerCount
+        );
+      } else if (event.type === 'drawPenalty' && event.groupEffectId) {
+        // 群体发牌已经同时飞向全部目标；这里只保留规则与日志事件，避免重复演出。
+        await this.view.animationPause(30);
       } else if (
         event.type === 'drawUno' ||
         event.type === 'drawPenalty' ||
