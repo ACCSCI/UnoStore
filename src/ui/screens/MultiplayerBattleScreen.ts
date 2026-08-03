@@ -114,11 +114,11 @@ export class MultiplayerBattleScreen extends Screen {
   private emoteMenuEl: HTMLElement | null = null;
   private playerHeroPortraitEl: HTMLButtonElement | null = null;
   private playerHeroImageEl: HTMLImageElement | null = null;
+  private playerShieldEl: HTMLElement | null = null;
   private playerHeroNameEl: HTMLElement | null = null;
   private playerHeroIdEl: HTMLElement | null = null;
   private playerCrystalEl: HTMLElement | null = null;
   private playerFrozenEl: HTMLElement | null = null;
-  private playerShieldEl: HTMLElement | null = null;
   private handSummaryEl: HTMLElement | null = null;
   private pause: PauseMenu | null = null;
   private sequence = 0;
@@ -130,6 +130,7 @@ export class MultiplayerBattleScreen extends Screen {
   private unoTargetCardId: string | null = null;
   private hearthSelection: HearthSelection | null = null;
   private heroTargetSelection: Set<number> | null = null;
+  private heroUnoSelection: Set<string> | null = null;
   private exited = false;
   private hostTurnSerial = -1;
   private hostTurnDeadline = 0;
@@ -256,7 +257,10 @@ export class MultiplayerBattleScreen extends Screen {
     this.playerHeroImageEl = new Image();
     this.playerHeroImageEl.src = assetUrl(hero.portrait);
     this.playerHeroImageEl.alt = '';
-    this.playerHeroPortraitEl.append(this.playerHeroImageEl);
+    this.playerShieldEl = this.el('span', 'hero-shield-badge');
+    this.playerShieldEl.hidden = true;
+    this.playerShieldEl.setAttribute('aria-hidden', 'true');
+    this.playerHeroPortraitEl.append(this.playerHeroImageEl, this.playerShieldEl);
 
     const copy = this.el('div', 'hero-copy');
     this.playerHeroNameEl = this.el('strong', 'hero-name', getNet().user?.name ?? hero.name);
@@ -273,12 +277,9 @@ export class MultiplayerBattleScreen extends Screen {
     this.playerFrozenEl = this.el('strong', undefined, '0');
     frozen.append(this.playerFrozenEl);
     resources.append(crystal, frozen);
-    this.playerShieldEl = this.el('span', 'hero-shield-badge');
-    this.playerShieldEl.setAttribute('aria-label', '护盾层数');
-    frame.append(this.playerShieldEl);
 
     this.heroPowerEl = this.btn(
-      `${hero.powerName} · 2`,
+      `${hero.powerName} · ${hero.powerCost}`,
       () => void this.useHeroPower(),
       'hero-power-button'
     );
@@ -429,7 +430,12 @@ export class MultiplayerBattleScreen extends Screen {
     }
     if (request.type === 'endTurn') return { type: 'endTurn', player };
     if (request.type === 'useHeroPower')
-      return { type: 'useHeroPower', player, targets: request.targets };
+      return {
+        type: 'useHeroPower',
+        player,
+        targets: request.targets,
+        unoCardIds: request.unoCardIds,
+      };
     if (request.type === 'heroEmote' && request.emoteId)
       return { type: 'heroEmote', player, emoteId: request.emoteId };
     if (request.type === 'resolveRoulette' && request.color)
@@ -549,7 +555,12 @@ export class MultiplayerBattleScreen extends Screen {
       .then(() => this.consumeSnapshot(queuedSnapshot))
       .catch((error) => {
         console.error('联机演出队列失败', error);
-        this.renderSnapshot(queuedSnapshot);
+        this.actionAnimating = false;
+        this.clearAnimationHandDeltas();
+        const latest = this.snapshot ?? queuedSnapshot;
+        this.renderSnapshot(latest);
+        this.showGameResult(latest);
+        if (latest.mustResolveRoulette) this.promptRoulette();
       });
   }
 
@@ -568,20 +579,26 @@ export class MultiplayerBattleScreen extends Screen {
 
   private async consumeSnapshot(snapshot: MultiplayerSnapshot): Promise<void> {
     if (this.exited) return;
+    if (this.snapshot && snapshot.sequence < this.snapshot.sequence) return;
     this.snapshot = snapshot;
     this.clearAnimationHandDeltas();
     this.actionAnimating = snapshot.events.length > 0;
-    if (this.actionAnimating) {
-      this.view?.setActionEnabled(0, false);
-      this.view?.clearHandInteraction();
-      await this.playEventAnimations(snapshot.events, snapshot);
+    try {
+      if (this.actionAnimating) {
+        this.view?.setActionEnabled(0, false);
+        this.view?.clearHandInteraction();
+        await this.playEventAnimations(snapshot.events, snapshot);
+      }
+    } finally {
+      this.actionAnimating = false;
+      this.clearAnimationHandDeltas();
     }
     if (this.exited) return;
-    this.actionAnimating = false;
-    this.clearAnimationHandDeltas();
-    this.renderSnapshot(snapshot);
-    this.showGameResult(snapshot);
-    if (snapshot.mustResolveRoulette) this.promptRoulette();
+    // 演出期间可能收到更晚的无事件快照；结束时始终渲染最新权威状态。
+    const latest = this.snapshot ?? snapshot;
+    this.renderSnapshot(latest);
+    this.showGameResult(latest);
+    if (latest.mustResolveRoulette) this.promptRoulette();
   }
 
   private showGameResult(snapshot: MultiplayerSnapshot): void {
@@ -648,11 +665,18 @@ export class MultiplayerBattleScreen extends Screen {
       this.selectedAttackerId = null;
       this.unoTargetCardId = null;
       this.heroTargetSelection = null;
+      this.heroUnoSelection = null;
     } else if (
       this.unoTargetCardId &&
       !snapshot.mine.hand.some((card) => card.id === this.unoTargetCardId)
     ) {
       this.unoTargetCardId = null;
+    }
+    if (
+      this.heroUnoSelection &&
+      [...this.heroUnoSelection].some((id) => !snapshot.mine.hand.some((card) => card.id === id))
+    ) {
+      this.heroUnoSelection = null;
     }
     if (this.activityEntries.length === 0) {
       this.activityEntries.push(`对局开始 · ${snapshot.players.length} 人`);
@@ -673,10 +697,13 @@ export class MultiplayerBattleScreen extends Screen {
       ]);
     } else if (this.unoTargetCardId) {
       playable = new Set([this.unoTargetCardId]);
+    } else if (this.heroUnoSelection) {
+      playable = new Set(snapshot.mine.hand.map((card) => card.id));
     }
     const selectedCardIds = new Set(selection?.selectedCardIds ?? []);
     if (selection) selectedCardIds.add(selection.cardId);
     if (this.unoTargetCardId) selectedCardIds.add(this.unoTargetCardId);
+    for (const id of this.heroUnoSelection ?? []) selectedCardIds.add(id);
     this.view?.syncHand(snapshot.mine.hand, snapshot.mine.hearthHand, playable, selectedCardIds);
     this.view?.syncTable(snapshot.deckCount, snapshot.topCard, snapshot.chosenColor);
     // 圆桌席位已经按实际手牌数渲染牌背，不再保留旧的正前方重复手牌。
@@ -708,24 +735,27 @@ export class MultiplayerBattleScreen extends Screen {
       snapshot.playableIds.length > 0 ||
       snapshot.readyMinionIds.length > 0 ||
       snapshot.heroPowerUsable;
-    const shouldPromptEnd =
-      canAct &&
-      !hasAnyAction &&
-      !(
-        this.hearthSelection ||
+    const hasPendingSelection = Boolean(
+      this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection
-      );
+        this.heroTargetSelection ||
+        this.heroUnoSelection
+    );
+    const shouldPromptEnd = canAct && !hasAnyAction && !hasPendingSelection;
     this.view?.setActionEnabled(0, canAct);
     this.view?.setActionAttention(0, shouldPromptEnd);
     this.view?.setActionHint(
       0,
       snapshot.mustResolveRoulette
         ? '请先结算颜色轮盘'
-        : canAct
-          ? '结束回合并结算补牌'
-          : `等待玩家 ${snapshot.turn + 1}`
+        : canAct && mine.pendingDraw > 0
+          ? snapshot.playableIds.length > 0
+            ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
+            : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
+          : canAct
+            ? '结束回合并结算补牌'
+            : `等待玩家 ${snapshot.turn + 1}`
     );
     if (this.heroPowerEl) {
       const hero = getHero(mine.heroId);
@@ -737,11 +767,6 @@ export class MultiplayerBattleScreen extends Screen {
       if (this.playerHeroImageEl) this.playerHeroImageEl.src = assetUrl(hero.portrait);
       if (this.playerHeroNameEl) this.playerHeroNameEl.textContent = mine.userName;
       if (this.playerHeroIdEl) this.playerHeroIdEl.textContent = `ID ${mine.userId} · ${hero.name}`;
-    }
-    if (this.playerShieldEl) {
-      const shield = mine.shield;
-      this.playerShieldEl.textContent = shield > 0 ? `⬟ ${shield}` : '';
-      this.playerShieldEl.classList.toggle('visible', shield > 0);
     }
     if (this.playerHeroPortraitEl) {
       const ownTargetable = this.isPlayerTargetable(snapshot.viewer, snapshot);
@@ -757,6 +782,17 @@ export class MultiplayerBattleScreen extends Screen {
     }
     if (this.playerCrystalEl) this.playerCrystalEl.textContent = String(mine.free);
     if (this.playerFrozenEl) this.playerFrozenEl.textContent = String(mine.frozen);
+    if (this.playerShieldEl) {
+      this.playerShieldEl.hidden = mine.shield <= 0;
+      this.playerShieldEl.textContent = `🛡 ${mine.shield}`;
+    }
+    if (this.playerHeroPortraitEl) {
+      const shieldLabel = mine.shield > 0 ? `；护盾 ${mine.shield}` : '';
+      this.playerHeroPortraitEl.setAttribute(
+        'aria-label',
+        `${getHero(mine.heroId).name}头像${shieldLabel}；点击或右键发送语音`
+      );
+    }
     if (this.handSummaryEl)
       this.handSummaryEl.textContent = mine.active
         ? `UNO ${mine.unoCount} / 25 张淘汰 · 炉石 ${mine.hearthCount}`
@@ -855,7 +891,8 @@ export class MultiplayerBattleScreen extends Screen {
         this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection
+        this.heroTargetSelection ||
+        this.heroUnoSelection
       )
         return;
       this.workDoneAnnouncedTurn = scheduledTurn;
@@ -1047,6 +1084,16 @@ export class MultiplayerBattleScreen extends Screen {
   private async onCardClicked(id: string, isHearth: boolean): Promise<void> {
     const snapshot = this.snapshot;
     if (!snapshot || this.actionAnimating || snapshot.turn !== snapshot.viewer) return;
+    if (this.heroUnoSelection) {
+      if (isHearth || !snapshot.mine.hand.some((card) => card.id === id)) return;
+      if (this.heroUnoSelection.has(id)) this.heroUnoSelection.delete(id);
+      else {
+        this.heroUnoSelection.clear();
+        this.heroUnoSelection.add(id);
+      }
+      this.renderSnapshot(snapshot);
+      return;
+    }
     if (this.hearthSelection && id !== this.hearthSelection.cardId) {
       const targeting = this.effectTargeting(getEffect(this.hearthSelection.effectId));
       const candidate =
@@ -1083,6 +1130,7 @@ export class MultiplayerBattleScreen extends Screen {
         }
         this.selectedAttackerId = null;
         this.heroTargetSelection = null;
+        this.heroUnoSelection = null;
         this.hearthSelection = {
           cardId: id,
           effectId: card.effectId,
@@ -1107,6 +1155,7 @@ export class MultiplayerBattleScreen extends Screen {
       this.hearthSelection = null;
       this.selectedAttackerId = null;
       this.heroTargetSelection = null;
+      this.heroUnoSelection = null;
       this.unoTargetCardId = this.unoTargetCardId === id ? null : id;
       this.renderSnapshot(snapshot);
       this.setStatus(
@@ -1135,6 +1184,7 @@ export class MultiplayerBattleScreen extends Screen {
     if (!snapshot.readyMinionIds.includes(id)) return;
     this.hearthSelection = null;
     this.heroTargetSelection = null;
+    this.heroUnoSelection = null;
     this.unoTargetCardId = null;
     this.selectedAttackerId = this.selectedAttackerId === id ? null : id;
     if (this.selectedAttackerId) {
@@ -1233,7 +1283,8 @@ export class MultiplayerBattleScreen extends Screen {
         (this.hearthSelection ||
           this.selectedAttackerId ||
           this.unoTargetCardId ||
-          this.heroTargetSelection)
+          this.heroTargetSelection ||
+          this.heroUnoSelection)
       )
     ) {
       this.targetingHudEl.classList.remove('visible');
@@ -1256,6 +1307,18 @@ export class MultiplayerBattleScreen extends Screen {
           'span',
           undefined,
           `检察官 · 洗牌审讯：在桌上选择两名玩家（可以包含自己） ${this.heroTargetSelection.size}/2`
+        ),
+        confirm,
+        this.btn('取消', () => this.cancelTargeting())
+      );
+    } else if (this.heroUnoSelection) {
+      const confirm = this.btn('确认交换', () => this.confirmHeroUnoExchange());
+      confirm.disabled = this.heroUnoSelection.size !== 1;
+      this.targetingHudEl.append(
+        this.el(
+          'span',
+          undefined,
+          `卡牌大师 · 借牌生花：选择 1 张自己的 UNO 牌 ${this.heroUnoSelection.size}/1`
         ),
         confirm,
         this.btn('取消', () => this.cancelTargeting())
@@ -1328,12 +1391,14 @@ export class MultiplayerBattleScreen extends Screen {
       this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection
+        this.heroTargetSelection ||
+        this.heroUnoSelection
     );
     this.hearthSelection = null;
     this.selectedAttackerId = null;
     this.unoTargetCardId = null;
     this.heroTargetSelection = null;
+    this.heroUnoSelection = null;
     if (this.snapshot) this.renderSnapshot(this.snapshot);
     if (had && announce) this.setStatus('已取消目标选择');
   }
@@ -1342,6 +1407,17 @@ export class MultiplayerBattleScreen extends Screen {
     const snapshot = this.snapshot;
     if (!snapshot?.heroPowerUsable || this.actionAnimating) return;
     const heroId = snapshot.players[snapshot.viewer]?.heroId;
+    if (heroId === 'cardMaster') {
+      if (snapshot.mine.hand.length === 0) return;
+      this.hearthSelection = null;
+      this.selectedAttackerId = null;
+      this.unoTargetCardId = null;
+      this.heroTargetSelection = null;
+      this.heroUnoSelection = new Set();
+      this.renderSnapshot(snapshot);
+      this.setStatus('卡牌大师：选择 1 张自己的 UNO 牌，换取随机炉石牌');
+      return;
+    }
     if (heroId !== 'inspector') {
       this.sendAction({ type: 'useHeroPower' });
       return;
@@ -1349,6 +1425,7 @@ export class MultiplayerBattleScreen extends Screen {
     this.hearthSelection = null;
     this.selectedAttackerId = null;
     this.unoTargetCardId = null;
+    this.heroUnoSelection = null;
     this.heroTargetSelection = new Set();
     this.renderSnapshot(snapshot);
     this.setStatus('检察官：在桌上选择两名玩家，可以包含自己');
@@ -1357,6 +1434,12 @@ export class MultiplayerBattleScreen extends Screen {
   private confirmHeroTargets(): void {
     if (this.heroTargetSelection?.size !== 2) return;
     this.sendAction({ type: 'useHeroPower', targets: [...this.heroTargetSelection] });
+    this.cancelTargeting(false);
+  }
+
+  private confirmHeroUnoExchange(): void {
+    if (this.heroUnoSelection?.size !== 1) return;
+    this.sendAction({ type: 'useHeroPower', unoCardIds: [...this.heroUnoSelection] });
     this.cancelTargeting(false);
   }
 
@@ -1817,7 +1900,8 @@ export class MultiplayerBattleScreen extends Screen {
       (this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection)
+        this.heroTargetSelection ||
+        this.heroUnoSelection)
     ) {
       event.preventDefault();
       this.cancelTargeting();
