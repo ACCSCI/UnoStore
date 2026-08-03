@@ -2,7 +2,7 @@ import { canPlayUnoCard } from '../core/flow';
 import { canInitiateHearthPlay, heroPowerError } from '../core/reducer';
 import type { Rng } from '../core/rng';
 import type { GameAction, GameState } from '../core/state';
-import { getEffect, minionHasTaunt } from '../hearth/effects/registry';
+import { getEffect, minionHasTaunt, requiredOwnUnoCardCount } from '../hearth/effects/registry';
 import type { AiStrategy, BossRules } from './types';
 
 const COLORS = ['red', 'yellow', 'green', 'blue'] as const;
@@ -282,8 +282,15 @@ function heroAction(state: GameState, player: number): GameAction | null {
             .sort((a, b) => b.entry.hand.length - a.entry.hand.length)[0]?.index ?? -1,
         ]
       : [];
-  if (heroPowerError(state, player, targets)) return null;
-  return { type: 'useHeroPower', player, ...(targets.length ? { targets } : {}) };
+  const unoCardIds =
+    source.heroId === 'cardMaster' ? source.hand.slice(0, 1).map((card) => card.id) : [];
+  if (heroPowerError(state, player, targets, unoCardIds)) return null;
+  return {
+    type: 'useHeroPower',
+    player,
+    ...(targets.length ? { targets } : {}),
+    ...(unoCardIds.length ? { unoCardIds } : {}),
+  };
 }
 
 function decideUnoOrEnd(state: GameState, player: number, rng: Rng): GameAction {
@@ -351,13 +358,15 @@ function selectedUnoCards(
 ): string[] | undefined {
   const effect = getEffect(effectId);
   if (effect?.targeting?.type !== 'ownUnoCards') return undefined;
+  const required = requiredOwnUnoCardCount(effect.targeting, state.players[player]!.hand.length);
+  if (required === 0) return undefined;
   return [...state.players[player]!.hand]
     .sort((a, b) => {
       const aNumber = /^\d$/.test(a.value) ? Number(a.value) : 20;
       const bNumber = /^\d$/.test(b.value) ? Number(b.value) : 20;
       return aNumber - bNumber;
     })
-    .slice(0, effect.targeting.count)
+    .slice(0, required)
     .map((card) => card.id);
 }
 

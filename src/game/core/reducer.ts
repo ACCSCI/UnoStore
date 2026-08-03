@@ -520,6 +520,7 @@ function playHearthAction(
   const targeting =
     effect.targeting ??
     (effect.requiresTarget ? { type: 'enemyPlayer' as const, count: 1 as const } : null);
+  let resolvedUnoCardIds = action.unoCardIds;
   if (targeting?.type === 'enemyPlayer' || targeting?.type === 'giveCards') {
     const targets = [...new Set(action.targets ?? [])];
     if (
@@ -555,6 +556,9 @@ function playHearthAction(
     if (selected.length !== requiredCount || selected.some((id) => !handIds.has(id))) {
       return { ok: false, error: `必须从自己的手牌中选择 ${requiredCount} 张 UNO 牌` };
     }
+    if (targeting.useAllWhenShort && p.hand.length < targeting.count) {
+      resolvedUnoCardIds = p.hand.map((uno) => uno.id);
+    }
   }
   if (targeting?.type === 'giveCards') {
     const selected = [...new Set(action.cardIds ?? [])];
@@ -582,6 +586,14 @@ function playHearthAction(
       return { ok: false, error: '必须显式选择一个合法的场上随从' };
     }
   }
+  // 所有客户端输入必须在扣费和移除手牌前完成校验，拒绝请求不得修改权威状态。
+  const minionPosition = effect.kind === 'minion' ? (action.position ?? p.board.length) : undefined;
+  if (
+    minionPosition !== undefined &&
+    (!Number.isInteger(minionPosition) || minionPosition < 0 || minionPosition > p.board.length)
+  ) {
+    return { ok: false, error: '无效的随从放置位置' };
+  }
   p.free -= effect.cost;
   p.hearthHand.splice(action.cardIdx, 1);
   const events: GameEvent[] = [];
@@ -590,10 +602,7 @@ function playHearthAction(
     const health = effect.health ?? 1;
     const minionId = `m-${card.id}`;
     // 放置位置系统：position 为战场槽位（0..board.length），默认追加到末尾
-    const position = action.position ?? p.board.length;
-    if (!Number.isInteger(position) || position < 0 || position > p.board.length) {
-      return { ok: false, error: '无效的随从放置位置' };
-    }
+    const position = minionPosition!;
     p.board.splice(position, 0, {
       id: minionId,
       cardId: card.id,
@@ -620,7 +629,7 @@ function playHearthAction(
     effect.apply(
       createEffectContext(state, rng, action.player, events, {
         targets: action.targets,
-        unoCardIds: action.unoCardIds,
+        unoCardIds: resolvedUnoCardIds,
         cardIds: action.cardIds,
         targetMinionId: action.targetMinionId,
         color: action.color,
@@ -632,7 +641,7 @@ function playHearthAction(
     effect.apply(
       createEffectContext(state, rng, action.player, events, {
         targets: action.targets,
-        unoCardIds: action.unoCardIds,
+        unoCardIds: resolvedUnoCardIds,
         cardIds: action.cardIds,
         targetMinionId: action.targetMinionId,
         color: action.color,
@@ -1133,7 +1142,8 @@ export function heroPowerCost(state: GameState, player: number): number {
 export function heroPowerError(
   state: GameState,
   player: number,
-  targets: number[] = []
+  targets: number[] = [],
+  unoCardIds: string[] = []
 ): string | null {
   if (state.phase === 'gameOver') return '对局已结束';
   if (player !== state.turn) return '不是你的回合';
@@ -1145,6 +1155,12 @@ export function heroPowerError(
   if (!unlimited && p.heroPowerUses >= 1) return '英雄技能每回合只能使用一次';
   const cost = heroPowerCost(state, player);
   if (p.free < cost) return '水晶不足';
+  if (p.heroId === 'cardMaster') {
+    const unique = [...new Set(unoCardIds)];
+    if (unique.length !== 1 || !p.hand.some((card) => card.id === unique[0])) {
+      return '必须选择自己的一张 UNO 牌进行交换';
+    }
+  }
   if (p.heroId === 'inspector') {
     const unique = [...new Set(targets)];
     if (unique.length !== 2 || unique.some((target) => !state.players[target]?.active)) {
@@ -1182,8 +1198,9 @@ export function playerCapabilities(state: GameState, player: number) {
       hasAnyAction: true,
     };
   }
+  const canRespondToPenalty = p.pendingDrawMin > 0;
   const playableUnoIndices =
-    state.unoActionsLeft > 0
+    state.unoActionsLeft > 0 || canRespondToPenalty
       ? p.hand
           .map((card, index) => (canPlayUnoCard(state, player, card) ? index : -1))
           .filter((index) => index >= 0)
@@ -1204,7 +1221,9 @@ export function playerCapabilities(state: GameState, player: number) {
           .filter((index) => index >= 0)
           .slice(0, 2)
       : [];
-  const heroPowerUsable = !blockedByPenalty && heroPowerError(state, player, heroTargets) === null;
+  const heroUnoCardIds = p.heroId === 'cardMaster' ? p.hand.slice(0, 1).map((card) => card.id) : [];
+  const heroPowerUsable =
+    !blockedByPenalty && heroPowerError(state, player, heroTargets, heroUnoCardIds) === null;
   return {
     playableUnoIndices,
     playableHearthIndices,
@@ -1266,7 +1285,8 @@ function useHeroPowerAction(
   action: Extract<GameAction, { type: 'useHeroPower' }>
 ): ActionResult {
   const targets = [...new Set(action.targets ?? [])];
-  const error = heroPowerError(state, action.player, targets);
+  const unoCardIds = [...new Set(action.unoCardIds ?? [])];
+  const error = heroPowerError(state, action.player, targets, unoCardIds);
   if (error) return { ok: false, error };
   const source = state.players[action.player]!;
   const cost = heroPowerCost(state, action.player);
@@ -1277,18 +1297,36 @@ function useHeroPowerAction(
   ];
 
   if (source.heroId === 'cardMaster') {
-    const sharedPool = state.players.flatMap((player) => player.hearthPool);
-    const drawn = Array.from({ length: 2 }, (_, index) => ({
-      id: `hero-${action.player}-${state.log.length}-${source.heroPowerUses}-${index}`,
-      effectId: sharedPool[rng.int(sharedPool.length)]!,
-    }));
+    const exchanged = source.hand.find((card) => card.id === unoCardIds[0])!;
+    source.hand = source.hand.filter((card) => card.id !== exchanged.id);
+    state.unoDiscard.splice(Math.max(0, state.unoDiscard.length - 1), 0, exchanged);
+    const sharedPool = state.players
+      .filter((player) => player.active)
+      .flatMap((player) => player.hearthPool);
+    const drawn = [
+      {
+        id: `hero-${action.player}-${state.log.length}-${source.heroPowerUses}-0`,
+        effectId: sharedPool[rng.int(sharedPool.length)]!,
+      },
+    ];
     source.hearthHand.push(...drawn);
+    events.push({
+      type: 'unoDiscarded',
+      player: action.player,
+      cardIds: [exchanged.id],
+      reason: getHero(source.heroId).powerName,
+    });
     events.push({
       type: 'hearthDrawn',
       player: action.player,
       cardIds: drawn.map((card) => card.id),
       reason: getHero(source.heroId).powerName,
     });
+    checkUnoAlert(state, action.player, events);
+    if (source.hand.length === 0) {
+      state.phase = 'gameOver';
+      events.push({ type: 'gameOver', winner: action.player, reason: 'unoEmpty' });
+    }
   } else if (source.heroId === 'thug') {
     const candidates = [
       ...source.hand.map((card) => ({ kind: 'uno' as const, id: card.id })),
@@ -1311,6 +1349,7 @@ function useHeroPowerAction(
       unoCardIds: [...unoIds],
       hearthCardIds: [...hearthIds],
     });
+    source.shield += 1;
     if (source.hand.length === 0) {
       state.phase = 'gameOver';
       events.push({ type: 'gameOver', winner: action.player, reason: 'unoEmpty' });

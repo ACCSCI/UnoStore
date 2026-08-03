@@ -189,6 +189,30 @@
     gap: 0.9rem;
   }
 
+  .settings-dialog {
+    inline-size: min(24rem, calc(100vw - 2rem));
+    max-inline-size: none;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--paper);
+  }
+
+  .settings-dialog::backdrop {
+    background: rgb(4 7 19 / 72%);
+    backdrop-filter: blur(0.7rem);
+  }
+
+  .settings-dialog .settings-card {
+    inline-size: 100%;
+  }
+
+  .settings-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
   .settings-row {
     display: grid;
     grid-template-columns: auto 1fr 2.4rem;

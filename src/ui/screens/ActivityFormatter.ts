@@ -18,6 +18,14 @@ export interface ActivityEntry {
   hover?: { kind: 'uno'; card: UnoCard } | { kind: 'hearth'; effectId: string };
 }
 
+let activeActivityTooltip: HTMLElement | null = null;
+
+/** 记录重绘或离开对局时移除挂在 document.body 上的牌面预览。 */
+export function clearActivityHover(): void {
+  activeActivityTooltip?.remove();
+  activeActivityTooltip = null;
+}
+
 /** 单机与联机共用同一套对局记录文案，只由调用方提供玩家显示名。 */
 export function formatActivity(
   event: GameEvent,
@@ -77,6 +85,10 @@ export function formatActivity(
     case 'minionEmpowered':
       return {
         text: `${playerLabel(event.player)}将随从的${event.stat === 'attack' ? '攻击力' : '生命值'}从 ${event.before} 翻倍至 ${event.after}`,
+      };
+    case 'minionBuffed':
+      return {
+        text: `${playerLabel(event.player)}的随从获得 +${event.attackDelta}/+${event.healthDelta}${event.taunt ? ' 与嘲讽' : ''}`,
       };
     case 'minionsEqualized':
       return {
@@ -187,7 +199,9 @@ export function attachActivityHover(
   let tooltip: HTMLElement | null = null;
   const show = (): void => {
     if (tooltip || !container.isConnected) return;
+    clearActivityHover();
     tooltip = document.createElement('div');
+    activeActivityTooltip = tooltip;
     tooltip.className = 'activity-hover-card';
     const img = new Image();
     if (hover.kind === 'uno') {
@@ -205,6 +219,7 @@ export function attachActivityHover(
   };
   const hide = (): void => {
     tooltip?.remove();
+    if (activeActivityTooltip === tooltip) activeActivityTooltip = null;
     tooltip = null;
   };
   item.addEventListener('pointerenter', show);

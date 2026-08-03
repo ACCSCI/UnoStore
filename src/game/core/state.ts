@@ -141,7 +141,7 @@ export type GameAction =
     }
   | { type: 'drawUno'; player: number }
   | { type: 'resolveRoulette'; player: number; color: NonNullable<UnoCard['color']> }
-  | { type: 'useHeroPower'; player: number; targets?: number[] }
+  | { type: 'useHeroPower'; player: number; targets?: number[]; unoCardIds?: string[] }
   | { type: 'resolveOracle'; player: number; takeCardId: string; discardCardId: string }
   | { type: 'heroEmote'; player: number; emoteId: string }
   | {

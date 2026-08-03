@@ -4,10 +4,12 @@ import {
   canInitiateHearthPlay,
   createGame,
   dispatch,
+  getHero,
   playableUnoIndices,
   Rng,
 } from '../../src/game';
 import type { ActionResult, GameEvent } from '../../src/game/core/events';
+import { playerCapabilities } from '../../src/game/core/reducer';
 import type { GameState, HearthCard, MinionState } from '../../src/game/core/state';
 import type { UnoAction, UnoCard, UnoColor, UnoValue } from '../../src/game/uno/types';
 
@@ -801,6 +803,39 @@ test('虚空赌徒在回合结束随机弃三张混合手牌，清空 UNO 后立
   expect(events).toContainEqual({ type: 'gameOver', winner: 0, reason: 'unoEmpty' });
 });
 
+test('虚空赌徒在打出的同一回合结束时立即触发', () => {
+  const s = createGame(2, ['voidGambler', 'shield', 'bolt'], 291);
+  s.players[0]!.free = 4;
+  s.players[0]!.hand = Array.from({ length: 4 }, (_, index) => ({
+    id: `same-turn-gambler-uno-${index}`,
+    color: 'red' as const,
+    value: String(index + 1) as UnoCard['value'],
+  }));
+  s.players[0]!.hearthHand = [
+    hearth('same-turn-gambler', 'voidGambler'),
+    hearth('same-turn-shield', 'shield'),
+    hearth('same-turn-bolt', 'bolt'),
+  ];
+
+  const played = okEvents(dispatch(s, new Rng(291), { type: 'playHearth', player: 0, cardIdx: 0 }));
+  const summoned = played.find((event) => event.type === 'minionSummoned');
+  expect(summoned).toBeDefined();
+
+  const ended = okEvents(dispatch(s, new Rng(292), { type: 'endTurn', player: 0 }));
+  expect(ended).toContainEqual({
+    type: 'minionTriggered',
+    player: 0,
+    minionId: summoned!.minionId,
+    effectId: 'voidGambler',
+    trigger: 'turnEnd',
+  });
+  const discarded = ended.find((event) => event.type === 'heroCardsDiscarded');
+  expect(discarded).toBeDefined();
+  if (discarded?.type === 'heroCardsDiscarded') {
+    expect(discarded.unoCardIds.length + discarded.hearthCardIds.length).toBe(3);
+  }
+});
+
 test('余烬凤凰死亡后令下一名对手抽四张 UNO', () => {
   const s = createGame(3, ['ashPhoenix'], 24);
   s.players[0]!.board = [
@@ -1046,6 +1081,7 @@ test('双人局连续反转 +4：自己可继续叠加并把八张罚抽传回�
   expect(s.unoActionsLeft).toBe(0);
   expect(s.players[0]!.pendingDraw).toBe(4);
   expect(playableUnoIndices(s)).toEqual([0]);
+  expect(playerCapabilities(s, 0).playableUnoIndices).toEqual([0]);
 
   const second = dispatch(s, rng, { type: 'playUno', player: 0, cardIdx: 0, color: 'blue' });
   expect(second.ok).toBe(true);
@@ -1058,6 +1094,47 @@ test('双人局连续反转 +4：自己可继续叠加并把八张罚抽传回�
   expect(ended.ok).toBe(true);
   expect(s.turn).toBe(1);
   expect(playableUnoIndices(s)).toEqual([]);
+});
+
+test('四人局反转 +4：被罚玩家无可叠加牌时仍可结束回合接受罚抽', () => {
+  const s = makeState([
+    [
+      { color: 'null', value: 'wildReverseDraw4' },
+      { color: 'red', value: '2' },
+    ],
+    [],
+    [],
+    [],
+  ]);
+  s.players[3]!.hand = [
+    { id: 'four-player-no-stack-a', color: 'red', value: '1' },
+    { id: 'four-player-no-stack-b', color: 'blue', value: '3' },
+  ];
+  const rng = new Rng(454);
+
+  const played = dispatch(s, rng, {
+    type: 'playUno',
+    player: 0,
+    cardIdx: 0,
+    color: 'yellow',
+  });
+  expect(played.ok).toBe(true);
+  expect(s.direction).toBe(-1);
+  expect(s.players[3]!.pendingDraw).toBe(4);
+
+  expect(dispatch(s, rng, { type: 'endTurn', player: 0 }).ok).toBe(true);
+  expect(s.turn).toBe(3);
+  expect(playerCapabilities(s, 3)).toMatchObject({
+    playableUnoIndices: [],
+    hasAnyAction: false,
+  });
+
+  const accepted = okEvents(dispatch(s, rng, { type: 'endTurn', player: 3 }));
+  expect(accepted).toContainEqual(
+    expect.objectContaining({ type: 'drawPenalty', player: 3, count: 4 })
+  );
+  expect(s.players[3]!.pendingDraw).toBe(0);
+  expect(s.turn).toBe(2);
 });
 
 test('最后一张罚抽牌必须等整条罚抽链结算完才确认获胜', () => {
@@ -1276,7 +1353,13 @@ test('英雄技能默认每回合一次，减费与无限次数随从会实时�
     'thug',
   ]);
   s.players[0]!.free = 3;
-  expect(dispatch(s, new Rng(52), { type: 'useHeroPower', player: 0 }).ok).toBe(true);
+  expect(
+    dispatch(s, new Rng(52), {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [s.players[0]!.hand[0]!.id],
+    }).ok
+  ).toBe(true);
   expect(dispatch(s, new Rng(52), { type: 'useHeroPower', player: 0 })).toEqual({
     ok: false,
     error: '英雄技能每回合只能使用一次',
@@ -1305,9 +1388,82 @@ test('英雄技能默认每回合一次，减费与无限次数随从会实时�
       exhausted: false,
     },
   ];
-  expect(dispatch(s, new Rng(53), { type: 'useHeroPower', player: 0 }).ok).toBe(true);
-  expect(dispatch(s, new Rng(54), { type: 'useHeroPower', player: 0 }).ok).toBe(true);
-  expect(s.players[0]!.free).toBe(2);
+  expect(
+    dispatch(s, new Rng(53), {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [s.players[0]!.hand[0]!.id],
+    }).ok
+  ).toBe(true);
+  expect(
+    dispatch(s, new Rng(54), {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [s.players[0]!.hand[0]!.id],
+    }).ok
+  ).toBe(true);
+  expect(s.players[0]!.free).toBe(4);
+});
+
+test('卡牌大师以 1 费选择一张己方 UNO，换取所有玩家牌池中的一张随机炉石', () => {
+  const s = createGame(3, [['shield'], ['bolt'], ['draw2']], 54, {}, [
+    'cardMaster',
+    'thug',
+    'inspector',
+  ]);
+  const source = s.players[0]!;
+  source.free = 1;
+  const exchanged = source.hand[1]!;
+  const topBefore = s.topCard.id;
+  const unoBefore = source.hand.length;
+  const hearthBefore = source.hearthHand.length;
+
+  expect(
+    dispatch(s, new Rng(54), {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [s.players[1]!.hand[0]!.id],
+    })
+  ).toEqual({ ok: false, error: '必须选择自己的一张 UNO 牌进行交换' });
+
+  const events = okEvents(
+    dispatch(s, new Rng(54), {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [exchanged.id],
+    })
+  );
+  expect(getHero('cardMaster').powerCost).toBe(1);
+  expect(source.free).toBe(0);
+  expect(source.hand).toHaveLength(unoBefore - 1);
+  expect(source.hearthHand).toHaveLength(hearthBefore + 1);
+  const receivedEffectId = source.hearthHand.at(-1)?.effectId;
+  expect(receivedEffectId).toBeDefined();
+  expect(['shield', 'bolt', 'draw2']).toContain(receivedEffectId!);
+  expect(s.unoDiscard.some((card) => card.id === exchanged.id)).toBe(true);
+  expect(s.topCard.id).toBe(topBefore);
+  expect(events).toContainEqual({
+    type: 'unoDiscarded',
+    player: 0,
+    cardIds: [exchanged.id],
+    reason: getHero('cardMaster').powerName,
+  });
+  expect(events.some((event) => event.type === 'hearthDrawn')).toBe(true);
+});
+
+test('暴徒以 2 费随机弃掉两张混合手牌，并给自己增加一层护盾', () => {
+  const s = createGame(2, ['shield', 'bolt'], 55, {}, ['thug', 'cardMaster']);
+  const source = s.players[0]!;
+  source.free = 2;
+  source.shield = 1;
+  const before = source.hand.length + source.hearthHand.length;
+
+  const events = okEvents(dispatch(s, new Rng(55), { type: 'useHeroPower', player: 0 }));
+  expect(getHero('thug').powerCost).toBe(2);
+  expect(source.free).toBe(0);
+  expect(source.hand.length + source.hearthHand.length).toBe(before - 2);
+  expect(source.shield).toBe(2);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'heroCardsDiscarded', player: 0 }));
 });
 
 test('检察官洗混两名玩家的全部 UNO 与炉石手牌后完全随机分配', () => {
@@ -1698,7 +1854,6 @@ test('UNO 湮灭只检查费用，UNO 不足五张时弃掉现有全部手牌', 
       type: 'playHearth',
       player: 0,
       cardIdx: 0,
-      unoCardIds: purge.players[0]!.hand.map((card) => card.id),
     })
   );
 
@@ -1939,6 +2094,8 @@ test('随从放置位置越界会被拒绝', () => {
   });
   expect(res.ok).toBe(false);
   expect(s.players[0]!.board).toHaveLength(0);
+  expect(s.players[0]!.free).toBe(3);
+  expect(s.players[0]!.hearthHand.map((card) => card.id)).toEqual(['h0']);
 });
 
 test('效果赋予的嘲讽随从必须先被攻击', () => {

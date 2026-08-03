@@ -8,9 +8,10 @@ const VOLUME_CHANNELS: Array<{ channel: VolumeChannel; label: string; hint: stri
   { channel: 'voice', label: '语音', hint: '英雄台词/剧情' },
 ];
 
-/** 设置浮层：三路音量（BGM/音效/语音）独立调节，修改即时生效并持久化。 */
+/** 设置对话框：三路音量独立调节，并保留一键静音。 */
 export class SettingsPanel {
-  private overlay: HTMLDivElement | null = null;
+  private dialog: HTMLDialogElement | null = null;
+  private returnFocusTo: HTMLElement | null = null;
 
   constructor(
     private host: HTMLElement,
@@ -18,12 +19,17 @@ export class SettingsPanel {
   ) {}
 
   show(): void {
-    if (this.overlay) return;
-    this.overlay = document.createElement('div');
-    this.overlay.className = 'pause-overlay settings-overlay';
-    this.overlay.setAttribute('role', 'dialog');
-    this.overlay.setAttribute('aria-modal', 'true');
-    this.overlay.setAttribute('aria-labelledby', 'settings-title');
+    if (this.dialog) return;
+    this.returnFocusTo =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const dialog = document.createElement('dialog');
+    this.dialog = dialog;
+    dialog.className = 'settings-dialog';
+    dialog.setAttribute('aria-labelledby', 'settings-title');
+    // Chromium 支持原生轻触遮罩关闭；下面的 click 监听兼容尚未实现 closedby 的浏览器。
+    dialog.setAttribute('closedby', 'any');
+
     const card = document.createElement('div');
     card.className = 'pause-card settings-card';
     const title = document.createElement('div');
@@ -31,6 +37,7 @@ export class SettingsPanel {
     title.id = 'settings-title';
     title.textContent = '⚙ 设置';
     card.append(title);
+
     for (const { channel, label, hint } of VOLUME_CHANNELS) {
       const row = document.createElement('label');
       row.className = 'settings-row';
@@ -58,20 +65,50 @@ export class SettingsPanel {
       row.append(copy, slider, value);
       card.append(row);
     }
+
+    const actions = document.createElement('div');
+    actions.className = 'settings-actions';
+    const mute = document.createElement('button');
+    mute.type = 'button';
+    mute.className = 'btn btn-quiet pause-btn';
+    const updateMute = (): void => {
+      mute.textContent = audio.isMuted ? '🔇 取消静音' : '🔊 全部静音';
+      mute.setAttribute('aria-pressed', String(audio.isMuted));
+    };
+    updateMute();
+    mute.addEventListener('click', () => {
+      audio.toggleMute();
+      updateMute();
+    });
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'btn pause-btn';
     close.textContent = '关闭';
-    close.addEventListener('click', () => this.hide());
-    card.append(close);
-    this.overlay.append(card);
-    this.host.append(this.overlay);
+    close.addEventListener('click', () => dialog.close());
+    actions.append(mute, close);
+    card.append(actions);
+    dialog.append(card);
+
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+    dialog.addEventListener('close', () => this.cleanup(), { once: true });
+    this.host.append(dialog);
+    dialog.showModal();
     close.focus();
   }
 
   hide(): void {
-    this.overlay?.remove();
-    this.overlay = null;
+    if (this.dialog?.open) this.dialog.close();
+    else this.cleanup();
+  }
+
+  private cleanup(): void {
+    this.dialog?.remove();
+    this.dialog = null;
+    const target = this.returnFocusTo;
+    this.returnFocusTo = null;
+    if (target?.isConnected) target.focus();
     this.onClose?.();
   }
 }

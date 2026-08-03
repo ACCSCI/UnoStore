@@ -42,7 +42,12 @@ import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
-import { type ActivityEntry, attachActivityHover, formatActivity } from './ActivityFormatter';
+import {
+  type ActivityEntry,
+  attachActivityHover,
+  clearActivityHover,
+  formatActivity,
+} from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
@@ -70,6 +75,7 @@ export class BattleScreen extends Screen {
   private tableSeats: HTMLElement[] = [];
   private playerTargetButtons = new Map<number, HTMLButtonElement>();
   private opponentHeroEl: HTMLButtonElement | null = null;
+  private opponentShieldEl: HTMLElement | null = null;
   private targetingHudEl: HTMLElement | null = null;
   private activityLedgerEl: HTMLOListElement | null = null;
   private handSummaryEl: HTMLElement | null = null;
@@ -89,6 +95,7 @@ export class BattleScreen extends Screen {
   private selectedAttackerId: string | null = null;
   private unoTargetCardId: string | null = null;
   private heroTargetSelection: Set<number> | null = null;
+  private heroUnoSelection: Set<string> | null = null;
   private workDoneAnnouncedTurn = -1;
   private workDoneTimer: number | null = null;
   private roulettePromptOpen = false;
@@ -176,6 +183,10 @@ export class BattleScreen extends Screen {
       opponentPortrait.textContent = 'AI';
       opponentPortrait.setAttribute('aria-hidden', 'true');
     }
+    this.opponentShieldEl = this.el('span', 'hero-shield-badge');
+    this.opponentShieldEl.hidden = true;
+    this.opponentShieldEl.setAttribute('aria-hidden', 'true');
+    opponentPortrait.appendChild(this.opponentShieldEl);
     const opponentCopy = this.el('div', 'hero-copy');
     this.opponentNameEl = this.el('strong', 'hero-name', this.match.opponentName);
     this.opponentSubtitleEl = this.el(
@@ -209,8 +220,13 @@ export class BattleScreen extends Screen {
         seatPortrait.src = assetUrl(seatHero.portrait);
         seatPortrait.alt = '';
         seatPortrait.className = 'seat-hero-portrait';
+        const seatPortraitWrap = this.el('span', 'seat-portrait-wrap');
+        const seatShield = this.el('span', 'seat-shield-badge');
+        seatShield.hidden = true;
+        seatShield.setAttribute('aria-hidden', 'true');
+        seatPortraitWrap.append(seatPortrait, seatShield);
         target.append(
-          seatPortrait,
+          seatPortraitWrap,
           this.el('span', 'seat-index', String(player + 1)),
           this.el('strong', undefined, player === 0 ? '你' : `AI ${player}`),
           this.el('small', 'seat-card-count', 'UNO 5 · 炉石 3'),
@@ -236,7 +252,10 @@ export class BattleScreen extends Screen {
     const heroImage = new Image();
     heroImage.src = assetUrl(hero.portrait);
     heroImage.alt = '';
-    playerPortrait.appendChild(heroImage);
+    this.playerShieldEl = this.el('span', 'hero-shield-badge');
+    this.playerShieldEl.hidden = true;
+    this.playerShieldEl.setAttribute('aria-hidden', 'true');
+    playerPortrait.append(heroImage, this.playerShieldEl);
     playerPortrait.addEventListener('contextmenu', (event) => {
       event.preventDefault();
       event.stopPropagation(); // 已消费为语音菜单，不再触发“右键取消选择”
@@ -259,11 +278,8 @@ export class BattleScreen extends Screen {
     this.playerFrozenEl = this.el('strong', undefined, '0');
     frozen.append(this.playerFrozenEl);
     resources.append(crystal, frozen);
-    this.playerShieldEl = this.el('span', 'hero-shield-badge');
-    this.playerShieldEl.setAttribute('aria-label', '护盾层数');
-    playerCard.appendChild(this.playerShieldEl);
     this.playerHeroPowerEl = this.btn(
-      `${hero.powerName} · 2`,
+      `${hero.powerName} · ${hero.powerCost}`,
       () => this.useHeroPower(),
       'hero-power-button'
     );
@@ -678,6 +694,7 @@ export class BattleScreen extends Screen {
       this.hearthSelection = null;
       this.selectedAttackerId = null;
       this.heroTargetSelection = null;
+      this.heroUnoSelection = null;
       this.unoTargetCardId = this.unoTargetCardId === card.id ? null : card.id;
       this.refreshUI();
       this.setStatus(
@@ -722,6 +739,16 @@ export class BattleScreen extends Screen {
   private onCardClicked(id: string, isHearth: boolean): void {
     if (this.session?.phase !== 'playing' || this.actionAnimating) return;
     if (this.session.state.turn !== 0) return;
+    if (this.heroUnoSelection) {
+      if (isHearth || !this.session.state.players[0]!.hand.some((card) => card.id === id)) return;
+      if (this.heroUnoSelection.has(id)) this.heroUnoSelection.delete(id);
+      else {
+        this.heroUnoSelection.clear();
+        this.heroUnoSelection.add(id);
+      }
+      this.refreshUI();
+      return;
+    }
     const activeSelectionEffect = this.hearthSelection
       ? getEffect(this.hearthSelection.effectId)
       : null;
@@ -770,6 +797,7 @@ export class BattleScreen extends Screen {
         }
         this.selectedAttackerId = null;
         this.unoTargetCardId = null;
+        this.heroUnoSelection = null;
         this.hearthSelection = {
           cardId: id,
           effectId: card.effectId,
@@ -843,6 +871,7 @@ export class BattleScreen extends Screen {
     if (!minion || minion.exhausted) return;
     this.hearthSelection = null;
     this.heroTargetSelection = null;
+    this.heroUnoSelection = null;
     this.unoTargetCardId = null;
     this.selectedAttackerId = this.selectedAttackerId === id ? null : id;
     this.refreshUI();
@@ -977,6 +1006,22 @@ export class BattleScreen extends Screen {
   private useHeroPower(): void {
     if (!(this.session && this.session.state.turn === 0) || this.actionAnimating) return;
     const player = this.session.state.players[0]!;
+    if (player.heroId === 'cardMaster') {
+      const candidate = player.hand[0]?.id;
+      const error = heroPowerError(this.session.state, 0, [], candidate ? [candidate] : []);
+      if (error) {
+        this.setStatus(`✗ ${error}`);
+        return;
+      }
+      this.hearthSelection = null;
+      this.selectedAttackerId = null;
+      this.unoTargetCardId = null;
+      this.heroTargetSelection = null;
+      this.heroUnoSelection = new Set();
+      this.refreshUI();
+      this.setStatus('卡牌大师：选择 1 张自己的 UNO 牌，换取随机炉石牌');
+      return;
+    }
     if (player.heroId === 'inspector') {
       const candidates = this.session.state.players
         .map((entry, index) => (entry.active ? index : -1))
@@ -990,6 +1035,7 @@ export class BattleScreen extends Screen {
       this.hearthSelection = null;
       this.selectedAttackerId = null;
       this.unoTargetCardId = null;
+      this.heroUnoSelection = null;
       this.heroTargetSelection = new Set();
       this.refreshUI();
       this.setStatus('选择两名玩家，确认后洗混并随机重分双方全部 UNO 与炉石手牌');
@@ -1009,6 +1055,19 @@ export class BattleScreen extends Screen {
     });
     if (result.ok) {
       this.heroTargetSelection = null;
+      void this.afterAction(result.events);
+    } else this.setStatus(`✗ ${result.error}`);
+  }
+
+  private confirmHeroUnoExchange(): void {
+    if (!(this.session && this.heroUnoSelection?.size === 1)) return;
+    const result = storyDispatch(this.session, {
+      type: 'useHeroPower',
+      player: 0,
+      unoCardIds: [...this.heroUnoSelection],
+    });
+    if (result.ok) {
+      this.heroUnoSelection = null;
       void this.afterAction(result.events);
     } else this.setStatus(`✗ ${result.error}`);
   }
@@ -1063,12 +1122,14 @@ export class BattleScreen extends Screen {
       this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection
+        this.heroTargetSelection ||
+        this.heroUnoSelection
     );
     this.hearthSelection = null;
     this.selectedAttackerId = null;
     this.unoTargetCardId = null;
     this.heroTargetSelection = null;
+    this.heroUnoSelection = null;
     if (hadSelection) {
       this.refreshUI();
       if (announce) this.setStatus('已取消目标选择');
@@ -1081,7 +1142,8 @@ export class BattleScreen extends Screen {
       (this.hearthSelection ||
         this.selectedAttackerId ||
         this.unoTargetCardId ||
-        this.heroTargetSelection)
+        this.heroTargetSelection ||
+        this.heroUnoSelection)
     ) {
       event.preventDefault();
       this.cancelTargeting();
@@ -1095,7 +1157,8 @@ export class BattleScreen extends Screen {
       this.hearthSelection ||
       this.selectedAttackerId ||
       this.unoTargetCardId ||
-      this.heroTargetSelection
+      this.heroTargetSelection ||
+      this.heroUnoSelection
     ) {
       this.cancelTargeting();
     }
@@ -1112,9 +1175,19 @@ export class BattleScreen extends Screen {
       this.selectedAttackerId = null;
       this.unoTargetCardId = null;
       this.heroTargetSelection = null;
+      this.heroUnoSelection = null;
     }
     const focusedOpponent = s.turn === 0 ? nextActiveFrom(s, 0) : s.turn;
     const opp = s.players[focusedOpponent]!;
+    this.updateShieldBadge(this.playerShieldEl, p.shield);
+    this.updateShieldBadge(this.opponentShieldEl, opp.shield);
+    if (this.playerHeroPortraitEl) {
+      const shieldLabel = p.shield > 0 ? `；护盾 ${p.shield}` : '';
+      this.playerHeroPortraitEl.setAttribute(
+        'aria-label',
+        `${getHero(p.heroId).name}头像${shieldLabel}；右键发送语音`
+      );
+    }
     const nextPlayer = nextActiveFrom(s, s.turn);
     // 有质感的彩色状态栏：顶牌用颜色名 + 数值，万能牌显示所选颜色
     const top = s.topCard ? fmtCardFull(s.topCard) : '-';
@@ -1170,6 +1243,7 @@ export class BattleScreen extends Screen {
           crystals.textContent = state.active
             ? `💎 ${state.free}${state.frozen ? ` · ❄ ${state.frozen}` : ''}`
             : '💎 0';
+        this.updateShieldBadge(seat.querySelector<HTMLElement>('.seat-shield-badge'), state.shield);
         const fan = seat.querySelector<HTMLElement>('.seat-hand-fan');
         if (fan) {
           fan.replaceChildren();
@@ -1223,6 +1297,9 @@ export class BattleScreen extends Screen {
     } else if (this.unoTargetCardId) {
       selectedCards.add(this.unoTargetCardId);
       interactionCards = new Set([this.unoTargetCardId]);
+    } else if (this.heroUnoSelection) {
+      for (const id of this.heroUnoSelection) selectedCards.add(id);
+      interactionCards = new Set(p.hand.map((card) => card.id));
     }
     this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards);
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
@@ -1344,11 +1421,6 @@ export class BattleScreen extends Screen {
       this.playerHeroPowerEl.textContent = `${getHero(p.heroId).powerName} · ${heroPowerCost(s, 0)}`;
       this.playerHeroPowerEl.title = powerError ?? getHero(p.heroId).description;
     }
-    if (this.playerShieldEl) {
-      const shield = p.shield;
-      this.playerShieldEl.textContent = shield > 0 ? `⬟ ${shield}` : '';
-      this.playerShieldEl.classList.toggle('visible', shield > 0);
-    }
     // 炉石式单按钮：无牌可出时，结束回合自动抽一张。
     this.view?.setActionEnabled(
       0,
@@ -1394,7 +1466,8 @@ export class BattleScreen extends Screen {
           this.hearthSelection ||
           this.selectedAttackerId ||
           this.unoTargetCardId ||
-          this.heroTargetSelection
+          this.heroTargetSelection ||
+          this.heroUnoSelection
         )
           return;
         const latest = playerCapabilities(this.session.state, 0);
@@ -1552,6 +1625,22 @@ export class BattleScreen extends Screen {
       this.targetingHudEl.classList.add('visible');
       return;
     }
+    if (this.heroUnoSelection) {
+      const copy = this.el('span', 'targeting-copy');
+      copy.append(
+        this.el('strong', undefined, '卡牌大师 · 借牌生花'),
+        this.el('small', undefined, `选择 1 张自己的 UNO 牌 ${this.heroUnoSelection.size}/1`)
+      );
+      const confirm = this.btn(
+        '确认交换',
+        () => this.confirmHeroUnoExchange(),
+        'targeting-confirm'
+      );
+      confirm.disabled = this.heroUnoSelection.size !== 1;
+      this.targetingHudEl.append(copy, confirm, cancel);
+      this.targetingHudEl.classList.add('visible');
+      return;
+    }
     if (this.hearthSelection) {
       const effect = getEffect(this.hearthSelection.effectId);
       if (!effect?.targeting) return;
@@ -1622,6 +1711,12 @@ export class BattleScreen extends Screen {
     this.targetingHudEl.classList.remove('visible');
   }
 
+  private updateShieldBadge(element: HTMLElement | null, count: number): void {
+    if (!element) return;
+    element.hidden = count <= 0;
+    element.textContent = `🛡 ${count}`;
+  }
+
   private showTurnNotice(title: string, detail: string, kind: string): void {
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
     this.transientNotice = { title, detail, kind };
@@ -1686,6 +1781,7 @@ export class BattleScreen extends Screen {
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
+    clearActivityHover();
     this.activityLedgerEl.replaceChildren();
     for (const entry of this.activityEntries.slice(-80)) {
       const item = this.el('li', undefined, entry.text);

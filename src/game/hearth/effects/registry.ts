@@ -14,12 +14,12 @@ export type HearthTargeting =
   | { type: 'giveCards'; count: number }
   | { type: 'minion'; count: 1; side: 'friendly' | 'enemy' | 'any' };
 
-/** 需要选择的己方 UNO 数量；允许短缺的牌会在不足上限时选择现有全部手牌。 */
+/** 需要玩家手动选择的己方 UNO 数量；允许短缺的牌在不足上限时由规则层自动使用全部手牌。 */
 export function requiredOwnUnoCardCount(
   targeting: Extract<HearthTargeting, { type: 'ownUnoCards' }>,
   available: number
 ): number {
-  return targeting.useAllWhenShort ? Math.min(targeting.count, available) : targeting.count;
+  return targeting.useAllWhenShort && available < targeting.count ? 0 : targeting.count;
 }
 
 export type HearthKeywordId = 'charge' | 'taunt' | 'battlecry' | 'deathrattle';

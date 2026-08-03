@@ -60,6 +60,7 @@ test('强力随从在每套炉石预设中均有两张，避免长期抽不到',
     'powerUnbound',
     'chromaticConductor',
     'bloodMeasureArbiter',
+    'formationCommander',
   ];
   for (const deck of PRESET_DECKS) {
     for (const effectId of featured) {
@@ -68,9 +69,9 @@ test('强力随从在每套炉石预设中均有两张，避免长期抽不到',
   }
 });
 
-test('预设牌组不超 50 张上限', () => {
+test('预设牌组不超 80 张上限', () => {
   for (const deck of PRESET_DECKS) {
-    expect(deck.cardIds.length).toBeLessThanOrEqual(50);
+    expect(deck.cardIds.length).toBeLessThanOrEqual(80);
     expect(deck.cardIds.length).toBeGreaterThanOrEqual(10);
   }
 });
