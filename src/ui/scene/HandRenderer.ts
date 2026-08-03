@@ -61,10 +61,16 @@ export class HandRenderer {
     private scene: THREE.Scene,
     private renderer: THREE.WebGLRenderer,
     private camera: THREE.PerspectiveCamera,
-    private onClick: (entry: HandCardEntry) => void,
+    private onClick: (entry: HandCardEntry, clientX?: number, clientY?: number) => void,
     private onHover?: (entry: HandCardEntry | null) => void,
     private findExtraHover?: (raycaster: THREE.Raycaster) => UnoCard | null,
-    private onPreviewSelect?: (entry: HandCardEntry | null) => void
+    private onPreviewSelect?: (entry: HandCardEntry | null) => void,
+    private onStagedPointer?: (
+      entry: HandCardEntry | null,
+      clientX?: number,
+      clientY?: number,
+      overTable?: boolean
+    ) => void
   ) {
     this.scene.add(this.group);
     renderer.domElement.addEventListener('pointermove', this.handleMove);
@@ -108,6 +114,7 @@ export class HandRenderer {
     this.extraHoverId = null;
     this.cancelTouchGesture();
     this.removeFloatingPreview();
+    this.onStagedPointer?.(null);
     this.renderer.domElement.style.cursor = '';
     this.scene.remove(this.group);
   }
@@ -128,6 +135,7 @@ export class HandRenderer {
       this.stagedId = null;
       this.removeFloatingPreview();
       this.onPreviewSelect?.(null);
+      this.onStagedPointer?.(null);
     }
     for (const [id, mesh] of this.meshes) {
       if (!ids.has(id)) {
@@ -285,6 +293,7 @@ export class HandRenderer {
     ) {
       e.preventDefault();
       this.updateFloatingCard(this.touchGesture.cardId, e.clientX, e.clientY);
+      this.notifyStagedPointer(this.touchGesture.cardId, e.clientX, e.clientY);
       return;
     }
     const hit =
@@ -332,7 +341,9 @@ export class HandRenderer {
   private handleGlobalPointerMove = (event: PointerEvent): void => {
     if (!(this.stagedId && event.pointerType !== 'touch')) return;
     // 捕获阶段覆盖整个视口：无论指针位于 Canvas、HUD 或其他覆盖层，卡牌都持续跟手。
+    this.updateRaycaster(event);
     this.updateFloatingCard(this.stagedId, event.clientX, event.clientY);
+    this.notifyStagedPointer(this.stagedId, event.clientX, event.clientY);
   };
 
   private handleGlobalPointerDown = (event: PointerEvent): void => {
@@ -368,7 +379,7 @@ export class HandRenderer {
       timer: 0,
     };
     gesture.timer = window.setTimeout(() => {
-      if (this.touchGesture !== gesture || !entry.playable) return;
+      if (this.touchGesture !== gesture) return;
       gesture.held = true;
       this.stage(entry, e.clientX, e.clientY);
       this.renderer.domElement.setPointerCapture?.(e.pointerId);
@@ -387,16 +398,17 @@ export class HandRenderer {
       if (gesture) window.clearTimeout(gesture.timer);
       if (gesture?.held) {
         const draggedEntry = this.entryById(gesture.cardId);
-        const shouldPlay = Boolean(draggedEntry?.playable && this.isOverTable());
+        const shouldPlay = Boolean(draggedEntry && this.isOverTable());
         this.touchGesture = null;
         this.renderer.domElement.releasePointerCapture?.(e.pointerId);
         this.removeFloatingPreview();
         if (shouldPlay) {
           this.stagedId = null;
           this.onPreviewSelect?.(null);
+          this.onStagedPointer?.(null);
         }
         this.layoutAll();
-        if (shouldPlay) this.commit(gesture.cardId);
+        if (shouldPlay) this.commit(gesture.cardId, e.clientX, e.clientY);
         return;
       }
       this.touchGesture = null;
@@ -409,8 +421,9 @@ export class HandRenderer {
       this.stagedId = null;
       this.onPreviewSelect?.(null);
       this.removeFloatingPreview();
+      this.onStagedPointer?.(null);
       this.layoutAll();
-      this.commit(id);
+      this.commit(id, e.clientX, e.clientY);
       return;
     }
     if (!entry) {
@@ -443,9 +456,7 @@ export class HandRenderer {
   };
 
   private handlePointerCancel = (): void => {
-    this.cancelTouchGesture();
-    this.removeFloatingPreview();
-    this.layoutAll();
+    this.clearPreviewSelection();
   };
 
   private handleContextMenu = (event: MouseEvent): void => {
@@ -489,6 +500,7 @@ export class HandRenderer {
     this.onPreviewSelect?.(null);
     this.layoutAll();
     this.updateFloatingCard(entry.id, clientX, clientY);
+    this.notifyStagedPointer(entry.id, clientX, clientY);
   }
 
   private updateRaycaster(e: PointerEvent): void {
@@ -561,9 +573,15 @@ export class HandRenderer {
     this.floatingPreview = null;
   }
 
-  private commit(id: string): void {
+  private notifyStagedPointer(id: string, clientX: number, clientY: number): void {
+    const entry = this.entryById(id);
+    if (!entry) return;
+    this.onStagedPointer?.(entry, clientX, clientY, this.isOverTable() && this.hitEntry() === null);
+  }
+
+  private commit(id: string, clientX: number, clientY: number): void {
     const entry = this.meshes.get(id)?.userData.entry as HandCardEntry | undefined;
-    if (entry?.playable) this.onClick(entry);
+    if (entry) this.onClick(entry, clientX, clientY);
   }
 
   private layoutAll(): void {
@@ -582,6 +600,7 @@ export class HandRenderer {
     this.cancelTouchGesture();
     this.removeFloatingPreview();
     this.onPreviewSelect?.(null);
+    this.onStagedPointer?.(null);
     this.layoutAll();
   }
 
@@ -598,6 +617,7 @@ export class HandRenderer {
     this.hitMeshes.clear();
     this.orderedIds = [];
     this.stagedId = null;
+    this.onStagedPointer?.(null);
     this.previewOnlyId = null;
     this.cancelTouchGesture();
     this.removeFloatingPreview();
