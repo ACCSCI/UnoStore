@@ -1744,6 +1744,25 @@ test('检察官洗混两名玩家的全部 UNO 与炉石手牌后完全随机分
   ]).not.toEqual([3, 7]);
 });
 
+test('检察官洗牌后任一参与者清空 UNO 都会立即获胜', () => {
+  for (const [seed, winner] of [
+    [1, 0],
+    [7, 1],
+  ] as const) {
+    const s = createGame(3, ['shield'], seed, {}, ['inspector', 'thug', 'cardMaster']);
+    s.players[0]!.free = 2;
+    s.players[0]!.hand = [{ id: `last-${seed}`, color: 'red', value: '1' }];
+    s.players[1]!.hand = [];
+    s.players[0]!.hearthHand = [];
+    s.players[1]!.hearthHand = [];
+    const events = okEvents(
+      dispatch(s, new Rng(seed), { type: 'useHeroPower', player: 0, targets: [0, 1] })
+    );
+    expect(s.phase).toBe('gameOver');
+    expect(events).toContainEqual({ type: 'gameOver', winner, reason: 'unoEmpty' });
+  }
+});
+
 test('赎罪斗士攻击时不伤害目标，改为拥有者随机弃掉等同攻击力的 UNO', () => {
   const s = createGame(2, ['penitentChampion'], 47);
   s.players[0]!.hand = Array.from({ length: 5 }, (_, index) => ({

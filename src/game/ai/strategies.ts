@@ -286,15 +286,17 @@ export class HardCombo implements AiStrategy {
 
 function heroAction(state: GameState, player: number): GameAction | null {
   const source = state.players[player]!;
-  const targets =
+  const inspectorTarget =
     source.heroId === 'inspector'
-      ? [
-          player,
-          state.players
-            .map((entry, index) => ({ entry, index }))
-            .filter(({ entry, index }) => entry.active && index !== player)
-            .sort((a, b) => b.entry.hand.length - a.entry.hand.length)[0]?.index ?? -1,
-        ]
+      ? state.players
+          .map((entry, index) => ({ entry, index }))
+          .filter(({ entry, index }) => entry.active && index !== player)
+          .sort((a, b) => a.entry.hand.length - b.entry.hand.length || a.index - b.index)[0]
+      : undefined;
+  // 洗牌会令双方 UNO 数趋近平均值：只在自己明显更多时使用，并拉高最接近胜利的敌人。
+  const targets =
+    inspectorTarget && source.hand.length >= inspectorTarget.entry.hand.length + 2
+      ? [player, inspectorTarget.index]
       : [];
   const unoCardIds =
     source.heroId === 'cardMaster' ? source.hand.slice(0, 1).map((card) => card.id) : [];

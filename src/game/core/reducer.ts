@@ -1423,6 +1423,11 @@ function useHeroPowerAction(
     state.players[second]!.hand = secondUno;
     state.players[second]!.hearthHand = secondHearth;
     events.push({ type: 'handsRemixed', player: action.player, first, second });
+    for (const player of [first, second]) {
+      checkUnoAlert(state, player, events);
+      if (state.players[player]!.hand.length === 0) queueUnoWinCandidate(state, player);
+    }
+    settlePendingUnoWin(state, events);
   }
 
   applyMercyRule(state, events);
