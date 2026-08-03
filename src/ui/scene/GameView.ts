@@ -721,17 +721,19 @@ export class GameView {
 
   private toggleHandCollapsed = (): void => {
     this.handCollapsed = !this.handCollapsed;
-    const animationDurationMs = this.hand?.getCollapseTransitionDurationMs() ?? 460;
+    const animationDurationMs =
+      this.hand?.getCollapseTransitionDurationMs(this.handCollapsed) ?? 460;
     this.hand?.setCollapsed(this.handCollapsed);
     const soundDurationMs = this.handCollapsed
       ? HAND_COLLAPSE_SFX_DURATION_MS
       : HAND_EXPAND_SFX_DURATION_MS;
+    const playbackRate = THREE.MathUtils.clamp(soundDurationMs / animationDurationMs, 0.72, 2.4);
     audio.playSfx(
       this.handCollapsed
         ? '/assets/audio/sfx/generated/hand_collapse.mp3'
         : '/assets/audio/sfx/generated/hand_expand.mp3',
       0.72,
-      soundDurationMs / animationDurationMs
+      playbackRate
     );
     if (!this.handCollapseButton) return;
     this.handCollapseButton.textContent = this.handCollapsed ? '展开手牌' : '收牌';
@@ -866,6 +868,11 @@ export class GameView {
     // canvas is allowed to interpret empty space as hand collapse/expand.
     if (this.onCancelGameplaySelection()) {
       event.stopPropagation();
+      return;
+    }
+    if (this.hand?.isCollapseTransitioning()) {
+      event.stopPropagation();
+      this.toggleHandCollapsed();
       return;
     }
     if (this.hand?.containsCardAt(event.clientX, event.clientY)) return;

@@ -46,6 +46,27 @@ export function handLayoutTransitionDurationMs(cardCount: number): number {
   return HAND_LAYOUT_TRAVEL_MS + Math.max(0, count - 1) * HAND_LAYOUT_STAGGER_MS;
 }
 
+/** 推进可逆的手牌布局时间轴；0 是完全展开，totalDurationMs 是完全收起。 */
+export function advanceHandLayoutTimelineMs(
+  currentMs: number,
+  elapsedMs: number,
+  collapsing: boolean,
+  totalDurationMs: number
+): number {
+  const total = Math.max(0, totalDurationMs);
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return THREE.MathUtils.clamp(currentMs + (collapsing ? elapsed : -elapsed), 0, total);
+}
+
+/** 单张牌在整段可逆时间轴上的局部进度；顺放与倒放严格经过同一条轨迹。 */
+export function handCardLayoutProgress(timelineMs: number, cardIndex: number): number {
+  return THREE.MathUtils.clamp(
+    (timelineMs - Math.max(0, cardIndex) * HAND_LAYOUT_STAGGER_MS) / HAND_LAYOUT_TRAVEL_MS,
+    0,
+    1
+  );
+}
+
 export interface HandCardEntry {
   id: string;
   isHearth: boolean;
@@ -84,6 +105,11 @@ export class HandRenderer {
   private suppressContextMenuUntil = 0;
   private collapsed = false;
   private layoutTransitionFrame = 0;
+  private layoutTransitionLastTime = 0;
+  private layoutTimelineMs = 0;
+  private layoutTransitionDurationMs = HAND_LAYOUT_TRAVEL_MS;
+  private expandedLayoutTargets = new Map<string, CardTransform>();
+  private collapsedLayoutTargets = new Map<string, CardTransform>();
 
   constructor(
     private scene: THREE.Scene,
@@ -194,6 +220,7 @@ export class HandRenderer {
     this.orderedIds = entries.map((entry) => entry.id);
     entries.forEach((entry, i) => {
       let mesh = this.meshes.get(entry.id);
+      const existingMesh = Boolean(mesh);
       if (!mesh) {
         mesh = entry.isHearth ? createHearthCardMesh(entry.hearth!) : createCardMesh(entry.uno!);
         const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -229,9 +256,17 @@ export class HandRenderer {
       mesh.userData.entry = entry;
       const hitMesh = this.hitMeshes.get(entry.id);
       if (hitMesh) hitMesh.userData.entry = entry;
-      this.layoutCard(entry.id, i, n);
+      if (!(this.layoutTransitionFrame && existingMesh)) this.layoutCard(entry.id, i, n);
     });
     this.updateStackBase(n);
+    if (this.layoutTransitionFrame) {
+      const previousDuration = this.layoutTransitionDurationMs;
+      const normalizedTimeline =
+        previousDuration > 0 ? this.layoutTimelineMs / previousDuration : 0;
+      this.layoutTransitionDurationMs = handLayoutTransitionDurationMs(n);
+      this.layoutTimelineMs = normalizedTimeline * this.layoutTransitionDurationMs;
+      this.relayout();
+    }
   }
 
   setCollapsed(collapsed: boolean): void {
@@ -248,8 +283,14 @@ export class HandRenderer {
   }
 
   /** 当前手牌数量对应的收起/展开动画总时长，供音效播放速率同步。 */
-  getCollapseTransitionDurationMs(): number {
-    return handLayoutTransitionDurationMs(this.orderedIds.length);
+  getCollapseTransitionDurationMs(targetCollapsed = this.collapsed): number {
+    const total = handLayoutTransitionDurationMs(this.orderedIds.length);
+    if (!this.layoutTransitionFrame) return total;
+    return Math.max(1, targetCollapsed ? total - this.layoutTimelineMs : this.layoutTimelineMs);
+  }
+
+  isCollapseTransitioning(): boolean {
+    return this.layoutTransitionFrame !== 0;
   }
 
   containsCardAt(clientX: number, clientY: number): boolean {
@@ -289,9 +330,7 @@ export class HandRenderer {
         }
       }
     }
-    for (let i = 0; i < this.orderedIds.length; i++) {
-      this.layoutCard(this.orderedIds[i]!, i, this.orderedIds.length);
-    }
+    this.relayout();
   }
 
   /** 来源牌或待弃 UNO 的选中态；与 hover 分离，避免命中区域抖动。 */
@@ -301,9 +340,7 @@ export class HandRenderer {
       if (!entry) continue;
       entry.selected = ids.has(id);
     }
-    for (let i = 0; i < this.orderedIds.length; i++) {
-      this.layoutCard(this.orderedIds[i]!, i, this.orderedIds.length);
-    }
+    this.relayout();
   }
 
   /** 所有从手牌选择卡牌的技能共用同一交互模式。 */
@@ -337,7 +374,7 @@ export class HandRenderer {
       this.previewOnlyId = null;
       this.onPreviewSelect?.(null);
     }
-    this.layoutAll();
+    this.relayout();
     this.setCursor('default');
   }
 
@@ -550,7 +587,7 @@ export class HandRenderer {
           this.onPreviewSelect?.(null);
           this.onStagedPointer?.(null);
         }
-        this.layoutAll();
+        this.relayout();
         if (shouldPlay) this.commit(gesture.cardId, e.clientX, e.clientY);
         return;
       }
@@ -565,7 +602,7 @@ export class HandRenderer {
       this.onPreviewSelect?.(null);
       this.removeFloatingPreview();
       this.onStagedPointer?.(null);
-      this.layoutAll();
+      this.relayout();
       this.commit(id, e.clientX, e.clientY);
       return;
     }
@@ -576,7 +613,7 @@ export class HandRenderer {
         this.stagedId = null;
         this.previewOnlyId = previewEntry.id;
         this.onPreviewSelect?.(previewEntry);
-        this.layoutAll();
+        this.relayout();
         return;
       }
       this.clearPreviewSelection();
@@ -609,7 +646,7 @@ export class HandRenderer {
         this.stagedId = null;
         this.previewOnlyId = previewEntry.id;
         this.onPreviewSelect?.(previewEntry);
-        this.layoutAll();
+        this.relayout();
         return;
       }
       this.clearPreviewSelection();
@@ -627,7 +664,7 @@ export class HandRenderer {
     this.stagedId = entry.id;
     this.removeFloatingPreview();
     this.onPreviewSelect?.(null);
-    this.layoutAll();
+    this.relayout();
     this.setCursor('grabbing');
     this.updateFloatingCard(entry.id, clientX, clientY);
     this.notifyStagedPointer(entry.id, clientX, clientY);
@@ -714,63 +751,94 @@ export class HandRenderer {
     }
   }
 
-  private animateCollapsedLayout(collapsed: boolean): void {
-    cancelAnimationFrame(this.layoutTransitionFrame);
-    this.layoutTransitionFrame = 0;
-    const ids = [...this.orderedIds];
-    const starts = new Map<string, CardTransform>();
-    for (const id of ids) {
-      const mesh = this.meshes.get(id);
-      if (mesh) starts.set(id, captureTransform(mesh));
+  private relayout(): void {
+    if (!this.layoutTransitionFrame) {
+      this.layoutAll();
+      return;
     }
+    this.captureLayoutTargets();
+    this.applyLayoutTimeline();
+  }
 
-    const startingStackOpacity = this.stackMaterials[0]?.opacity ?? 0;
+  private animateCollapsedLayout(collapsed: boolean): void {
+    const wasAnimating = this.layoutTransitionFrame !== 0;
+    const wasCollapsed = this.collapsed;
     this.collapsed = collapsed;
-    this.updateStackBase(ids.length);
-    this.layoutAll();
-    const targets = new Map<string, CardTransform>();
-    for (const id of ids) {
-      const mesh = this.meshes.get(id);
-      if (!mesh) continue;
-      targets.set(id, captureTransform(mesh));
-      const start = starts.get(id);
-      if (start) applyTransform(mesh, start);
+    this.layoutTransitionDurationMs = handLayoutTransitionDurationMs(this.orderedIds.length);
+    if (!wasAnimating) {
+      this.layoutTimelineMs = wasCollapsed ? this.layoutTransitionDurationMs : 0;
     }
+    this.captureLayoutTargets();
     for (const hitMesh of this.hitMeshes.values()) hitMesh.visible = false;
     this.stackBase.visible = true;
-    this.setStackOpacity(startingStackOpacity);
+    this.applyLayoutTimeline();
+    this.layoutTransitionLastTime = performance.now();
+    if (!wasAnimating)
+      this.layoutTransitionFrame = requestAnimationFrame(this.stepLayoutTransition);
+  }
 
-    const started = performance.now();
-    const totalDuration = handLayoutTransitionDurationMs(ids.length);
-    const step = (now: number): void => {
-      const elapsed = now - started;
-      ids.forEach((id, index) => {
-        const mesh = this.meshes.get(id);
-        const start = starts.get(id);
-        const target = targets.get(id);
-        if (!(mesh && start && target)) return;
-        const delayIndex = collapsed ? index : ids.length - index - 1;
-        const progress = THREE.MathUtils.clamp(
-          (elapsed - delayIndex * HAND_LAYOUT_STAGGER_MS) / HAND_LAYOUT_TRAVEL_MS,
-          0,
-          1
-        );
-        interpolateTransform(mesh, start, target, easeInOutCubic(progress));
-      });
-      const stackProgress = easeInOutCubic(THREE.MathUtils.clamp(elapsed / totalDuration, 0, 1));
-      this.setStackOpacity(
-        THREE.MathUtils.lerp(startingStackOpacity, collapsed ? 1 : 0, stackProgress)
+  private stepLayoutTransition = (now: number): void => {
+    const elapsed = Math.min(64, Math.max(0, now - this.layoutTransitionLastTime));
+    this.layoutTransitionLastTime = now;
+    this.layoutTimelineMs = advanceHandLayoutTimelineMs(
+      this.layoutTimelineMs,
+      elapsed,
+      this.collapsed,
+      this.layoutTransitionDurationMs
+    );
+    this.applyLayoutTimeline();
+    const targetReached = this.collapsed
+      ? this.layoutTimelineMs >= this.layoutTransitionDurationMs
+      : this.layoutTimelineMs <= 0;
+    if (!targetReached) {
+      this.layoutTransitionFrame = requestAnimationFrame(this.stepLayoutTransition);
+      return;
+    }
+    this.layoutTransitionFrame = 0;
+    this.relayout();
+    this.stackBase.visible = this.collapsed;
+    this.setStackOpacity(this.collapsed ? 1 : 0);
+  };
+
+  private captureLayoutTargets(): void {
+    const ids = [...this.orderedIds];
+    const desiredCollapsed = this.collapsed;
+    const visuals = new Map<string, CardTransform>();
+    for (const id of ids) {
+      const mesh = this.meshes.get(id);
+      if (mesh) visuals.set(id, captureTransform(mesh));
+    }
+    this.updateStackBase(ids.length);
+    this.collapsed = false;
+    this.layoutAll();
+    this.expandedLayoutTargets = captureTransforms(ids, this.meshes);
+    this.collapsed = true;
+    this.layoutAll();
+    this.collapsedLayoutTargets = captureTransforms(ids, this.meshes);
+    this.collapsed = desiredCollapsed;
+    for (const [id, transform] of visuals) {
+      const mesh = this.meshes.get(id);
+      if (mesh) applyTransform(mesh, transform);
+    }
+  }
+
+  private applyLayoutTimeline(): void {
+    this.orderedIds.forEach((id, index) => {
+      const mesh = this.meshes.get(id);
+      const expanded = this.expandedLayoutTargets.get(id);
+      const collapsed = this.collapsedLayoutTargets.get(id);
+      if (!(mesh && expanded && collapsed)) return;
+      interpolateTransform(
+        mesh,
+        expanded,
+        collapsed,
+        easeInOutCubic(handCardLayoutProgress(this.layoutTimelineMs, index))
       );
-      if (elapsed < totalDuration) {
-        this.layoutTransitionFrame = requestAnimationFrame(step);
-        return;
-      }
-      this.layoutTransitionFrame = 0;
-      this.layoutAll();
-      this.stackBase.visible = this.collapsed;
-      this.setStackOpacity(this.collapsed ? 1 : 0);
-    };
-    this.layoutTransitionFrame = requestAnimationFrame(step);
+    });
+    const stackProgress = easeInOutCubic(
+      THREE.MathUtils.clamp(this.layoutTimelineMs / this.layoutTransitionDurationMs, 0, 1)
+    );
+    this.setStackOpacity(stackProgress);
   }
 
   private updateStackBase(total: number): void {
@@ -805,11 +873,17 @@ export class HandRenderer {
     this.removeFloatingPreview();
     this.onPreviewSelect?.(null);
     this.onStagedPointer?.(null);
-    this.layoutAll();
+    this.relayout();
     this.setCursor('default');
   }
 
   clear(): void {
+    cancelAnimationFrame(this.layoutTransitionFrame);
+    this.layoutTransitionFrame = 0;
+    this.expandedLayoutTargets.clear();
+    this.collapsedLayoutTargets.clear();
+    this.layoutTransitionDurationMs = HAND_LAYOUT_TRAVEL_MS;
+    this.layoutTimelineMs = this.collapsed ? this.layoutTransitionDurationMs : 0;
     for (const mesh of this.meshes.values()) {
       this.group.remove(mesh);
       disposeMesh(mesh);
@@ -848,6 +922,18 @@ function captureTransform(mesh: THREE.Mesh): CardTransform {
     rotation: mesh.rotation.clone(),
     scale: mesh.scale.clone(),
   };
+}
+
+function captureTransforms(
+  ids: readonly string[],
+  meshes: ReadonlyMap<string, THREE.Mesh>
+): Map<string, CardTransform> {
+  const transforms = new Map<string, CardTransform>();
+  for (const id of ids) {
+    const mesh = meshes.get(id);
+    if (mesh) transforms.set(id, captureTransform(mesh));
+  }
+  return transforms;
 }
 
 function applyTransform(mesh: THREE.Mesh, transform: CardTransform): void {
