@@ -11,18 +11,47 @@ export interface HeroDefinition {
 }
 
 export const HERO_EMOTES = [
-  { id: 'greeting', label: '打招呼', text: '很高兴见到你，来一局精彩的对决吧！' },
-  { id: 'praise', label: '夸赞', text: '漂亮的一手，我认可你的判断。' },
-  { id: 'thanks', label: '感叹', text: '好家伙，这局越来越有意思了！' },
-  { id: 'wow', label: '震惊', text: '什么？这也能打出来！' },
-  { id: 'threat', label: '威胁', text: '准备好，你的好运就到这里了。' },
-  { id: 'taunt', label: '嘲讽', text: '别急，我还没开始认真呢。' },
+  { id: 'greeting', label: '打招呼' },
+  { id: 'praise', label: '夸赞' },
+  { id: 'thanks', label: '感叹' },
+  { id: 'wow', label: '震惊' },
+  { id: 'threat', label: '威胁' },
+  { id: 'taunt', label: '嘲讽' },
 ] as const;
 
 export type HeroEmoteId = (typeof HERO_EMOTES)[number]['id'];
 
-export function getHeroEmote(id: string) {
-  return HERO_EMOTES.find((emote) => emote.id === id) ?? null;
+const HERO_EMOTE_LINES: Record<HeroId, Record<HeroEmoteId, string>> = {
+  cardMaster: {
+    greeting: '牌已洗好，愿今晚的运气听我调遣。',
+    praise: '漂亮，这一手连我都要记下来。',
+    thanks: '有意思，这份人情我收下了。',
+    wow: '居然藏着这张牌，真有你的。',
+    threat: '别眨眼，下一张牌会改写牌局。',
+    taunt: '牌桌不相信侥幸，只相信我的安排。',
+  },
+  thug: {
+    greeting: '都坐稳了，今晚谁也别想轻松离桌。',
+    praise: '够狠！这一手有点我的样子。',
+    thanks: '哈哈，正合我意，再来点大的！',
+    wow: '什么？你从哪儿摸出这张鬼牌的！',
+    threat: '再给你一回合，也改变不了结局。',
+    taunt: '手都在抖了？要不我替你出牌。',
+  },
+  inspector: {
+    greeting: '牌局开始。每一张牌，我都会记录。',
+    praise: '判断准确，这一步值得肯定。',
+    thanks: '局势终于有趣起来了。',
+    wow: '异常出牌已记录……确实出乎意料。',
+    threat: '证据已经齐了，下一轮就是结论。',
+    taunt: '你的意图太明显，经不起一次审讯。',
+  },
+};
+
+export function getHeroEmote(id: string, heroId: HeroId = DEFAULT_HERO_ID) {
+  const emote = HERO_EMOTES.find((entry) => entry.id === id);
+  if (!emote) return null;
+  return { ...emote, text: HERO_EMOTE_LINES[heroId][emote.id] };
 }
 
 export const HEROES: HeroDefinition[] = [

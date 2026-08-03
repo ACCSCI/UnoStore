@@ -1167,6 +1167,7 @@ test('四人局反转 +4：被罚玩家无可叠加牌时仍可结束回合接�
   expect(playerCapabilities(s, 3)).toMatchObject({
     playableUnoIndices: [],
     hasAnyAction: false,
+    canEndTurn: true,
   });
 
   const accepted = okEvents(dispatch(s, rng, { type: 'endTurn', player: 3 }));
@@ -1175,6 +1176,83 @@ test('四人局反转 +4：被罚玩家无可叠加牌时仍可结束回合接�
   );
   expect(s.players[3]!.pendingDraw).toBe(0);
   expect(s.turn).toBe(2);
+});
+
+test('+10 与 +6 威胁下没有同级或更大加牌时，结束回合会接受完整罚抽', () => {
+  for (const minimum of [10, 6] as const) {
+    const s = makeState([
+      [
+        { color: 'red', value: '1' },
+        { color: 'blue', value: '3' },
+      ],
+    ]);
+    const player = s.players[0]!;
+    player.pendingDraw = minimum;
+    player.pendingDrawMin = minimum;
+    s.unoActionsLeft = 0;
+
+    expect(playerCapabilities(s, 0)).toMatchObject({
+      playableUnoIndices: [],
+      playableHearthIndices: [],
+      readyMinionIds: [],
+      heroPowerUsable: false,
+      hasAnyAction: false,
+      canEndTurn: true,
+    });
+
+    const events = okEvents(dispatch(s, new Rng(600 + minimum), { type: 'endTurn', player: 0 }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'drawPenalty', player: 0, count: minimum })
+    );
+    expect(player.pendingDraw).toBe(0);
+    expect(Number(player.pendingDrawMin)).toBe(0);
+    expect(s.turn).toBe(1);
+  }
+});
+
+test('所有罚抽门槛在无合法叠加时都保留结束回合出口', () => {
+  for (const minimum of [2, 4, 6, 10] as const) {
+    const s = makeState([
+      [
+        { color: 'green', value: '5' },
+        { color: 'null', value: minimum === 10 ? 'wildDraw6' : 'wild' },
+      ],
+    ]);
+    const player = s.players[0]!;
+    player.pendingDraw = minimum + 4;
+    player.pendingDrawMin = minimum;
+
+    const capabilities = playerCapabilities(s, 0);
+    expect(capabilities.playableUnoIndices).toEqual([]);
+    expect(capabilities.hasAnyAction).toBe(false);
+    expect(capabilities.canEndTurn).toBe(true);
+
+    const events = okEvents(dispatch(s, new Rng(700 + minimum), { type: 'endTurn', player: 0 }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'drawPenalty', player: 0, count: minimum + 4 })
+    );
+  }
+});
+
+test('颜色轮盘转移没有加牌可用时也能放弃转移并结束回合', () => {
+  const s = makeState([
+    [
+      { color: 'red', value: '2' },
+      { color: 'blue', value: '4' },
+    ],
+  ]);
+  const player = s.players[0]!;
+  player.rouletteTransfer = 3;
+  s.unoActionsLeft = 0;
+
+  expect(playerCapabilities(s, 0)).toMatchObject({
+    playableUnoIndices: [],
+    hasAnyAction: false,
+    canEndTurn: true,
+  });
+  expect(dispatch(s, new Rng(803), { type: 'endTurn', player: 0 }).ok).toBe(true);
+  expect(player.rouletteTransfer).toBe(0);
+  expect(s.turn).toBe(1);
 });
 
 test('最后一张罚抽牌必须等整条罚抽链结算完才确认获胜', () => {

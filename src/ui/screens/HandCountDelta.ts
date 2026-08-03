@@ -7,6 +7,14 @@ export interface HandCountDelta {
   pendingUno: number;
 }
 
+/** 把尚未结算的罚抽放到 UNO 牌数旁；水晶栏不承担手牌状态。 */
+export function pendingDrawHandCountDelta(
+  player: number,
+  pendingDraw: number
+): HandCountDelta | undefined {
+  return pendingDraw > 0 ? { player, uno: 0, hearth: 0, pendingUno: pendingDraw } : undefined;
+}
+
 interface HandCountLabelOptions {
   unoSuffix?: string;
   suffix?: string;

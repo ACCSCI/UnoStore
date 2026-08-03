@@ -66,6 +66,15 @@ export class MainMenuScreen extends Screen {
       'btn btn-quiet'
     );
     actions.append(btnStory, btnLocal, btnRules, this.multiplayerButton, btnSettings);
+    if (import.meta.env.DEV) {
+      const btnSimulatedOnline = this.btn(
+        '开发：无 VibeHub 联机模拟',
+        () => this.openLocalBattleDialog(true),
+        'btn btn-quiet'
+      );
+      btnSimulatedOnline.title = '运行真实联机牌桌、房主权威动作和脱敏快照，不连接 VibeHub';
+      actions.append(btnSimulatedOnline);
+    }
 
     const deck = this.el('div', 'menu-deck');
     deck.setAttribute('aria-hidden', 'true');
@@ -159,11 +168,15 @@ export class MainMenuScreen extends Screen {
     }
   }
 
-  private openLocalBattleDialog(): void {
+  private openLocalBattleDialog(simulateOnline = false): void {
     const dialog = document.createElement('dialog');
     dialog.className = 'local-battle-dialog';
     dialog.setAttribute('aria-labelledby', 'local-battle-title');
-    const title = this.el('h2', undefined, '开始单机混战');
+    const title = this.el(
+      'h2',
+      undefined,
+      simulateOnline ? '开发：无 VibeHub 联机模拟' : '开始单机混战'
+    );
     title.id = 'local-battle-title';
     const label = document.createElement('label');
     label.htmlFor = 'local-player-count';
@@ -185,7 +198,8 @@ export class MainMenuScreen extends Screen {
         () => {
           const count = Number(select.value);
           dialog.close();
-          this.startLocalBattle(count);
+          if (simulateOnline) this.startSimulatedOnlineBattle(count);
+          else this.startLocalBattle(count);
         },
         'btn btn-primary'
       )
@@ -198,23 +212,26 @@ export class MainMenuScreen extends Screen {
   }
 
   private startLocalBattle(playerCount: number): void {
+    this.startSharedMultiplayerBattle(playerCount, '你');
+  }
+
+  private startSimulatedOnlineBattle(playerCount: number): void {
+    this.startSharedMultiplayerBattle(playerCount, '联机模拟玩家');
+  }
+
+  private startSharedMultiplayerBattle(playerCount: number, playerName: string): void {
     const profile = loadLoadoutProfile();
     const deck = activeDeck(profile);
-    const match = {
-      id: `local-${playerCount}-player`,
-      opponent: 'local-ai',
-      opponentName: 'AI 联盟',
-      difficulty: 'normal' as const,
-      intro: [{ speaker: 'system', text: `${playerCount} 人单机混战开始。` }],
-      outro: [],
-    };
-    void import('./BattleScreen').then(({ BattleScreen }) =>
-      new BattleScreen(match, {
-        playerCount,
-        localTest: true,
-        heroId: profile.activeHeroId,
-        deckCardIds: [...deck.cardIds],
-      }).enter()
+    void Promise.all([import('./BattleTransport'), import('./MultiplayerBattleScreen')]).then(
+      ([{ LocalBattleTransport }, { MultiplayerBattleScreen }]) =>
+        new MultiplayerBattleScreen(
+          new LocalBattleTransport({
+            playerCount,
+            heroId: profile.activeHeroId,
+            deckCardIds: deck.cardIds,
+            playerName,
+          })
+        ).enter()
     );
   }
 

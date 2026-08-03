@@ -117,6 +117,64 @@ describe('VibeHub 房间席位', () => {
     expect(harness.sent.some(({ message }) => message.type === 'roomState')).toBe(true);
   });
 
+  test('peers 列表晚于 hello 更新时，重复身份握手最终补齐座位并 ACK', () => {
+    const guestPeer = peer('guest-peer');
+    const harness = networkHarness([]);
+    const hello = {
+      type: 'hello',
+      user: { id: 'guest-user', name: '慢连接客人', image: null },
+    };
+
+    harness.internal.handleMessage(hello, guestPeer.id);
+    expect(harness.net.playerIdentity(1)).toBeNull();
+    expect(harness.sent.some(({ message }) => message.type === 'identityAck')).toBe(false);
+
+    // SDK 的 onMessage 可能早于 peers() 开放状态；客人的定时 hello 会重试。
+    harness.setPeers([guestPeer]);
+    harness.internal.handleMessage(hello, guestPeer.id);
+
+    expect(harness.net.playerIdentity(1)?.id).toBe('guest-user');
+    expect(
+      harness.sent.some(
+        ({ message, to }) =>
+          message.type === 'identityAck' && message.player === 1 && to === guestPeer.id
+      )
+    ).toBe(true);
+  });
+
+  test('对局中 peerId 变化后按用户身份恢复原座位而不重排', () => {
+    const oldPeer = peer('guest-old');
+    const newPeer = peer('guest-new');
+    const harness = networkHarness([oldPeer]);
+    harness.internal.handlePeerEvent({ type: 'join', id: oldPeer.id });
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人', image: null } },
+      oldPeer.id
+    );
+    const mutable = harness.net as unknown as { gameStarted: boolean };
+    mutable.gameStarted = true;
+
+    harness.setPeers([newPeer]);
+    harness.internal.handlePeerEvent({ type: 'leave', id: oldPeer.id });
+    harness.internal.handlePeerEvent({ type: 'join', id: newPeer.id });
+    harness.internal.handleMessage(
+      { type: 'hello', user: { id: 'guest-user', name: '客人重连', image: null } },
+      newPeer.id
+    );
+
+    expect(harness.net.playerIdentity(1)).toMatchObject({
+      seat: 1,
+      id: 'guest-user',
+      name: '客人重连',
+    });
+    expect(
+      harness.sent.some(
+        ({ message, to }) =>
+          message.type === 'identityAck' && message.player === 1 && to === newPeer.id
+      )
+    ).toBe(true);
+  });
+
   test('客人退出重进时，即使旧 peer 尚在列表中也不会多算一个人', () => {
     const oldPeer = peer('guest-old');
     const newPeer = peer('guest-new');
@@ -168,6 +226,67 @@ describe('VibeHub 房间席位', () => {
       harness.sent.filter(({ message, to }) => message.type === 'loadoutAck' && to === guestPeer.id)
     ).toHaveLength(2);
   });
+});
+
+test('房主普通离房先关闭公告房间，关闭完成后才离开 P2P', async () => {
+  const lifecycle: string[] = [];
+  let finishClose = (): void => {};
+  const room = {
+    isHost: true,
+    close: () => {
+      lifecycle.push('close');
+      return new Promise<{ ok: true }>((resolve) => {
+        finishClose = () => resolve({ ok: true });
+      });
+    },
+    leave: () => lifecycle.push('leave'),
+  } as unknown as VibeHubSDK.Room;
+  const net = new NetworkLayer();
+  (net as unknown as { room: VibeHubSDK.Room }).room = room;
+
+  net.leaveRoom();
+  expect(lifecycle).toEqual(['close']);
+  finishClose();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(lifecycle).toEqual(['close', 'leave']);
+});
+
+test('客人离房只离开连接，不关闭房主的公告房间', () => {
+  const lifecycle: string[] = [];
+  const room = {
+    isHost: false,
+    close: async () => {
+      lifecycle.push('close');
+      return { ok: true as const };
+    },
+    leave: () => lifecycle.push('leave'),
+  } as unknown as VibeHubSDK.Room;
+  const net = new NetworkLayer();
+  (net as unknown as { room: VibeHubSDK.Room }).room = room;
+
+  net.leaveRoom();
+  expect(lifecycle).toEqual(['leave']);
+});
+
+test('客人只接受当前 hostId 发来的权威状态', () => {
+  const room = {
+    isHost: false,
+    hostId: 'host-peer',
+  } as VibeHubSDK.Room;
+  const net = new NetworkLayer();
+  const received: unknown[] = [];
+  net.onStateReceived = (state) => received.push(state);
+  const internal = net as unknown as {
+    room: VibeHubSDK.Room;
+    handleMessage(message: unknown, fromId: string): void;
+  };
+  internal.room = room;
+
+  internal.handleMessage({ type: 'state', state: { turn: 7 } }, 'other-guest');
+  internal.handleMessage({ type: 'state', state: { turn: 1 } }, 'host-peer');
+
+  expect(received).toEqual([{ turn: 1 }]);
 });
 
 function peer(id: string): VibeHubSDK.PeerInfo {

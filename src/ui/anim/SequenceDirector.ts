@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { GameEvent } from '../../game/core/events';
 import type { UnoCard } from '../../game/uno/types';
 import { createCardMesh } from '../scene/CardRenderer';
+import { seatWorldPosition } from '../scene/SeatLayout';
+import { tableDiscardWorldPosition } from '../scene/TableCenter';
 import { Ease, Tween } from './Tween';
 
 /**
@@ -16,7 +18,8 @@ export class SequenceDirector {
 
   constructor(
     private scene: THREE.Scene,
-    private tablePos: THREE.Vector3 = new THREE.Vector3(1.2, 0.36, 0)
+    private playerCount = 8,
+    private tablePos: THREE.Vector3 = tableDiscardWorldPosition()
   ) {
     this.effects = new THREE.Group();
     this.scene.add(this.effects);
@@ -51,14 +54,11 @@ export class SequenceDirector {
   private flyCard(card: UnoCard, player: number): void {
     const mesh = createCardMesh(card);
     this.scene.add(mesh);
-    // 起点：玩家座位方向（8 座布局，玩家 0 在底部）
-    const angle = -Math.PI / 2 + (player / 8) * Math.PI * 2;
-    const from = new THREE.Vector3(Math.cos(angle) * 4.2, 0.7, Math.sin(angle) * 4.2);
-    const via = new THREE.Vector3(
-      Math.cos(angle) * 1.8,
-      2.2 + Math.abs(player) * 0.1,
-      Math.sin(angle) * 1.8
-    );
+    const from = seatWorldPosition(player, this.playerCount).add(new THREE.Vector3(0, 1.1, 0));
+    const via = from
+      .clone()
+      .lerp(this.tablePos, 0.5)
+      .add(new THREE.Vector3(0, 1.4, 0));
     mesh.position.copy(from);
     mesh.rotation.set(-0.3, 0, 0);
     this.tween.fly(mesh, from, via, this.tablePos, 0.45, Ease.cubicInOut, () => {

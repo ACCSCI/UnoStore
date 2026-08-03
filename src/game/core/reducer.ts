@@ -193,7 +193,7 @@ function dispatchAction(state: GameState, rng: Rng, action: GameAction): ActionR
     case 'resolveOracle':
       return resolveOracleAction(state, action);
     case 'heroEmote': {
-      const emote = getHeroEmote(action.emoteId);
+      const emote = getHeroEmote(action.emoteId, p.heroId);
       if (!emote) return { ok: false, error: '未知的英雄语音' };
       const event: GameEvent = {
         type: 'heroEmote',
@@ -1225,6 +1225,7 @@ export function playerCapabilities(state: GameState, player: number) {
       playableHearthIndices: [] as number[],
       readyMinionIds: [] as string[],
       heroPowerUsable: false,
+      canEndTurn: false,
       mustResolveRoulette: false,
       mustResolveOracle: false,
       hasAnyAction: false,
@@ -1238,6 +1239,7 @@ export function playerCapabilities(state: GameState, player: number) {
       playableHearthIndices: [],
       readyMinionIds: [],
       heroPowerUsable: false,
+      canEndTurn: false,
       mustResolveRoulette,
       mustResolveOracle,
       hasAnyAction: true,
@@ -1275,6 +1277,7 @@ export function playerCapabilities(state: GameState, player: number) {
     playableHearthIndices,
     readyMinionIds,
     heroPowerUsable,
+    canEndTurn: true,
     mustResolveRoulette,
     mustResolveOracle,
     hasAnyAction:

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
 import { createCardMesh } from './CardRenderer';
+import { tableEllipseCenterOnPlane } from './SeatLayout';
 
 /**
  * 桌面中央：牌堆 + 弃牌堆渲染。
@@ -9,8 +10,23 @@ import { createCardMesh } from './CardRenderer';
  * 弃牌堆：水平堆叠，顶牌朝上可见
  */
 
-const DECK_POS = new THREE.Vector3(-1.05, 0.56, 0);
-const DISCARD_POS = new THREE.Vector3(1.05, 0.56, 0);
+const TABLE_CARD_PLANE_Y = 0.56;
+const CENTER_ROW_Z = tableEllipseCenterOnPlane(TABLE_CARD_PLANE_Y).z;
+const DECK_POS = new THREE.Vector3(-1.05, 0.56, CENTER_ROW_Z);
+const DISCARD_POS = new THREE.Vector3(1.05, 0.56, CENTER_ROW_Z);
+
+/** Shared animation anchors. Return copies so an animation can safely mutate them. */
+export function tableDeckWorldPosition(height = 0.85): THREE.Vector3 {
+  return new THREE.Vector3(DECK_POS.x, height, DECK_POS.z);
+}
+
+export function tableDiscardWorldPosition(height = 0.6): THREE.Vector3 {
+  return new THREE.Vector3(DISCARD_POS.x, height, DISCARD_POS.z);
+}
+
+export function tableCenterWorldPosition(height = 0.8): THREE.Vector3 {
+  return tableDeckWorldPosition(height).lerp(tableDiscardWorldPosition(height), 0.5);
+}
 
 export class TableCenterRenderer {
   private deckGroup = new THREE.Group();
@@ -40,6 +56,8 @@ export class TableCenterRenderer {
     }
     this.scene.add(this.mats);
     this.labels.add(createLabel('牌 库', -1.05), createLabel('当 前 牌', 1.05));
+    this.mats.position.z = CENTER_ROW_Z;
+    this.labels.position.z = CENTER_ROW_Z;
     this.scene.add(this.labels);
   }
 
@@ -110,6 +128,10 @@ export class TableCenterRenderer {
     return raycaster.intersectObject(this.discardTopMesh, false).length > 0
       ? this.displayCard
       : null;
+  }
+
+  displayedCard(): UnoCard | null {
+    return this.displayCard;
   }
 
   dispose(): void {

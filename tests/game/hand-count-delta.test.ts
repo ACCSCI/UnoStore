@@ -1,6 +1,16 @@
 import { expect, test } from 'bun:test';
 import type { GameEvent } from '../../src/game/core/events';
-import { handCountDeltas } from '../../src/ui/screens/HandCountDelta';
+import { handCountDeltas, pendingDrawHandCountDelta } from '../../src/ui/screens/HandCountDelta';
+
+test('未结算罚抽复用 UNO 旁的蓝色变化数字', () => {
+  expect(pendingDrawHandCountDelta(3, 6)).toEqual({
+    player: 3,
+    uno: 0,
+    hearth: 0,
+    pendingUno: 6,
+  });
+  expect(pendingDrawHandCountDelta(3, 0)).toBeUndefined();
+});
 
 test('罚抽链演出显示待结算增量，真正抽牌后显示 UNO 增量', () => {
   const stacked: GameEvent = {

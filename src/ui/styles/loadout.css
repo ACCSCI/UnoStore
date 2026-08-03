@@ -1,3 +1,116 @@
+/* 酒馆主题指针：覆盖桌面端全部交互状态，触屏不会加载。 */
+@media (pointer: fine) {
+  html,
+  body {
+    cursor:
+      url("/assets/cursors/default.svg") 4 3,
+      default;
+  }
+
+  button,
+  a,
+  select,
+  label[for],
+  [role="button"],
+  [data-action] {
+    cursor:
+      url("/assets/cursors/pointer.svg") 11 3,
+      pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  [aria-disabled="true"],
+  .disabled {
+    cursor:
+      url("/assets/cursors/forbidden.svg") 16 16,
+      not-allowed;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    cursor:
+      url("/assets/cursors/text.svg") 16 16,
+      text;
+  }
+
+  [draggable="true"],
+  .hand-card,
+  .card-visual {
+    cursor:
+      url("/assets/cursors/grab.svg") 5 25,
+      grab;
+  }
+
+  [draggable="true"]:active,
+  .hand-card:active,
+  .card-visual:active {
+    cursor:
+      url("/assets/cursors/grabbing.svg") 8 19,
+      grabbing;
+  }
+
+  .targeting,
+  [data-targetable="true"],
+  .legal-target,
+  .targetable {
+    cursor:
+      url("/assets/cursors/aim.svg") 16 16,
+      crosshair;
+  }
+
+  canvas[data-cursor="aim"] {
+    cursor:
+      url("/assets/cursors/aim.svg") 16 16,
+      crosshair;
+  }
+
+  canvas[data-cursor="default"] {
+    cursor:
+      url("/assets/cursors/default.svg") 4 3,
+      default;
+  }
+
+  canvas[data-cursor="pointer"] {
+    cursor:
+      url("/assets/cursors/pointer.svg") 11 3,
+      pointer;
+  }
+
+  canvas[data-cursor="forbidden"] {
+    cursor:
+      url("/assets/cursors/forbidden.svg") 16 16,
+      not-allowed;
+  }
+
+  canvas[data-cursor="grab"] {
+    cursor:
+      url("/assets/cursors/grab.svg") 5 25,
+      grab;
+  }
+
+  canvas[data-cursor="grabbing"] {
+    cursor:
+      url("/assets/cursors/grabbing.svg") 8 19,
+      grabbing;
+  }
+
+  canvas[data-cursor="help"] {
+    cursor:
+      url("/assets/cursors/help.svg") 4 3,
+      help;
+  }
+
+  [aria-busy="true"],
+  .loading,
+  .is-waiting {
+    cursor:
+      url("/assets/cursors/wait.svg") 16 16,
+      wait;
+  }
+}
+
 @layer components {
   .loadout-wrap {
     position: absolute;
