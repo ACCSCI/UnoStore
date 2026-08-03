@@ -2019,3 +2019,136 @@ test('跳过效果结算时会标明具体被禁用的玩家', () => {
   expect(events.some((event) => event.type === 'playerSkipped' && event.player === 0)).toBe(true);
   expect(s.turn).toBe(1);
 });
+
+test('列阵指挥官：放置在中间时两侧随从获得 +1/+1 和嘲讽', () => {
+  const s = makeState([[{ color: 'red', value: '1' }], [{ color: 'red', value: '5' }]]);
+  s.players[0]!.free = 3;
+  s.players[0]!.hearthHand = [hearth('h0', 'formationCommander')];
+  s.players[0]!.board = [
+    {
+      id: 'left',
+      cardId: 'left-card',
+      effectId: 'clockworkSquire',
+      owner: 0,
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      exhausted: true,
+    },
+    {
+      id: 'right',
+      cardId: 'right-card',
+      effectId: 'clockworkSquire',
+      owner: 0,
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      exhausted: true,
+    },
+  ];
+  const events = okEvents(
+    dispatch(s, new Rng(30), { type: 'playHearth', player: 0, cardIdx: 0, position: 1 })
+  );
+  expect(s.players[0]!.board.map((m) => m.id)).toEqual(['left', 'm-h0', 'right']);
+  expect(s.players[0]!.board[0]!.attack).toBe(3);
+  expect(s.players[0]!.board[0]!.health).toBe(4);
+  expect(s.players[0]!.board[0]!.maxHealth).toBe(4);
+  expect(s.players[0]!.board[0]!.taunt).toBe(true);
+  expect(s.players[0]!.board[2]!.attack).toBe(3);
+  expect(s.players[0]!.board[2]!.taunt).toBe(true);
+  expect(s.players[0]!.board[1]!.taunt).toBeUndefined();
+  expect(events.some((event) => event.type === 'minionBuffed')).toBe(true);
+});
+
+test('列阵指挥官：放置在末尾时只有一侧相邻随从获得增益', () => {
+  const s = makeState([[{ color: 'red', value: '1' }], [{ color: 'red', value: '5' }]]);
+  s.players[0]!.free = 3;
+  s.players[0]!.hearthHand = [hearth('h0', 'formationCommander')];
+  s.players[0]!.board = [
+    {
+      id: 'left',
+      cardId: 'left-card',
+      effectId: 'clockworkSquire',
+      owner: 0,
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      exhausted: true,
+    },
+  ];
+  okEvents(dispatch(s, new Rng(31), { type: 'playHearth', player: 0, cardIdx: 0, position: 1 }));
+  expect(s.players[0]!.board.map((m) => m.id)).toEqual(['left', 'm-h0']);
+  expect(s.players[0]!.board[0]!.attack).toBe(3);
+  expect(s.players[0]!.board[0]!.taunt).toBe(true);
+});
+
+test('随从放置位置越界会被拒绝', () => {
+  const s = makeState([[{ color: 'red', value: '1' }], [{ color: 'red', value: '5' }]]);
+  s.players[0]!.free = 3;
+  s.players[0]!.hearthHand = [hearth('h0', 'formationCommander')];
+  const res = dispatch(s, new Rng(32), {
+    type: 'playHearth',
+    player: 0,
+    cardIdx: 0,
+    position: 3,
+  });
+  expect(res.ok).toBe(false);
+  expect(s.players[0]!.board).toHaveLength(0);
+  expect(s.players[0]!.free).toBe(3);
+  expect(s.players[0]!.hearthHand.map((card) => card.id)).toEqual(['h0']);
+});
+
+test('效果赋予的嘲讽随从必须先被攻击', () => {
+  const s = makeState([[{ color: 'red', value: '1' }], [{ color: 'red', value: '5' }]]);
+  s.players[0]!.board = [
+    {
+      id: 'attacker',
+      cardId: 'attacker-card',
+      effectId: 'stormDrake',
+      owner: 0,
+      attack: 5,
+      health: 4,
+      maxHealth: 4,
+      exhausted: false,
+    },
+  ];
+  s.players[1]!.board = [
+    {
+      id: 'buffed',
+      cardId: 'buffed-card',
+      effectId: 'clockworkSquire',
+      owner: 1,
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      exhausted: false,
+      taunt: true,
+    },
+    {
+      id: 'plain',
+      cardId: 'plain-card',
+      effectId: 'clockworkSquire',
+      owner: 1,
+      attack: 2,
+      health: 3,
+      maxHealth: 3,
+      exhausted: false,
+    },
+  ];
+  const blocked = dispatch(s, new Rng(33), {
+    type: 'attackMinion',
+    player: 0,
+    attackerId: 'attacker',
+    targetPlayer: 1,
+    targetMinionId: 'plain',
+  });
+  expect(blocked.ok).toBe(false);
+  const allowed = dispatch(s, new Rng(34), {
+    type: 'attackMinion',
+    player: 0,
+    attackerId: 'attacker',
+    targetPlayer: 1,
+    targetMinionId: 'buffed',
+  });
+  expect(allowed.ok).toBe(true);
+});

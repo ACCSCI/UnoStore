@@ -13,7 +13,11 @@ import {
   TURN_TIMEOUT_MS,
 } from '../../game/core/turnTimeout';
 import { getDeck } from '../../game/hearth/decks';
-import { getEffect, requiredOwnUnoCardCount } from '../../game/hearth/effects/registry';
+import {
+  getEffect,
+  minionHasTaunt,
+  requiredOwnUnoCardCount,
+} from '../../game/hearth/effects/registry';
 import { getHero, HERO_EMOTES, type HeroId } from '../../game/heroes';
 import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
 import type { StoryMatch, StorySession } from '../../game/story';
@@ -38,7 +42,12 @@ import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
-import { formatActivity } from './ActivityFormatter';
+import {
+  type ActivityEntry,
+  attachActivityHover,
+  clearActivityHover,
+  formatActivity,
+} from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
@@ -72,7 +81,7 @@ export class BattleScreen extends Screen {
   private handSummaryEl: HTMLElement | null = null;
   private playerHeroPowerEl: HTMLButtonElement | null = null;
   private playerShieldEl: HTMLElement | null = null;
-  private readonly activityEntries: string[] = [];
+  private readonly activityEntries: ActivityEntry[] = [];
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
   private revealDialog: HTMLDialogElement | null = null;
   private heroEmotePopover: HTMLDivElement | null = null;
@@ -139,6 +148,7 @@ export class BattleScreen extends Screen {
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
+      onPlaceAt: (index) => this.placeMinion(index),
     });
     this.view.start();
     this.view.setupScene(this.root);
@@ -350,7 +360,7 @@ export class BattleScreen extends Screen {
     this.session = createStorySession(this.match, randomSeed, this.playerCount, pools, heroes);
     this.syncLocalTurnDeadline();
     this.turnTimeoutInterval = window.setInterval(() => this.refreshTurnTimer(), 250);
-    this.activityEntries.push(`对局开始 · ${this.playerCount} 人`);
+    this.activityEntries.push({ text: `对局开始 · ${this.playerCount} 人` });
     this.refreshUI();
     this.showIntro();
     // 首次对局：玩法引导
@@ -812,6 +822,23 @@ export class BattleScreen extends Screen {
             if (color) this.playHearthCard(id, undefined, undefined, color);
           }
         );
+      } else if (effect.kind === 'minion') {
+        // 随从牌：进入放置模式，点击战场上的 ＋ 槽位选择精确位置
+        if (this.hearthSelection?.cardId === id) {
+          this.cancelTargeting();
+          return;
+        }
+        this.selectedAttackerId = null;
+        this.unoTargetCardId = null;
+        this.heroTargetSelection = null;
+        this.hearthSelection = {
+          cardId: id,
+          effectId: card.effectId,
+          selectedCardIds: new Set(),
+          selectedPlayerIds: new Set(),
+        };
+        this.refreshUI();
+        this.setStatus(`已选 ${effect.name}：点击战场上的 ＋ 槽位选择放置位置`);
       } else {
         this.playHearthCard(id);
       }
@@ -965,8 +992,8 @@ export class BattleScreen extends Screen {
       return;
     }
     if (this.selectedAttackerId && player !== 0) {
-      const hasTaunt = this.session.state.players[player]!.board.some(
-        (minion) => getEffect(minion.effectId)?.taunt
+      const hasTaunt = this.session.state.players[player]!.board.some((minion) =>
+        minionHasTaunt(minion)
       );
       if (hasTaunt) {
         this.setStatus('必须先攻击具有嘲讽的随从');
@@ -1049,7 +1076,8 @@ export class BattleScreen extends Screen {
     cardId: string,
     targets?: number[],
     targetMinionId?: string,
-    color?: string | null
+    color?: string | null,
+    position?: number
   ): void {
     if (!this.session || this.actionAnimating) return;
     const idx = this.session.state.players[0]!.hearthHand.findIndex((card) => card.id === cardId);
@@ -1072,6 +1100,7 @@ export class BattleScreen extends Screen {
       unoCardIds: this.hearthSelection ? [...this.hearthSelection.selectedCardIds] : undefined,
       cardIds: this.hearthSelection ? [...this.hearthSelection.selectedCardIds] : undefined,
       color,
+      ...(position !== undefined ? { position } : {}),
     });
     if (r.ok) {
       this.hearthSelection = null;
@@ -1079,6 +1108,13 @@ export class BattleScreen extends Screen {
     } else {
       this.setStatus(`✗ ${r.error}`);
     }
+  }
+
+  /** 放置位置系统：点击槽位，以该索引放置当前选中的随从牌。 */
+  private placeMinion(index: number): void {
+    if (!(this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'))
+      return;
+    this.playHearthCard(this.hearthSelection.cardId, undefined, undefined, undefined, index);
   }
 
   private cancelTargeting(announce = true): void {
@@ -1278,6 +1314,10 @@ export class BattleScreen extends Screen {
       : null;
     const targetMinionSide = selectedTargeting?.type === 'minion' ? selectedTargeting.side : null;
     const targetingMinion = Boolean(targetMinionSide);
+    // 选中随从牌 → 进入放置模式：己方随从行显示插入槽位
+    const placementMode = Boolean(
+      this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'
+    );
     this.view?.syncMinions(
       p.board,
       enemyBoard,
@@ -1287,7 +1327,8 @@ export class BattleScreen extends Screen {
         (capabilities.readyMinionIds.length > 0 || targetingMinion) &&
         (!this.hearthSelection || targetingMinion),
       s.players.length,
-      targetMinionSide
+      targetMinionSide,
+      placementMode
     );
     const selectingPlayer = Boolean(
       this.selectedAttackerId ||
@@ -1308,8 +1349,7 @@ export class BattleScreen extends Screen {
     if (this.opponentHeroEl) {
       const targetState = s.players[focusedTarget];
       const attackBlocked = Boolean(
-        this.selectedAttackerId &&
-          targetState?.board.some((minion) => getEffect(minion.effectId)?.taunt)
+        this.selectedAttackerId && targetState?.board.some((minion) => minionHasTaunt(minion))
       );
       const hearthPlayerTargeting = this.hearthSelection
         ? getEffect(this.hearthSelection.effectId)?.targeting
@@ -1326,8 +1366,7 @@ export class BattleScreen extends Screen {
     }
     for (const [player, button] of this.playerTargetButtons) {
       const attackBlocked = Boolean(
-        this.selectedAttackerId &&
-          s.players[player]?.board.some((minion) => getEffect(minion.effectId)?.taunt)
+        this.selectedAttackerId && s.players[player]?.board.some((minion) => minionHasTaunt(minion))
       );
       const hearthPlayerTargeting = this.hearthSelection
         ? getEffect(this.hearthSelection.effectId)?.targeting
@@ -1742,9 +1781,12 @@ export class BattleScreen extends Screen {
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
+    clearActivityHover();
     this.activityLedgerEl.replaceChildren();
     for (const entry of this.activityEntries.slice(-80)) {
-      this.activityLedgerEl.append(this.el('li', undefined, entry));
+      const item = this.el('li', undefined, entry.text);
+      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
+      this.activityLedgerEl.append(item);
     }
     this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
   }

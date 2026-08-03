@@ -1,6 +1,6 @@
 import type { GameEvent } from '../../core/events';
 import type { Rng } from '../../core/rng';
-import type { GameState } from '../../core/state';
+import type { GameState, MinionState } from '../../core/state';
 
 export type HearthTargeting =
   | { type: 'enemyPlayer'; count: 1 }
@@ -42,6 +42,8 @@ export interface EffectCtx {
   state: GameState;
   /** 打出这张牌的玩家 */
   source: number;
+  /** 当前正在结算的随从在其拥有者战场上的槽位索引（放置位置系统）；无随从时为 -1。 */
+  sourceIndex: () => number;
   /** 目标玩家（效果需要指定目标时，由 UI/AI 选择后传入） */
   targets?: number[];
   /** 需要选色时（wild 类），由 UI/AI 提供 */
@@ -60,6 +62,14 @@ export interface EffectCtx {
   rng: Rng;
   /** 统一强制抽牌入口；会结算护盾、罚抽替代随从、淘汰与公开事件。 */
   forceUnoDraw: (player: number, count: number, reason: string) => number;
+}
+
+/**
+ * 随从是否具备嘲讽：卡面自带（effect.taunt）或效果赋予（minion.taunt）。
+ * 规则引擎与 UI 统一走这里，避免遗漏效果赋予的嘲讽。
+ */
+export function minionHasTaunt(minion: MinionState): boolean {
+  return Boolean(minion.taunt || getEffect(minion.effectId)?.taunt);
 }
 
 /** 炉石效果定义（注册表条目） */

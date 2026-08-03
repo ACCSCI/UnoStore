@@ -7,6 +7,7 @@ import {
   NetworkLayer,
   vibeHubErrorMessage,
 } from '../../src/net/NetworkLayer';
+import { redactGameEvents } from '../../src/net/redactGameEvents';
 
 describe('VibeHub 房间席位', () => {
   test('不把 VibeNet 主 relay、暖备和候选节点计入玩家人数', () => {
@@ -302,4 +303,35 @@ test('客人会持续重传同一构筑请求，只有匹配的房主 ACK 才停
   internal.sendPendingLoadout();
   expect(sent).toHaveLength(3);
   expect(net.isLocalLoadoutConfirmed).toBe(true);
+});
+
+test('联机快照保留抽牌演出数量，但隐藏其他玩家的私有牌实例', () => {
+  const redacted = redactGameEvents(
+    [
+      { type: 'turnStart', player: 1, drawUno: 'uno-secret', drawHearth: 'hearth-secret' },
+      {
+        type: 'mixedCardsDrawn',
+        player: 1,
+        unoCardIds: ['uno-a', 'uno-b'],
+        hearthCardIds: ['hearth-a'],
+      },
+      {
+        type: 'handRevealed',
+        player: 1,
+        targetPlayer: 0,
+        cards: [{ id: 'secret', color: 'red', value: '7' }],
+      },
+    ],
+    0
+  );
+
+  expect(redacted).toEqual([
+    { type: 'turnStart', player: 1, drawUno: 'hidden-uno', drawHearth: 'hidden-hearth' },
+    {
+      type: 'mixedCardsDrawn',
+      player: 1,
+      unoCardIds: ['hidden-uno-1', 'hidden-uno-2'],
+      hearthCardIds: ['hidden-hearth-1'],
+    },
+  ]);
 });

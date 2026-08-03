@@ -183,6 +183,65 @@
     font-weight: 900;
   }
 
+  .settings-card {
+    inline-size: min(24rem, 100%);
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .settings-dialog {
+    inline-size: min(24rem, calc(100vw - 2rem));
+    max-inline-size: none;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--paper);
+  }
+
+  .settings-dialog::backdrop {
+    background: rgb(4 7 19 / 72%);
+    backdrop-filter: blur(0.7rem);
+  }
+
+  .settings-dialog .settings-card {
+    inline-size: 100%;
+  }
+
+  .settings-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .settings-row {
+    display: grid;
+    grid-template-columns: auto 1fr 2.4rem;
+    align-items: center;
+    gap: 0.8rem;
+    color: var(--paper);
+  }
+
+  .settings-row-copy {
+    display: grid;
+    text-align: start;
+  }
+  .settings-row-copy strong {
+    font-size: 0.85rem;
+  }
+  .settings-row-copy small {
+    color: var(--paper-muted);
+    font-size: 0.6rem;
+  }
+  .settings-row input[type="range"] {
+    inline-size: 100%;
+    accent-color: var(--gold);
+  }
+  .settings-row b {
+    color: var(--gold);
+    font-size: 0.8rem;
+    text-align: end;
+  }
+
   .tutorial-desc {
     margin-block: 1rem 1.4rem;
     color: var(--paper-muted);

@@ -34,6 +34,7 @@ export class GameView {
   private onCardClick: (id: string, isHearth: boolean) => void = () => {};
   private onEndClick: () => void = () => {};
   private onSelectAttacker: (id: string) => void = () => {};
+  private onPlaceAt: (index: number) => void = () => {};
   private onAttackMinion: (id: string) => void = () => {};
 
   constructor(container: HTMLElement) {
@@ -64,11 +65,13 @@ export class GameView {
     onEndClick?: () => void;
     onSelectAttacker?: (id: string) => void;
     onAttackMinion?: (id: string) => void;
+    onPlaceAt?: (index: number) => void;
   }): void {
     if (cb.onCardClick) this.onCardClick = cb.onCardClick;
     if (cb.onEndClick) this.onEndClick = cb.onEndClick;
     if (cb.onSelectAttacker) this.onSelectAttacker = cb.onSelectAttacker;
     if (cb.onAttackMinion) this.onAttackMinion = cb.onAttackMinion;
+    if (cb.onPlaceAt) this.onPlaceAt = cb.onPlaceAt;
   }
 
   start(): void {
@@ -121,6 +124,7 @@ export class GameView {
       onAttackMinion: (id) => this.onAttackMinion(id),
       onHoverMinion: (minion) => this.detailPanel?.showMinion(minion),
       onPreviewMinion: (minion) => this.detailPanel?.pinMinion(minion),
+      onPlaceAt: (index) => this.onPlaceAt(index),
     });
     this.actionBar.addButton('结束回合', '结束回合并结算补牌', () => this.onEndClick(), 'primary');
   }
@@ -173,7 +177,8 @@ export class GameView {
     selectedAttackerId: string | null,
     canAct: boolean,
     playerCount: number,
-    spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null
+    spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null,
+    placementMode = false
   ): void {
     this.minionBoard?.sync(
       playerBoard,
@@ -181,7 +186,8 @@ export class GameView {
       selectedAttackerId,
       canAct,
       playerCount,
-      spellTargetSide
+      spellTargetSide,
+      placementMode
     );
   }
 

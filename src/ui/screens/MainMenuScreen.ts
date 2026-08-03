@@ -4,6 +4,7 @@ import { vibeHubErrorMessage } from '../../net/NetworkLayer';
 import { audio } from '../audio/AudioManager';
 import { resolveCloudSaveConflicts } from './CloudSaveConflictDialog';
 import { Screen } from './Screen';
+import { SettingsPanel } from './SettingsPanel';
 
 /** 首屏同时承载可选登录；未登录时剧情和牌组只保存在本机。 */
 export class MainMenuScreen extends Screen {
@@ -59,16 +60,12 @@ export class MainMenuScreen extends Screen {
     );
     this.multiplayerButton.disabled = true;
     this.multiplayerButton.title = '登录 VibeHub 后可进入联机大厅';
-    const btnMute = this.btn(
-      audio.isMuted ? '开启声音' : '静音',
-      () => {
-        audio.toggleMute();
-        void this.enter();
-      },
+    const btnSettings = this.btn(
+      '⚙ 设置',
+      () => new SettingsPanel(this.root).show(),
       'btn btn-quiet'
     );
-    btnMute.setAttribute('aria-pressed', String(audio.isMuted));
-    actions.append(btnStory, btnLocal, btnRules, this.multiplayerButton, btnMute);
+    actions.append(btnStory, btnLocal, btnRules, this.multiplayerButton, btnSettings);
 
     const deck = this.el('div', 'menu-deck');
     deck.setAttribute('aria-hidden', 'true');

@@ -13,20 +13,27 @@ import {
 import {
   getEffect,
   type HearthTargeting,
+  minionHasTaunt,
   requiredOwnUnoCardCount,
 } from '../../game/hearth/effects/registry';
-import { getHero, HERO_EMOTES } from '../../game/heroes';
+import { getHero, HERO_EMOTES, HEROES } from '../../game/heroes';
 import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
 import type { UnoCard } from '../../game/uno/types';
 import { getNet } from '../../net';
 import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS } from '../../net/NetworkLayer';
+import { redactGameEvents } from '../../net/redactGameEvents';
 import { assetUrl } from '../assets/url';
 import { audio } from '../audio/AudioManager';
 import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
-import { formatActivity } from './ActivityFormatter';
+import {
+  type ActivityEntry,
+  attachActivityHover,
+  clearActivityHover,
+  formatActivity,
+} from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
@@ -48,6 +55,7 @@ interface PublicPlayerState {
 interface PrivatePlayerState {
   hand: UnoCard[];
   hearthHand: HearthCard[];
+  pendingDrawMin: number;
   roulettePending: boolean;
   rouletteDrawer: number | null;
 }
@@ -90,6 +98,7 @@ interface NetworkAction {
   takeCardId?: string;
   discardCardId?: string;
   attackerId?: string;
+  position?: number;
 }
 
 interface HearthSelection {
@@ -145,7 +154,7 @@ export class MultiplayerBattleScreen extends Screen {
   } | null = null;
   private resultOverlay: HTMLElement | null = null;
   private activityLedgerEl: HTMLOListElement | null = null;
-  private readonly activityEntries: string[] = [];
+  private readonly activityEntries: ActivityEntry[] = [];
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
   private turnNoticeEl: HTMLElement | null = null;
   private turnNoticeTimer: number | null = null;
@@ -166,6 +175,7 @@ export class MultiplayerBattleScreen extends Screen {
       onEndClick: () => this.endTurn(),
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
+      onPlaceAt: (index) => this.placeMinion(index),
     });
     this.view.start();
     this.view.setupScene(this.root);
@@ -336,14 +346,24 @@ export class MultiplayerBattleScreen extends Screen {
       if (!loadout) throw new Error(`席位 ${seat + 1} 的出战构筑尚未由房主确认`);
       return loadout;
     });
+    const hostRng = new Rng(seed);
+    this.hostRng = hostRng;
+    // 机器人英雄：房间设置支持随机职业或指定职业（默认随机）
+    const botHeroMode = localStorage.getItem('unostore_bot_hero_mode') ?? 'random';
+    const heroIds = loadouts.map((loadout, seat) => {
+      if (!net.isBotSeat(seat)) return loadout.heroId;
+      if (botHeroMode === 'random') return HEROES[hostRng.int(HEROES.length)]!.id;
+      return HEROES.some((hero) => hero.id === botHeroMode)
+        ? (botHeroMode as typeof loadout.heroId)
+        : loadout.heroId;
+    });
     this.hostState = createGame(
       count,
       loadouts.map((loadout) => loadout.deckCardIds),
       seed,
       {},
-      loadouts.map((loadout) => loadout.heroId)
+      heroIds
     );
-    this.hostRng = new Rng(seed);
     this.botStrategy = new NormalHeuristic(this.hostRng);
     this.syncHostDeadline();
     net.onInputReceived = (input, player) => this.resolveInput(input, player);
@@ -426,6 +446,7 @@ export class MultiplayerBattleScreen extends Screen {
             unoCardIds: request.unoCardIds,
             cardIds: request.cardIds,
             color: request.color,
+            ...(request.position !== undefined ? { position: request.position } : {}),
           };
     }
     if (request.type === 'endTurn') return { type: 'endTurn', player };
@@ -518,6 +539,7 @@ export class MultiplayerBattleScreen extends Screen {
         hearthHand: mine.hearthHand,
         roulettePending: mine.roulettePending,
         rouletteDrawer: mine.rouletteDrawer,
+        pendingDrawMin: mine.pendingDrawMin,
       },
       playableIds,
       readyMinionIds: capabilities.readyMinionIds,
@@ -527,7 +549,7 @@ export class MultiplayerBattleScreen extends Screen {
         ? null
         : heroPowerError(this.hostState, player, inspectorCandidates),
       mustResolveRoulette: capabilities.mustResolveRoulette,
-      events: events.filter((event) => event.type !== 'handRevealed' || event.player === player),
+      events: redactGameEvents(events, player),
       winner: this.hostGameResult?.winner ?? null,
       gameOverReason: this.hostGameResult?.reason ?? null,
       error,
@@ -679,7 +701,7 @@ export class MultiplayerBattleScreen extends Screen {
       this.heroUnoSelection = null;
     }
     if (this.activityEntries.length === 0) {
-      this.activityEntries.push(`对局开始 · ${snapshot.players.length} 人`);
+      this.activityEntries.push({ text: `对局开始 · ${snapshot.players.length} 人` });
       this.renderActivityLedger();
     }
     const selection = this.hearthSelection;
@@ -716,21 +738,26 @@ export class MultiplayerBattleScreen extends Screen {
             owner: this.visualSeat(index, snapshot),
           }))
     );
-    this.view?.syncMinions(
-      mine.board,
-      enemies,
-      this.selectedAttackerId,
-      snapshot.turn === snapshot.viewer && !this.actionAnimating,
-      snapshot.players.length,
-      targeting?.type === 'minion' ? targeting.side : null
-    );
+    // 罚抽链中随从不能攻击，不高亮；选中随从牌时进入放置模式
     const canAct =
       snapshot.turn === snapshot.viewer &&
       snapshot.phase !== 'gameOver' &&
       mine.active &&
       !this.actionAnimating &&
       !snapshot.mustResolveRoulette &&
-      mine.pendingDraw <= 0; // 罚抽链中随从不能攻击，不高亮
+      mine.pendingDraw <= 0;
+    const placementMode = Boolean(
+      this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'
+    );
+    this.view?.syncMinions(
+      mine.board,
+      enemies,
+      this.selectedAttackerId,
+      canAct,
+      snapshot.players.length,
+      targeting?.type === 'minion' ? targeting.side : null,
+      placementMode
+    );
     const hasAnyAction =
       snapshot.playableIds.length > 0 ||
       snapshot.readyMinionIds.length > 0 ||
@@ -822,6 +849,7 @@ export class MultiplayerBattleScreen extends Screen {
     }
     this.renderBattleStatus(snapshot, canAct, direction);
     this.scheduleWorkDone(snapshot, shouldPromptEnd);
+    this.refreshPersistentNotice(snapshot);
     this.refreshTurnTimer();
   }
 
@@ -1064,7 +1092,7 @@ export class MultiplayerBattleScreen extends Screen {
     if (this.selectedAttackerId)
       return (
         player !== snapshot.viewer &&
-        !snapshot.players[player]!.board.some((minion) => getEffect(minion.effectId)?.taunt)
+        !snapshot.players[player]!.board.some((minion) => minionHasTaunt(minion))
       );
     if (this.unoTargetCardId) return player !== snapshot.viewer;
     if (!this.hearthSelection) return false;
@@ -1143,6 +1171,21 @@ export class MultiplayerBattleScreen extends Screen {
       if (effect.requiresColor) {
         const color = await pickColor(this.root, { title: `${effect.name}：选择颜色` });
         if (color) this.sendAction({ type: 'playHearth', cardId: id, color });
+        return;
+      }
+      if (effect.kind === 'minion') {
+        // 随从牌：进入放置模式，点击战场上的 ＋ 槽位选择精确位置
+        this.selectedAttackerId = null;
+        this.heroTargetSelection = null;
+        this.unoTargetCardId = null;
+        this.hearthSelection = {
+          cardId: id,
+          effectId: card.effectId,
+          selectedCardIds: new Set(),
+          selectedPlayerIds: new Set(),
+        };
+        this.renderSnapshot(snapshot);
+        this.setStatus(`已选 ${effect.name}：点击战场上的 ＋ 槽位选择放置位置`);
         return;
       }
       this.sendAction({ type: 'playHearth', cardId: id });
@@ -1384,6 +1427,14 @@ export class MultiplayerBattleScreen extends Screen {
       this.targetingHudEl.append(this.btn('取消', () => this.cancelTargeting()));
     }
     this.targetingHudEl.classList.add('visible');
+  }
+
+  /** 放置位置系统：点击槽位，以该索引放置当前选中的随从牌。 */
+  private placeMinion(index: number): void {
+    if (!(this.hearthSelection && getEffect(this.hearthSelection.effectId)?.kind === 'minion'))
+      return;
+    this.sendAction({ type: 'playHearth', cardId: this.hearthSelection.cardId, position: index });
+    this.cancelTargeting(false);
   }
 
   private cancelTargeting(announce = true): void {
@@ -1707,6 +1758,40 @@ export class MultiplayerBattleScreen extends Screen {
     }, 3600);
   }
 
+  /** 罚抽威胁/轮盘的持久化通知（与单机一致）：每次快照渲染时刷新。 */
+  private refreshPersistentNotice(snapshot: MultiplayerSnapshot): void {
+    if (!this.turnNoticeEl) return;
+    const mine = snapshot.players[snapshot.viewer];
+    const minePrivate = snapshot.mine;
+    const persistent = snapshot.mustResolveRoulette
+      ? {
+          title: '轮到你为颜色轮盘选色',
+          detail: `玩家 ${(minePrivate.rouletteDrawer ?? 0) + 1} 将持续抽牌直到抽中你选择的颜色。`,
+          kind: 'roulette' as const,
+        }
+      : mine && mine.pendingDraw > 0
+        ? {
+            title: `罚抽威胁 +${mine.pendingDraw}`,
+            detail:
+              snapshot.turn === snapshot.viewer
+                ? `只能叠加 +${minePrivate.pendingDrawMin} 或更大的罚抽牌，否则结束回合接受全部罚牌。`
+                : `罚抽链正在传向你，最低需要 +${minePrivate.pendingDrawMin} 才能反击。`,
+            kind: 'penalty' as const,
+          }
+        : null;
+    this.turnNoticeEl.className = `turn-notice${persistent ? ` visible ${persistent.kind}` : ''}`;
+    if (persistent) {
+      const icon = this.el('span', 'notice-icon', '!');
+      icon.setAttribute('aria-hidden', 'true');
+      const copy = this.el('span');
+      copy.append(
+        this.el('strong', undefined, persistent.title),
+        this.el('small', undefined, persistent.detail)
+      );
+      this.turnNoticeEl.replaceChildren(icon, copy);
+    }
+  }
+
   private recordActivity(event: GameEvent, snapshot: MultiplayerSnapshot): void {
     const entry = formatActivity(
       event,
@@ -1719,9 +1804,12 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
+    clearActivityHover();
     this.activityLedgerEl.replaceChildren();
     for (const entry of this.activityEntries.slice(-80)) {
-      this.activityLedgerEl.append(this.el('li', undefined, entry));
+      const item = this.el('li', undefined, entry.text);
+      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
+      this.activityLedgerEl.append(item);
     }
     this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
   }

@@ -276,7 +276,8 @@ export function drawHearthArtInWindow(
   ctx.clip();
   const aw = w * 0.68;
   const ah = h * 0.45;
-  const scale = Math.max(aw / img.width, ah / img.height);
+  // contain 适配：完整露出立绘（头与主体），避免 cover 居中裁剪切掉头部
+  const scale = Math.min(aw / img.width, ah / img.height);
   const dw = img.width * scale;
   const dh = img.height * scale;
   ctx.drawImage(img, w * 0.16 + (aw - dw) / 2, h * 0.085 + (ah - dh) / 2, dw, dh);

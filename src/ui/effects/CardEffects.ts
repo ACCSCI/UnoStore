@@ -57,6 +57,7 @@ export const CARD_PRESENTATION: Record<string, CardPresentation> = {
   ashPhoenix: { visual: 'fire', sound: 'fire' },
   calamityDealer: { visual: 'shadow', sound: 'shadow' },
   penaltyBulwark: { visual: 'shield', sound: 'shield' },
+  formationCommander: { visual: 'arcane', sound: 'impact' },
   voidGambler: { visual: 'shadow', sound: 'shadow' },
   graveArchivist: { visual: 'shadow', sound: 'shadow' },
   penitentChampion: { visual: 'nature', sound: 'impact' },
