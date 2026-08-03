@@ -67,9 +67,13 @@ type ArtCrop = {
   sh: number;
 };
 
-const ART_FOCAL_POINTS: Record<string, { x: number; y: number }> = {
+const ART_CROP_OVERRIDES: Record<string, { x: number; y: number; zoom?: number }> = {
+  // These restored illustrations contain a baked circular matte. A small overscan keeps that
+  // matte outside the card's wider oval window instead of leaving white wedges at its sides.
+  bloodboundTitan: { x: 0.5, y: 0.38, zoom: 1.08 },
   penaltyBulwark: { x: 0.5, y: 0.34 },
   penitentChampion: { x: 0.5, y: 0.34 },
+  spyglassOracle: { x: 0.5, y: 0.38, zoom: 1.1 },
 };
 
 /** 计算等价于 object-fit: cover 的源图裁切区域，并让视觉焦点尽量留在画面内。 */
@@ -79,9 +83,10 @@ export function hearthArtCoverCrop(
   targetWidth: number,
   targetHeight: number,
   focusX = 0.5,
-  focusY = 0.38
+  focusY = 0.38,
+  zoom = 1
 ): ArtCrop {
-  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight) * zoom;
   const sw = targetWidth / scale;
   const sh = targetHeight / scale;
   const sx = Math.max(0, Math.min(sourceWidth - sw, focusX * sourceWidth - sw / 2));
@@ -306,8 +311,16 @@ export function drawHearthArtInWindow(
   ctx.clip();
   const aw = w * 0.68;
   const ah = h * 0.45;
-  const focus = effectId ? ART_FOCAL_POINTS[effectId] : undefined;
-  const crop = hearthArtCoverCrop(img.width, img.height, aw, ah, focus?.x, focus?.y);
+  const cropOverride = effectId ? ART_CROP_OVERRIDES[effectId] : undefined;
+  const crop = hearthArtCoverCrop(
+    img.width,
+    img.height,
+    aw,
+    ah,
+    cropOverride?.x,
+    cropOverride?.y,
+    cropOverride?.zoom
+  );
   // cover 裁切会完整铺满椭圆窗；偏上的视觉焦点避免竖版人物被切掉头部。
   ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, w * 0.16, h * 0.085, aw, ah);
   ctx.restore();

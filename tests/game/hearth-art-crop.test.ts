@@ -18,3 +18,13 @@ test('横版炉石立绘裁切时保留指定视觉焦点', () => {
   expect(crop.sx + crop.sw).toBeLessThanOrEqual(1600);
   expect(crop.sw / crop.sh).toBeCloseTo(348 / 317, 8);
 });
+
+test('带圆形留白的立绘可通过放大裁切把底色移出椭圆窗', () => {
+  const regular = hearthArtCoverCrop(768, 768, 348, 317, 0.5, 0.38);
+  const overscanned = hearthArtCoverCrop(768, 768, 348, 317, 0.5, 0.38, 1.1);
+
+  expect(overscanned.sw).toBeLessThan(regular.sw);
+  expect(overscanned.sh).toBeLessThan(regular.sh);
+  expect(overscanned.sw / overscanned.sh).toBeCloseTo(348 / 317, 8);
+  expect(overscanned.sx).toBeGreaterThan(0);
+});
