@@ -1,14 +1,26 @@
 import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
+import type { HeroId } from '../../game/heroes';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
+import { audio } from '../audio/AudioManager';
 import type { CardVisual } from '../effects/CardEffects';
 import { CardDetailPanel } from './CardDetailPanel';
 import { HandRenderer } from './HandRenderer';
 import { MinionBoardRenderer } from './MinionBoard';
 import { OpponentHandRenderer } from './OpponentHandRenderer';
-import { TableCenterRenderer } from './TableCenter';
+import { minionSeatWorldPosition, separateSeatHudAnchors, TABLE_VISUAL_LAYOUT } from './SeatLayout';
+import {
+  TableCenterRenderer,
+  tableCenterWorldPosition,
+  tableDeckWorldPosition,
+  tableDiscardWorldPosition,
+} from './TableCenter';
+import { TavernScene } from './TavernScene';
 import { UIActionBar } from './UIActionBar';
+
+const HAND_COLLAPSE_SFX_DURATION_MS = 688;
+const HAND_EXPAND_SFX_DURATION_MS = 708.063;
 
 /**
  * 卡通风 3D 牌桌场景。
@@ -22,6 +34,9 @@ export class GameView {
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private rafId = 0;
+  private readonly clock = new THREE.Clock();
+  private readonly tavern: TavernScene;
+  private pageVisible = !document.hidden;
   private readonly container: HTMLElement;
   private hand: HandRenderer | null = null;
   private opponentHand: OpponentHandRenderer | null = null;
@@ -29,6 +44,11 @@ export class GameView {
   private detailPanel: CardDetailPanel | null = null;
   private actionBar: UIActionBar | null = null;
   private minionBoard: MinionBoardRenderer | null = null;
+  private handCollapseButton: HTMLButtonElement | null = null;
+  private handCollapsed = false;
+  private playerCount = 2;
+  private seatHudElements: HTMLElement[] = [];
+  private readonly serverClickPosition = new THREE.Vector3();
 
   // 回调（由 BattleScreen 注入）
   private onCardClick: (id: string, isHearth: boolean) => void = () => {};
@@ -36,18 +56,23 @@ export class GameView {
   private onSelectAttacker: (id: string) => void = () => {};
   private onPlaceAt: (index: number) => void = () => {};
   private onAttackMinion: (id: string) => void = () => {};
+  private onServerClick: (seat: number, position: THREE.Vector3) => void = () => {};
+  private onCancelGameplaySelection: () => boolean = () => false;
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0b1026);
-    this.scene.fog = new THREE.Fog(0x0b1026, 9, 18);
+    this.scene.background = null;
 
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
     this.camera.position.set(0, 5.8, 7.8);
@@ -55,8 +80,11 @@ export class GameView {
 
     this.buildLights();
     this.buildTable();
+    this.tavern = new TavernScene(this.scene, this.camera);
     window.addEventListener('resize', this.onResize);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.container.addEventListener('pointerdown', this.handleUiPointerDown, true);
+    this.renderer.domElement.addEventListener('contextmenu', this.handleCanvasContextMenu);
   }
 
   /** 注入操作回调（BattleScreen 调用） */
@@ -66,12 +94,18 @@ export class GameView {
     onSelectAttacker?: (id: string) => void;
     onAttackMinion?: (id: string) => void;
     onPlaceAt?: (index: number) => void;
+    onServerClick?: (seat: number, position: THREE.Vector3) => void;
+    onCancelGameplaySelection?: () => boolean;
   }): void {
     if (cb.onCardClick) this.onCardClick = cb.onCardClick;
     if (cb.onEndClick) this.onEndClick = cb.onEndClick;
     if (cb.onSelectAttacker) this.onSelectAttacker = cb.onSelectAttacker;
     if (cb.onAttackMinion) this.onAttackMinion = cb.onAttackMinion;
     if (cb.onPlaceAt) this.onPlaceAt = cb.onPlaceAt;
+    if (cb.onServerClick) this.onServerClick = cb.onServerClick;
+    if (cb.onCancelGameplaySelection) {
+      this.onCancelGameplaySelection = cb.onCancelGameplaySelection;
+    }
   }
 
   start(): void {
@@ -82,18 +116,27 @@ export class GameView {
   dispose(): void {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.container.removeEventListener('pointerdown', this.handleUiPointerDown, true);
+    this.renderer.domElement.removeEventListener('contextmenu', this.handleCanvasContextMenu);
     this.hand?.dispose();
     this.opponentHand?.dispose();
     this.tableCenter?.dispose();
     this.detailPanel?.hide();
     this.actionBar?.remove();
     this.minionBoard?.remove();
+    this.handCollapseButton?.remove();
+    this.handCollapseButton = null;
+    this.seatHudElements = [];
+    this.tavern.dispose();
     this.scene.traverse((object) => {
-      if (!(object instanceof THREE.Mesh)) return;
-      object.geometry.dispose();
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite)) return;
+      if (object instanceof THREE.Mesh) object.geometry.dispose();
       const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const material of materials) material.dispose();
+      for (const material of materials) {
+        if ('map' in material && material.map instanceof THREE.Texture) material.map.dispose();
+        material.dispose();
+      }
     });
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -119,14 +162,25 @@ export class GameView {
     this.tableCenter = new TableCenterRenderer(this.scene);
     this.opponentHand = new OpponentHandRenderer(this.scene);
     this.actionBar = new UIActionBar(container);
-    this.minionBoard = new MinionBoardRenderer(container, {
-      onSelectAttacker: (id) => this.onSelectAttacker(id),
-      onAttackMinion: (id) => this.onAttackMinion(id),
-      onHoverMinion: (minion) => this.detailPanel?.showMinion(minion),
-      onPreviewMinion: (minion) => this.detailPanel?.pinMinion(minion),
-      onPlaceAt: (index) => this.onPlaceAt(index),
-    });
+    this.minionBoard = new MinionBoardRenderer(
+      container,
+      {
+        onSelectAttacker: (id) => this.onSelectAttacker(id),
+        onAttackMinion: (id) => this.onAttackMinion(id),
+        onHoverMinion: (minion) => this.detailPanel?.showMinion(minion),
+        onPreviewMinion: (minion) => this.detailPanel?.pinMinion(minion),
+        onPlaceAt: (index) => this.onPlaceAt(index),
+      },
+      (seat, playerCount) => this.minionSeatPosition(seat, playerCount, container)
+    );
     this.actionBar.addButton('结束回合', '结束回合并结算补牌', () => this.onEndClick(), 'primary');
+    this.handCollapseButton = document.createElement('button');
+    this.handCollapseButton.type = 'button';
+    this.handCollapseButton.className = 'hand-collapse-button';
+    this.handCollapseButton.textContent = '收牌';
+    this.handCollapseButton.setAttribute('aria-pressed', 'false');
+    this.handCollapseButton.addEventListener('click', this.toggleHandCollapsed);
+    container.appendChild(this.handCollapseButton);
   }
 
   /** 同步手牌（Uno + 炉石） */
@@ -139,6 +193,23 @@ export class GameView {
     this.hand?.sync(uno, hearth);
     this.hand?.setPlayable(playableIds);
     this.hand?.setSelected(selectedIds);
+  }
+
+  /** Render the selected heroes as independent articulated paper puppets. */
+  syncPuppets(heroIds: readonly HeroId[]): void {
+    this.playerCount = heroIds.length;
+    this.tavern.syncPuppets(heroIds);
+    this.layoutSeatHud();
+  }
+
+  bindSeatHudElements(elements: readonly HTMLElement[]): void {
+    this.seatHudElements = [...elements];
+    this.seatHudElements[0]?.parentElement?.classList.add('world-anchored-seat-ring');
+    this.layoutSeatHud();
+  }
+
+  playHeroEmoteAnimation(seat: number, emoteId: string, durationMs = 1900): void {
+    this.tavern.playHeroEmote(seat, emoteId, durationMs);
   }
 
   clearHandInteraction(): void {
@@ -180,6 +251,7 @@ export class GameView {
     spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null,
     placementMode = false
   ): void {
+    this.playerCount = playerCount;
     this.minionBoard?.sync(
       playerBoard,
       enemyBoard,
@@ -192,16 +264,17 @@ export class GameView {
   }
 
   /** 出牌飞行动画：牌从手牌位置飞到弃牌堆（贝塞尔弧线） */
-  playCardAnimation(from: THREE.Vector3): Promise<void> {
+  playCardAnimation(player: number, playerCount: number): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(70);
     // 创建一个临时卡牌飞行
     const geo = new THREE.BoxGeometry(0.5, 0.03, 0.65);
     const mat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.4 });
     const mesh = new THREE.Mesh(geo, mat);
+    const from = this.seatActionPosition(player, playerCount);
     mesh.position.copy(from);
     this.scene.add(mesh);
-    const to = new THREE.Vector3(1.2, 0.36, 0);
+    const to = tableDiscardWorldPosition();
     const via = new THREE.Vector3((from.x + to.x) / 2, 2.0, (from.z + to.z) / 2);
     const curve = new THREE.CubicBezierCurve3(from, via, via, to);
     const start = performance.now();
@@ -235,9 +308,12 @@ export class GameView {
       roughness: 0.35,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    const from = new THREE.Vector3(-1.05, 0.85, 0);
-    const to = this.seatPosition(player, playerCount).setY(1);
-    const via = new THREE.Vector3(-0.5, 2.15, 1.7);
+    const from = tableDeckWorldPosition();
+    const to = this.seatActionPosition(player, playerCount);
+    const via = from
+      .clone()
+      .lerp(to, 0.5)
+      .add(new THREE.Vector3(0, 1.4, 0));
     const curve = new THREE.QuadraticBezierCurve3(from, via, to);
     mesh.position.copy(from);
     this.scene.add(mesh);
@@ -280,8 +356,8 @@ export class GameView {
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    const from = this.seatPosition(player, playerCount).setY(2.2);
-    const to = from.clone().multiplyScalar(0.69).setY(0.74);
+    const from = this.seatActionPosition(player, playerCount).add(new THREE.Vector3(0, 0.8, 0));
+    const to = tableCenterWorldPosition(0.74);
     mesh.position.copy(from);
     this.scene.add(mesh);
     return this.animateTemporary(mesh, 620, (t) => {
@@ -306,8 +382,8 @@ export class GameView {
   ): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(100);
-    const from = this.seatPosition(player, playerCount).multiplyScalar(0.7).setY(0.88);
-    const to = this.seatPosition(target, playerCount).multiplyScalar(0.72).setY(0.92);
+    const from = this.seatActionPosition(player, playerCount);
+    const to = this.seatActionPosition(target, playerCount);
     const via = from.clone().add(to).multiplyScalar(0.5).setY(2.25);
     const curve = new THREE.QuadraticBezierCurve3(from, via, to);
     const trailMaterial = new THREE.MeshStandardMaterial({
@@ -369,9 +445,9 @@ export class GameView {
     const total = Math.max(1, Math.min(10, count));
     const from =
       fromPlayer === undefined
-        ? new THREE.Vector3(-0.82, 0.82, 0.05)
-        : this.seatPosition(fromPlayer, playerCount).multiplyScalar(0.78).setY(1.05);
-    const to = this.seatPosition(target, playerCount).multiplyScalar(0.78).setY(1.05);
+        ? tableDeckWorldPosition(0.82)
+        : this.seatActionPosition(fromPlayer, playerCount);
+    const to = this.seatActionPosition(target, playerCount);
     const cards: THREE.Mesh[] = [];
     for (let index = 0; index < total; index++) {
       const canvas = document.createElement('canvas');
@@ -436,7 +512,7 @@ export class GameView {
   }
 
   /** 英雄技能使用可读的专属道具演出：抓牌手、弃牌与洗牌，不生成几何占位物。 */
-  playHeroPowerAnimation(heroId: string): Promise<void> {
+  playHeroPowerAnimation(heroId: string, player: number, playerCount: number): Promise<void> {
     const overlay = document.createElement('div');
     overlay.className = `hero-power-vfx ${heroId}`;
     overlay.setAttribute('aria-hidden', 'true');
@@ -450,7 +526,36 @@ export class GameView {
       overlay.innerHTML =
         '<span class="vfx-card mix-one">🂠</span><span class="vfx-card mix-two">🂠</span><span class="vfx-card mix-three">🂠</span><strong>重新分配</strong>';
     }
-    this.container.parentElement?.appendChild(overlay);
+    const overlayParent = this.container.parentElement;
+    overlayParent?.appendChild(overlay);
+    if (overlayParent) {
+      const actor = this.projectWorldToElement(
+        this.seatActionPosition(player, playerCount),
+        overlayParent
+      );
+      const deck = this.projectWorldToElement(tableDeckWorldPosition(), overlayParent);
+      const discard = this.projectWorldToElement(tableDiscardWorldPosition(), overlayParent);
+      const center = this.projectWorldToElement(tableCenterWorldPosition(), overlayParent);
+      const start = heroId === 'cardMaster' ? deck : actor;
+      for (const card of overlay.querySelectorAll<HTMLElement>('.vfx-card')) {
+        card.style.left = `${start.x}px`;
+        card.style.top = `${start.y}px`;
+      }
+      const deckElement = overlay.querySelector<HTMLElement>('.vfx-deck');
+      if (deckElement) {
+        deckElement.style.left = `${deck.x}px`;
+        deckElement.style.top = `${deck.y}px`;
+      }
+      const handElement = overlay.querySelector<HTMLElement>('.vfx-hand');
+      if (handElement) {
+        handElement.style.left = `${actor.x}px`;
+        handElement.style.top = `${actor.y}px`;
+      }
+      setTravel(overlay, 'deck', deck.x - actor.x, deck.y - actor.y);
+      setTravel(overlay, 'actor', actor.x - deck.x, actor.y - deck.y);
+      setTravel(overlay, 'discard', discard.x - actor.x, discard.y - actor.y);
+      setTravel(overlay, 'center', center.x - actor.x, center.y - actor.y);
+    }
     return new Promise((resolve) => {
       window.setTimeout(() => {
         overlay.remove();
@@ -491,11 +596,9 @@ export class GameView {
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geometry, material);
-    const from = this.seatPosition(player, playerCount).setY(1.2);
+    const from = this.seatActionPosition(player, playerCount);
     const to =
-      target === null
-        ? new THREE.Vector3(0, 0.8, 0)
-        : this.seatPosition(target, playerCount).multiplyScalar(0.75).setY(1.05);
+      target === null ? tableCenterWorldPosition() : this.seatActionPosition(target, playerCount);
     mesh.position.copy(from);
     this.scene.add(mesh);
     return this.animateTemporary(mesh, 720, (t) => {
@@ -517,11 +620,11 @@ export class GameView {
   ): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(120);
-    const from = this.seatPosition(player, playerCount).setY(1.25);
+    const from = this.seatActionPosition(player, playerCount);
     const to =
       target === null
-        ? new THREE.Vector3(0, 0.82, 0)
-        : this.seatPosition(target, playerCount).multiplyScalar(0.75).setY(1.04);
+        ? tableCenterWorldPosition(0.82)
+        : this.seatActionPosition(target, playerCount);
     const points: THREE.Vector3[] = [];
     const segments = 18;
     for (let index = 0; index <= segments; index++) {
@@ -606,10 +709,50 @@ export class GameView {
     return new Promise((resolve) => window.setTimeout(resolve, duration));
   }
 
-  private seatPosition(player: number, playerCount: number): THREE.Vector3 {
-    const angle = Math.PI / 2 + (Math.PI * 2 * player) / Math.max(2, playerCount);
-    return new THREE.Vector3(Math.cos(angle) * 3.55, 0, Math.sin(angle) * 2.45);
+  private seatActionPosition(player: number, playerCount: number): THREE.Vector3 {
+    return this.tavern.getSeatActionWorldPosition(player, playerCount, new THREE.Vector3());
   }
+
+  private projectWorldToElement(
+    world: THREE.Vector3,
+    element: HTMLElement
+  ): { x: number; y: number } {
+    const canvasBounds = this.renderer.domElement.getBoundingClientRect();
+    const elementBounds = element.getBoundingClientRect();
+    const projected = world.clone().project(this.camera);
+    return {
+      x: canvasBounds.left - elementBounds.left + (projected.x * 0.5 + 0.5) * canvasBounds.width,
+      y: canvasBounds.top - elementBounds.top + (-projected.y * 0.5 + 0.5) * canvasBounds.height,
+    };
+  }
+
+  private minionSeatPosition(
+    seat: number,
+    playerCount: number,
+    element: HTMLElement
+  ): { x: number; y: number } {
+    const insetAnchor = minionSeatWorldPosition(seat, playerCount);
+    return this.projectWorldToElement(insetAnchor, element);
+  }
+
+  private toggleHandCollapsed = (): void => {
+    this.handCollapsed = !this.handCollapsed;
+    const animationDurationMs = this.hand?.getCollapseTransitionDurationMs() ?? 460;
+    this.hand?.setCollapsed(this.handCollapsed);
+    const soundDurationMs = this.handCollapsed
+      ? HAND_COLLAPSE_SFX_DURATION_MS
+      : HAND_EXPAND_SFX_DURATION_MS;
+    audio.playSfx(
+      this.handCollapsed
+        ? '/assets/audio/sfx/generated/hand_collapse.mp3'
+        : '/assets/audio/sfx/generated/hand_expand.mp3',
+      0.72,
+      soundDurationMs / animationDurationMs
+    );
+    if (!this.handCollapseButton) return;
+    this.handCollapseButton.textContent = this.handCollapsed ? '展开手牌' : '收牌';
+    this.handCollapseButton.setAttribute('aria-pressed', String(this.handCollapsed));
+  };
 
   private createGlyphTexture(visual: Exclude<CardVisual, 'lightning'>): THREE.CanvasTexture {
     const canvas = document.createElement('canvas');
@@ -670,63 +813,142 @@ export class GameView {
     this.camera.fov = w / h < 0.9 ? 60 : 50;
     this.camera.updateProjectionMatrix();
     this.hand?.resize();
+    this.minionBoard?.layout(this.playerCount);
+    this.layoutSeatHud();
   };
 
+  private layoutSeatHud(): void {
+    const width = this.renderer.domElement.clientWidth;
+    const height = this.renderer.domElement.clientHeight;
+    const placements: Array<{
+      element: HTMLElement;
+      seat: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }> = [];
+    for (const element of this.seatHudElements) {
+      const seat = Number(element.dataset.seat);
+      if (!Number.isInteger(seat) || seat <= 0) continue;
+      const position = this.tavern.getPuppetHudPosition(seat, width, height);
+      if (!position) continue;
+      const bounds = element.getBoundingClientRect();
+      placements.push({
+        element,
+        seat,
+        ...position,
+        width: bounds.width || 104,
+        // Include the absolutely positioned crystal and hand-count badges.
+        height: (bounds.height || 48) + 48,
+      });
+    }
+
+    const separated = separateSeatHudAnchors(placements, width);
+    for (const position of separated) {
+      const { element } = position;
+      element.dataset.worldAnchored = 'true';
+      element.classList.remove('far-seat');
+      element.style.setProperty('--seat-screen-x', `${position.x.toFixed(2)}px`);
+      element.style.setProperty('--seat-screen-y', `${position.y.toFixed(2)}px`);
+    }
+  }
+
   private handleUiPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || event.target === this.renderer.domElement) return;
+    if (event.button !== 0) return;
+    if (event.target === this.renderer.domElement) {
+      const seat = this.tavern.hitTestServer(
+        event.clientX,
+        event.clientY,
+        this.renderer.domElement.getBoundingClientRect()
+      );
+      if (seat !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.onServerClick(
+          seat,
+          this.tavern.getServerWorldPosition(this.serverClickPosition).clone()
+        );
+      }
+      return;
+    }
     this.hand?.clearPreviewSelection();
     this.detailPanel?.clearPinned();
   };
 
+  private handleCanvasContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+    // Gameplay targeting owns the first right click. Only an otherwise idle
+    // canvas is allowed to interpret empty space as hand collapse/expand.
+    if (this.onCancelGameplaySelection()) {
+      event.stopPropagation();
+      return;
+    }
+    if (this.hand?.containsCardAt(event.clientX, event.clientY)) return;
+    const viewport = this.renderer.domElement.getBoundingClientRect();
+    if (this.tavern.hitTestServer(event.clientX, event.clientY, viewport, false) !== null) return;
+    event.stopPropagation();
+    this.toggleHandCollapsed();
+  };
+
   private animate = (): void => {
     this.rafId = requestAnimationFrame(this.animate);
+    if (!this.pageVisible) return;
+    const delta = Math.min(this.clock.getDelta(), 0.05);
+    this.tavern.update(this.clock.elapsedTime, delta);
     this.renderer.render(this.scene, this.camera);
   };
 
+  private onVisibilityChange = (): void => {
+    this.pageVisible = !document.hidden;
+    if (this.pageVisible) this.clock.getDelta();
+  };
+
   private buildLights(): void {
-    const ambient = new THREE.HemisphereLight(0xdce9ff, 0x241225, 1.35);
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x8d8d8d, 1.1);
     this.scene.add(ambient);
-    const key = new THREE.DirectionalLight(0xf2f6ff, 2.05);
-    key.position.set(5, 10, 6);
-    key.castShadow = true;
-    key.shadow.mapSize.set(1024, 1024);
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0x6f8dff, 0.75);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.62);
     fill.position.set(-4, 3, -5);
     this.scene.add(fill);
-    const glow = new THREE.PointLight(0x7599ff, 0.62, 10);
+    const glow = new THREE.PointLight(0xffffff, 0.22, 12);
     glow.position.set(0, 3, 0);
     this.scene.add(glow);
   }
 
   /** 炉石式椭圆圆桌：厚木底座与连续毛毡桌面。 */
   private buildTable(): void {
-    const base = new THREE.Mesh(
-      new THREE.CylinderGeometry(1, 1, 0.42, 72),
-      new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.9, metalness: 0 })
+    const material = new THREE.SpriteMaterial({
+      transparent: false,
+      alphaTest: 0.025,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const loader = new THREE.TextureLoader();
+    const assign = (texture: THREE.Texture): void => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearMipmapLinearFilter;
+      material.map = texture;
+      material.needsUpdate = true;
+    };
+    loader.load(assetUrl('/assets/images/tavern/table.avif'), assign, undefined, () =>
+      loader.load(assetUrl('/assets/images/tavern/table.webp'), assign)
     );
-    base.scale.set(4.2, 1, 3.02);
-    base.position.y = 0.12;
-    base.castShadow = true;
-    base.receiveShadow = true;
-    this.scene.add(base);
-
-    const felt = new THREE.Mesh(
-      new THREE.CylinderGeometry(1, 1, 0.1, 72),
-      new THREE.MeshStandardMaterial({ color: 0x174b49, roughness: 0.92, metalness: 0 })
-    );
-    felt.scale.set(4.02, 1, 2.84);
-    felt.position.y = 0.39;
-    felt.receiveShadow = true;
-    this.scene.add(felt);
-
-    const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(11, 64),
-      new THREE.MeshStandardMaterial({ color: 0x0d1530, roughness: 1 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -0.11;
-    floor.receiveShadow = true;
-    this.scene.add(floor);
+    const table = new THREE.Sprite(material);
+    table.name = 'painted-2d-card-table';
+    table.position.set(TABLE_VISUAL_LAYOUT.x, TABLE_VISUAL_LAYOUT.y, TABLE_VISUAL_LAYOUT.z);
+    table.scale.set(TABLE_VISUAL_LAYOUT.width, TABLE_VISUAL_LAYOUT.height, 1);
+    table.renderOrder = -2;
+    this.scene.add(table);
   }
+}
+
+function setTravel(
+  element: HTMLElement,
+  name: 'deck' | 'actor' | 'discard' | 'center',
+  x: number,
+  y: number
+): void {
+  element.style.setProperty(`--vfx-${name}-x`, `${x.toFixed(1)}px`);
+  element.style.setProperty(`--vfx-${name}-y`, `${y.toFixed(1)}px`);
 }

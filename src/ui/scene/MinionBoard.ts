@@ -13,6 +13,8 @@ interface MinionBoardCallbacks {
   onPlaceAt: (index: number) => void;
 }
 
+type SeatAnchorResolver = (seat: number, playerCount: number) => { x: number; y: number };
+
 /** DOM 战场层：原生按钮负责选择己方随从和攻击目标，状态仍完全来自规则引擎。 */
 export class MinionBoardRenderer {
   private readonly root: HTMLDivElement;
@@ -22,7 +24,8 @@ export class MinionBoardRenderer {
 
   constructor(
     host: HTMLElement,
-    private readonly callbacks: MinionBoardCallbacks
+    private readonly callbacks: MinionBoardCallbacks,
+    private readonly resolveSeatAnchor: SeatAnchorResolver
   ) {
     this.root = document.createElement('div');
     this.root.className = 'minion-board';
@@ -50,6 +53,9 @@ export class MinionBoardRenderer {
     this.root.dataset.placement = String(placementMode);
     this.minionButtons.clear();
     this.renderEnemyZones(enemyBoard, selectedAttackerId, canAct, spellTargetSide, playerCount);
+    const playerAnchor = this.resolveSeatAnchor(0, playerCount);
+    this.playerRow.style.setProperty('--minion-x', `${playerAnchor.x.toFixed(1)}px`);
+    this.playerRow.style.setProperty('--minion-y', `${playerAnchor.y.toFixed(1)}px`);
     this.renderRow(
       this.playerRow,
       playerBoard,
@@ -60,6 +66,19 @@ export class MinionBoardRenderer {
       false,
       placementMode
     );
+  }
+
+  layout(playerCount: number): void {
+    const playerAnchor = this.resolveSeatAnchor(0, playerCount);
+    this.playerRow.style.setProperty('--minion-x', `${playerAnchor.x.toFixed(1)}px`);
+    this.playerRow.style.setProperty('--minion-y', `${playerAnchor.y.toFixed(1)}px`);
+    for (const row of this.enemyLayer.querySelectorAll<HTMLElement>('.minion-row[data-owner]')) {
+      const owner = Number(row.dataset.owner);
+      if (!Number.isInteger(owner)) continue;
+      const anchor = this.resolveSeatAnchor(owner, playerCount);
+      row.style.setProperty('--minion-x', `${anchor.x.toFixed(1)}px`);
+      row.style.setProperty('--minion-y', `${anchor.y.toFixed(1)}px`);
+    }
   }
 
   remove(): void {
@@ -156,9 +175,9 @@ export class MinionBoardRenderer {
     for (const owner of owners) {
       const row = this.createRow(`玩家 ${owner} 的随从`, 'enemy');
       row.dataset.owner = String(owner);
-      const angle = Math.PI / 2 + (Math.PI * 2 * owner) / playerCount;
-      row.style.setProperty('--minion-x', `${50 + Math.cos(angle) * 22}%`);
-      row.style.setProperty('--minion-y', `${50 + Math.sin(angle) * 18}%`);
+      const anchor = this.resolveSeatAnchor(owner, playerCount);
+      row.style.setProperty('--minion-x', `${anchor.x.toFixed(1)}px`);
+      row.style.setProperty('--minion-y', `${anchor.y.toFixed(1)}px`);
       const ownerMinions = minions.filter((minion) => minion.owner === owner);
       this.renderRow(
         row,

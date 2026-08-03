@@ -189,7 +189,7 @@ function dispatchAction(state: GameState, rng: Rng, action: GameAction): ActionR
     case 'resolveOracle':
       return resolveOracleAction(state, action);
     case 'heroEmote': {
-      const emote = getHeroEmote(action.emoteId);
+      const emote = getHeroEmote(action.emoteId, p.heroId);
       if (!emote) return { ok: false, error: '未知的英雄语音' };
       const event: GameEvent = {
         type: 'heroEmote',

@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { createGame, dispatch } from '../../game';
 import { NormalHeuristic } from '../../game/ai/strategies';
 import type { GameEvent } from '../../game/core/events';
@@ -16,25 +15,33 @@ import {
   minionHasTaunt,
   requiredOwnUnoCardCount,
 } from '../../game/hearth/effects/registry';
-import { getHero, HERO_EMOTES, HEROES } from '../../game/heroes';
+import { getHero, getHeroEmote, HERO_EMOTES, HEROES } from '../../game/heroes';
 import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
 import type { UnoCard } from '../../game/uno/types';
-import { getNet } from '../../net';
 import { MAX_ROOM_PLAYERS, MIN_ROOM_PLAYERS } from '../../net/NetworkLayer';
 import { redactGameEvents } from '../../net/redactGameEvents';
 import { assetUrl } from '../assets/url';
 import { audio } from '../audio/AudioManager';
+import { battleMusicTier } from '../audio/BattleMusicState';
+import { scheduleBattleUiIntegrity } from '../dev/BattleUiIntegrity';
 import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import {
   type ActivityEntry,
   attachActivityHover,
   clearActivityHover,
   formatActivity,
 } from './ActivityFormatter';
-import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import { type BattleTransport, VibeHubBattleTransport } from './BattleTransport';
+import {
+  type HandCountDelta,
+  handCountDeltas,
+  pendingDrawHandCountDelta,
+  renderHandCountLabel,
+} from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -46,6 +53,7 @@ interface PublicPlayerState {
   free: number;
   frozen: number;
   pendingDraw: number;
+  unoAlert: boolean;
   shield: number;
   active: boolean;
   heroId: string;
@@ -70,6 +78,7 @@ interface MultiplayerSnapshot {
   phase: GameState['phase'];
   topCard: UnoCard;
   chosenColor: UnoCard['color'];
+  unoActionsLeft: number;
   deckCount: number;
   players: PublicPlayerState[];
   mine: PrivatePlayerState;
@@ -160,11 +169,18 @@ export class MultiplayerBattleScreen extends Screen {
   private turnNoticeTimer: number | null = null;
   private workDoneTimer: number | null = null;
   private workDoneAnnouncedTurn = -1;
+  private cancelUiIntegrityCheck: () => void = () => {};
+
+  constructor(private readonly transport: BattleTransport = new VibeHubBattleTransport()) {
+    super();
+  }
 
   override async render(): Promise<void> {
-    const net = getNet();
+    const net = this.transport;
     // 进入新对局时清掉上一局的胜利/失败音乐
     audio.stopMusic();
+    audio.startBattleMusic('calm');
+    void audio.startTavernAmbience();
     this.root.classList.remove('local-battle');
     this.root.classList.add('multiplayer-battle');
     const canvasHost = this.el('div', 'battle-canvas');
@@ -176,11 +192,13 @@ export class MultiplayerBattleScreen extends Screen {
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
       onPlaceAt: (index) => this.placeMinion(index),
+      onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
+      onCancelGameplaySelection: () => this.cancelTargeting(),
     });
     this.view.start();
     this.view.setupScene(this.root);
 
-    this.rosterEl = this.el('ol', 'table-seat-ring multiplayer-seat-ring');
+    this.rosterEl = this.el('ol', 'table-seat-ring');
     this.rosterEl.setAttribute('aria-label', '围桌玩家公开状态与可选目标');
     this.rosterEl.setAttribute('role', 'list');
     const panel = this.el('div', 'battle-panel');
@@ -222,14 +240,20 @@ export class MultiplayerBattleScreen extends Screen {
     );
     this.timeoutInterval = window.setInterval(() => {
       this.refreshTurnTimer();
-      if (getNet().isHost) this.expireHostTurnIfNeeded();
+      if (this.transport.isHost) this.expireHostTurnIfNeeded();
     }, 250);
 
     window.addEventListener('keydown', this.handleEscape);
     this.root.addEventListener('contextmenu', this.handleTargetingContextMenu);
+    document.addEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
+    document.addEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause = new PauseMenu(this.root, () => {
       net.leaveRoom();
-      void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
+      if (net.kind === 'local') {
+        void import('./MainMenuScreen').then(({ MainMenuScreen }) => new MainMenuScreen().enter());
+      } else {
+        void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
+      }
     });
     this.pause.bind();
 
@@ -244,7 +268,7 @@ export class MultiplayerBattleScreen extends Screen {
   private buildHeroControls(): void {
     const profile = loadLoadoutProfile();
     const hero = getHero(profile.activeHeroId);
-    const frame = this.el('aside', 'hero-frame player-hero multiplayer-player-hero');
+    const frame = this.el('aside', 'hero-frame player-hero');
     this.playerHeroPortraitEl = this.btn(
       '',
       () => {
@@ -273,8 +297,8 @@ export class MultiplayerBattleScreen extends Screen {
     this.playerHeroPortraitEl.append(this.playerHeroImageEl, this.playerShieldEl);
 
     const copy = this.el('div', 'hero-copy');
-    this.playerHeroNameEl = this.el('strong', 'hero-name', getNet().user?.name ?? hero.name);
-    this.playerHeroIdEl = this.el('small', 'hero-subtitle', `ID ${getNet().user?.id ?? '—'}`);
+    this.playerHeroNameEl = this.el('strong', 'hero-name', hero.name);
+    this.playerHeroIdEl = this.el('small', 'hero-subtitle', hero.title);
     copy.append(this.playerHeroNameEl, this.playerHeroIdEl);
 
     const resources = this.el('div', 'hero-resources');
@@ -302,8 +326,9 @@ export class MultiplayerBattleScreen extends Screen {
     this.emoteMenuEl.append(this.el('strong', undefined, '发送英雄语音'));
     const emoteGrid = this.el('div', 'hero-emote-grid');
     for (const item of HERO_EMOTES) {
+      const line = getHeroEmote(item.id, hero.id)?.text ?? '';
       emoteGrid.append(
-        this.btn(`${item.label} · ${item.text}`, () => {
+        this.btn(`${item.label} · ${line}`, () => {
           this.emoteMenuEl?.hidePopover();
           this.sendAction({ type: 'heroEmote', emoteId: item.id });
         })
@@ -332,8 +357,20 @@ export class MultiplayerBattleScreen extends Screen {
     this.emoteMenuEl.showPopover();
   }
 
+  private handleHeroEmoteLightDismiss = (event: Event): void => {
+    const target = event.target;
+    const menu = this.emoteMenuEl;
+    if (!(target instanceof Node && menu?.matches(':popover-open'))) return;
+    if (
+      (target instanceof Element && target.closest('.hero-emote-grid button')) ||
+      this.playerHeroPortraitEl?.contains(target)
+    )
+      return;
+    menu.hidePopover();
+  };
+
   private initHost(): void {
-    const net = getNet();
+    const net = this.transport;
     const count = Math.max(MIN_ROOM_PLAYERS, Math.min(net.playerCount, MAX_ROOM_PLAYERS));
     const seed = crypto.getRandomValues(new Uint32Array(1))[0] ?? Date.now();
     const profile = loadLoadoutProfile();
@@ -373,7 +410,7 @@ export class MultiplayerBattleScreen extends Screen {
   }
 
   private advanceHostBot(): void {
-    const net = getNet();
+    const net = this.transport;
     if (
       this.hostBotResolving ||
       this.hostTimeoutResolving ||
@@ -520,15 +557,17 @@ export class MultiplayerBattleScreen extends Screen {
       phase: this.hostState.phase,
       topCard: this.hostState.topCard,
       chosenColor: this.hostState.chosenColor,
+      unoActionsLeft: this.hostState.unoActionsLeft,
       deckCount: this.hostState.unoDraw.length,
       players: this.hostState.players.map((entry, seat) => ({
-        userId: getNet().playerIdentity(seat)?.id ?? `seat-${seat + 1}`,
-        userName: getNet().playerIdentity(seat)?.name ?? `玩家 ${seat + 1}`,
+        userId: this.transport.playerIdentity(seat)?.id ?? `seat-${seat + 1}`,
+        userName: this.transport.playerIdentity(seat)?.name ?? `玩家 ${seat + 1}`,
         unoCount: entry.hand.length,
         hearthCount: entry.hearthHand.length,
         free: entry.free,
         frozen: entry.frozen,
-        pendingDraw: entry.pendingDrawMin > 0 ? entry.pendingDraw : 0,
+        pendingDraw: entry.pendingDraw,
+        unoAlert: entry.unoAlert,
         shield: entry.shield,
         active: entry.active,
         heroId: entry.heroId,
@@ -554,7 +593,7 @@ export class MultiplayerBattleScreen extends Screen {
       gameOverReason: this.hostGameResult?.reason ?? null,
       error,
     };
-    getNet().hostSendState(snapshot, player);
+    this.transport.hostSendState(snapshot, player);
   }
 
   /** 快照按到达顺序排队；先播事件，再显示该次结算后的状态。 */
@@ -591,12 +630,14 @@ export class MultiplayerBattleScreen extends Screen {
     snapshot: MultiplayerSnapshot
   ): void {
     this.recordActivity(event, snapshot);
-    audio.playSfx(`/assets/audio/voice/heroes/emotes/${event.heroId}_${event.emoteId}.mp3`, 1);
-    void this.showHeroEmote(
-      this.visualSeat(event.player, snapshot),
-      event.text,
-      snapshot.players.length
+    const visualSeat = this.visualSeat(event.player, snapshot);
+    void audio.playSpatialSfx(
+      `/assets/audio/voice/heroes/emotes/${event.heroId}_${event.emoteId}.mp3`,
+      seatWorldPosition(visualSeat, snapshot.players.length),
+      1
     );
+    this.view?.playHeroEmoteAnimation(visualSeat, event.emoteId, 4200);
+    void this.showHeroEmote(visualSeat, event.text, snapshot.players.length);
   }
 
   private async consumeSnapshot(snapshot: MultiplayerSnapshot): Promise<void> {
@@ -669,7 +710,11 @@ export class MultiplayerBattleScreen extends Screen {
   }
 
   private returnToRoom(): void {
-    const net = getNet();
+    const net = this.transport;
+    if (net.kind === 'local') {
+      void import('./MainMenuScreen').then(({ MainMenuScreen }) => new MainMenuScreen().enter());
+      return;
+    }
     const roomId = net.roomId;
     if (!roomId) {
       void import('./LobbyScreen').then(({ LobbyScreen }) => new LobbyScreen().enter());
@@ -682,6 +727,23 @@ export class MultiplayerBattleScreen extends Screen {
   private renderSnapshot(snapshot: MultiplayerSnapshot): void {
     const mine = snapshot.players[snapshot.viewer];
     if (!mine) return;
+    this.view?.syncPuppets(
+      Array.from({ length: snapshot.players.length }, (_, visualSeat) => {
+        const globalSeat = (snapshot.viewer + visualSeat) % snapshot.players.length;
+        return getHero(snapshot.players[globalSeat]?.heroId ?? '').id;
+      })
+    );
+    audio.setBattleMusicTier(
+      battleMusicTier({
+        phase: snapshot.phase,
+        players: snapshot.players.map((player) => ({
+          active: player.active,
+          unoCount: player.unoCount,
+          pendingDraw: player.pendingDraw,
+          unoAlert: player.unoAlert,
+        })),
+      })
+    );
     if (snapshot.turn !== snapshot.viewer || !mine.active) {
       this.hearthSelection = null;
       this.selectedAttackerId = null;
@@ -792,8 +854,8 @@ export class MultiplayerBattleScreen extends Screen {
       this.heroPowerEl.disabled = !snapshot.heroPowerUsable || this.actionAnimating;
       this.heroPowerEl.classList.toggle('actionable-highlight', snapshot.heroPowerUsable);
       if (this.playerHeroImageEl) this.playerHeroImageEl.src = assetUrl(hero.portrait);
-      if (this.playerHeroNameEl) this.playerHeroNameEl.textContent = mine.userName;
-      if (this.playerHeroIdEl) this.playerHeroIdEl.textContent = `ID ${mine.userId} · ${hero.name}`;
+      if (this.playerHeroNameEl) this.playerHeroNameEl.textContent = hero.name;
+      if (this.playerHeroIdEl) this.playerHeroIdEl.textContent = hero.title;
     }
     if (this.playerHeroPortraitEl) {
       const ownTargetable = this.isPlayerTargetable(snapshot.viewer, snapshot);
@@ -820,10 +882,20 @@ export class MultiplayerBattleScreen extends Screen {
         `${getHero(mine.heroId).name}头像${shieldLabel}；点击或右键发送语音`
       );
     }
-    if (this.handSummaryEl)
-      this.handSummaryEl.textContent = mine.active
-        ? `UNO ${mine.unoCount} / 25 张淘汰 · 炉石 ${mine.hearthCount}`
-        : '已淘汰 · UNO 0 · 炉石 0';
+    if (this.handSummaryEl) {
+      if (mine.active) {
+        renderHandCountLabel(
+          this.handSummaryEl,
+          mine.unoCount,
+          mine.hearthCount,
+          this.animationHandDeltas.get(snapshot.viewer) ??
+            pendingDrawHandCountDelta(snapshot.viewer, mine.pendingDraw),
+          { unoSuffix: ' / 25 张淘汰' }
+        );
+      } else {
+        this.handSummaryEl.textContent = '已淘汰 · UNO 0 · 炉石 0';
+      }
+    }
     this.renderRoster(snapshot);
     this.renderTargetingHud();
     const direction = snapshot.direction === 1 ? '↻ 顺时针' : '↺ 逆时针';
@@ -847,17 +919,13 @@ export class MultiplayerBattleScreen extends Screen {
       this.routeEl.replaceChildren(directionEl, current, arrow, next);
       this.routeEl.dataset.direction = String(snapshot.direction);
     }
-    this.renderBattleStatus(snapshot, canAct, direction);
+    this.renderBattleStatus(snapshot, canAct);
     this.scheduleWorkDone(snapshot, shouldPromptEnd);
     this.refreshPersistentNotice(snapshot);
     this.refreshTurnTimer();
   }
 
-  private renderBattleStatus(
-    snapshot: MultiplayerSnapshot,
-    canAct: boolean,
-    direction: string
-  ): void {
+  private renderBattleStatus(snapshot: MultiplayerSnapshot, canAct: boolean): void {
     if (!this.statusEl) return;
     if (snapshot.error) {
       this.setStatus(snapshot.error, true);
@@ -866,6 +934,21 @@ export class MultiplayerBattleScreen extends Screen {
     this.statusEl.classList.remove('error');
     const activeColor = snapshot.topCard.color ?? snapshot.chosenColor;
     const colorLabel = activeColor ? COLOR_NAMES[activeColor] : '四色';
+    const turn = this.el(
+      'span',
+      `turn-tag ${canAct ? 'mine' : 'opponent'}`,
+      snapshot.mustResolveRoulette
+        ? `颜色轮盘：由你为玩家 ${(snapshot.mine.rouletteDrawer ?? 0) + 1} 选色`
+        : canAct
+          ? '你的回合'
+          : `${snapshot.players[snapshot.turn]?.userName ?? `玩家 ${snapshot.turn + 1}`} 思考中`
+    );
+    const action = this.el('span', 'stat');
+    action.title = '本回合还能打几张 Uno 牌';
+    action.append(
+      this.el('small', undefined, '行动'),
+      this.el('strong', undefined, String(snapshot.unoActionsLeft))
+    );
     const top = this.el('span', `stat top-card ${activeColor ? `is-${activeColor}` : 'is-wild'}`);
     top.title = `当前颜色：${colorLabel}`;
     const swatch = this.el('i', 'top-card-swatch');
@@ -879,22 +962,21 @@ export class MultiplayerBattleScreen extends Screen {
         `${colorLabel} ${ACTION_NAMES[snapshot.topCard.value] ?? snapshot.topCard.value}`
       )
     );
-    const turn = this.el(
-      'span',
-      `turn-tag ${canAct ? 'mine' : 'opponent'}`,
-      snapshot.mustResolveRoulette
-        ? `颜色轮盘：由你为玩家 ${(snapshot.mine.rouletteDrawer ?? 0) + 1} 选色`
-        : canAct
-          ? `你的回合 · ${direction}`
-          : `${snapshot.players[snapshot.turn]?.userName ?? `玩家 ${snapshot.turn + 1}`}的回合`
-    );
     const mine = snapshot.players[snapshot.viewer]!;
-    const hand = this.el('span', 'stat');
-    hand.append(
-      this.el('small', undefined, '手牌'),
-      this.el('strong', undefined, `UNO ${mine.unoCount} · 炉石 ${mine.hearthCount}`)
+    const penalty = this.el('span', 'stat penalty');
+    if (snapshot.mine.pendingDrawMin > 0) {
+      penalty.append(
+        this.el('small', undefined, '罚抽链'),
+        this.el('strong', undefined, String(mine.pendingDraw)),
+        this.el('small', undefined, `仅可叠 +${snapshot.mine.pendingDrawMin} 或更大`)
+      );
+    }
+    this.statusEl.replaceChildren(
+      turn,
+      action,
+      top,
+      ...(snapshot.mine.pendingDrawMin > 0 ? [penalty] : [])
     );
-    this.statusEl.replaceChildren(top, turn, hand);
   }
 
   private scheduleWorkDone(snapshot: MultiplayerSnapshot, shouldPromptEnd: boolean): void {
@@ -924,7 +1006,7 @@ export class MultiplayerBattleScreen extends Screen {
       )
         return;
       this.workDoneAnnouncedTurn = scheduledTurn;
-      audio.playSfx('/assets/audio/voice/work_done.mp3', 1);
+      audio.playSfx('/assets/audio/voice/work_done.mp3', 0.7);
       this.setStatus('收工了！当前已无可执行操作，请结束回合');
     }, 260);
   }
@@ -1007,12 +1089,13 @@ export class MultiplayerBattleScreen extends Screen {
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
     snapshot.players.forEach((player, index) => {
       const visualSeat = this.visualSeat(index, snapshot);
-      const angle = Math.PI / 2 + (Math.PI * 2 * visualSeat) / snapshot.players.length;
-      const item = this.el('li', 'table-seat multiplayer-table-seat');
+      const seatPosition = seatScreenPosition(visualSeat, snapshot.players.length);
+      const item = this.el('li', 'table-seat');
       item.dataset.seat = String(visualSeat);
       item.dataset.player = String(index);
-      item.style.setProperty('--seat-x', `${50 + Math.cos(angle) * 50}%`);
-      item.style.setProperty('--seat-y', `${50 + Math.sin(angle) * 50}%`);
+      item.classList.toggle('far-seat', seatPosition.y <= 10);
+      item.style.setProperty('--seat-x', `${seatPosition.x}%`);
+      item.style.setProperty('--seat-y', `${seatPosition.y}%`);
       item.classList.toggle('active', snapshot.turn === index);
       item.classList.toggle('next', nextPlayer === index && snapshot.turn !== index);
       item.classList.toggle('eliminated', !player.active);
@@ -1040,6 +1123,12 @@ export class MultiplayerBattleScreen extends Screen {
       heroPortrait.alt = '';
       heroPortrait.className = 'seat-hero-portrait';
       heroPortrait.setAttribute('aria-hidden', 'true');
+      const portraitWrap = this.el('span', 'seat-portrait-wrap');
+      const shieldBadge = this.el('span', 'seat-shield-badge');
+      shieldBadge.hidden = player.shield <= 0;
+      shieldBadge.setAttribute('aria-hidden', 'true');
+      shieldBadge.textContent = player.shield > 0 ? `🛡 ${player.shield}` : '';
+      portraitWrap.append(heroPortrait, shieldBadge);
       const fan = this.el('span', 'seat-hand-fan');
       const visibleBacks = player.active ? player.unoCount + player.hearthCount : 0;
       const spacing = Math.min(0.55, 4.8 / Math.max(1, visibleBacks - 1));
@@ -1053,28 +1142,42 @@ export class MultiplayerBattleScreen extends Screen {
         );
         fan.append(back);
       }
+      const handCount = this.el(
+        'small',
+        'seat-card-count',
+        player.active ? '' : '已淘汰 · UNO 0 · 炉石 0'
+      );
+      if (player.active) {
+        renderHandCountLabel(
+          handCount,
+          player.unoCount,
+          player.hearthCount,
+          this.animationHandDeltas.get(index) ??
+            pendingDrawHandCountDelta(index, player.pendingDraw)
+        );
+      }
       target.append(
-        heroPortrait,
+        portraitWrap,
         this.el('span', 'seat-index', String(index + 1)),
-        this.el('strong', undefined, `${player.userName} · ${hero.name}`),
-        this.el('small', 'seat-player-id', `ID ${player.userId}`),
-        this.el(
-          'small',
-          'seat-card-count',
-          player.active
-            ? `UNO ${player.unoCount} · 炉石 ${player.hearthCount}`
-            : '已淘汰 · UNO 0 · 炉石 0'
-        ),
+        this.el('strong', undefined, player.userName),
+        handCount,
         this.el(
           'small',
           'seat-crystal-count',
-          `💎 ${player.active ? player.free : 0}${player.frozen ? ` · ❄ ${player.frozen}` : ''}${player.pendingDraw ? ` · 罚抽 ${player.pendingDraw}` : ''}${player.shield > 0 ? ` · ⬟ ${player.shield}` : ''}`
+          `💎 ${player.active ? player.free : 0}${player.frozen ? ` · ❄ ${player.frozen}` : ''}`
         ),
         fan
       );
       item.append(target);
       this.rosterEl?.append(item);
     });
+    this.view?.bindSeatHudElements(
+      Array.from(this.rosterEl.children).filter(
+        (element): element is HTMLElement => element instanceof HTMLElement
+      )
+    );
+    this.cancelUiIntegrityCheck();
+    this.cancelUiIntegrityCheck = scheduleBattleUiIntegrity(this.root);
   }
 
   private nextActiveSeat(snapshot: MultiplayerSnapshot, from: number): number {
@@ -1437,7 +1540,7 @@ export class MultiplayerBattleScreen extends Screen {
     this.cancelTargeting(false);
   }
 
-  private cancelTargeting(announce = true): void {
+  private cancelTargeting(announce = true): boolean {
     const had = Boolean(
       this.hearthSelection ||
         this.selectedAttackerId ||
@@ -1452,6 +1555,7 @@ export class MultiplayerBattleScreen extends Screen {
     this.heroUnoSelection = null;
     if (this.snapshot) this.renderSnapshot(this.snapshot);
     if (had && announce) this.setStatus('已取消目标选择');
+    return had;
   }
 
   private async useHeroPower(): Promise<void> {
@@ -1527,7 +1631,7 @@ export class MultiplayerBattleScreen extends Screen {
 
   private sendAction(action: NetworkAction): void {
     try {
-      getNet().sendInput(action);
+      this.transport.sendInput(action);
     } catch (error) {
       this.setStatus(error instanceof Error ? error.message : String(error), true);
     }
@@ -1545,7 +1649,7 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = unoPresentation(event.card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         if (!(event.penaltyAdded ?? 0)) audio.playSfx(soundAsset(presentation.sound), 0.55);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(source, snapshot.players.length);
         if ((event.penaltyAdded ?? 0) > 0 && event.penaltyTarget !== undefined) {
           const target = this.visualSeat(event.penaltyTarget, snapshot);
           if ((event.penaltyTransferred ?? 0) > 0)
@@ -1574,7 +1678,7 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(source, snapshot.players.length);
         if (effect?.kind !== 'minion') {
           const targetGlobal =
             event.targets?.[0] ??
@@ -1591,7 +1695,12 @@ export class MultiplayerBattleScreen extends Screen {
           );
         }
       } else if (event.type === 'heroPowerUsed') {
-        audio.playSfx(`/assets/audio/voice/heroes/${event.heroId}_power.mp3`, 1);
+        void audio.playSpatialSfx(
+          `/assets/audio/voice/heroes/${event.heroId}_power.mp3`,
+          seatWorldPosition(source, snapshot.players.length),
+          1
+        );
+        this.view.playHeroEmoteAnimation(source, 'threat', 3600);
         audio.playSfx(
           event.heroId === 'cardMaster'
             ? '/assets/audio/sfx/generated/hero_cardmaster.mp3'
@@ -1600,7 +1709,7 @@ export class MultiplayerBattleScreen extends Screen {
               : '/assets/audio/sfx/generated/hero_inspector_shuffle.mp3',
           0.8
         );
-        await this.view.playHeroPowerAnimation(event.heroId);
+        await this.view.playHeroPowerAnimation(event.heroId, source, snapshot.players.length);
       } else if (event.type === 'unoAlert') {
         audio.playSfx('/assets/audio/sfx/uno_cheer.mp3', 1);
         await this.view.animationPause(180);
@@ -1824,17 +1933,11 @@ export class MultiplayerBattleScreen extends Screen {
     return (source + step) % snapshot.players.length;
   }
 
-  private actionOrigin(player: number, playerCount: number): THREE.Vector3 {
-    if (player === 0) return new THREE.Vector3(0, 0.6, 4.2);
-    const angle = Math.PI * (0.12 + (player - 1) / Math.max(1, playerCount - 1)) + Math.PI * 0.38;
-    return new THREE.Vector3(Math.cos(angle) * 3.7, 0.75, Math.sin(angle) * 2.7);
-  }
-
   private showHeroEmote(player: number, message: string, playerCount: number): Promise<void> {
     const bubble = this.el('div', 'hero-emote-bubble', message);
-    const angle = Math.PI / 2 + (Math.PI * 2 * player) / playerCount;
-    bubble.style.setProperty('--bubble-x', `${50 + Math.cos(angle) * 38}%`);
-    bubble.style.setProperty('--bubble-y', `${50 + Math.sin(angle) * 34}%`);
+    const bubblePosition = seatScreenPosition(player, playerCount, 38, 34);
+    bubble.style.setProperty('--bubble-x', `${bubblePosition.x}%`);
+    bubble.style.setProperty('--bubble-y', `${bubblePosition.y}%`);
     this.root.append(bubble);
     return new Promise((resolve) =>
       window.setTimeout(() => {
@@ -2011,16 +2114,21 @@ export class MultiplayerBattleScreen extends Screen {
 
   override exit(): void {
     this.exited = true;
+    audio.stopTavernAmbience();
+    audio.stopMusic();
     this.root.classList.remove('multiplayer-battle');
     if (this.timeoutInterval !== null) window.clearInterval(this.timeoutInterval);
     if (this.botInterval !== null) window.clearInterval(this.botInterval);
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
     if (this.workDoneTimer !== null) window.clearTimeout(this.workDoneTimer);
+    this.cancelUiIntegrityCheck();
     window.removeEventListener('keydown', this.handleEscape);
     this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
+    document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
+    document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause?.unbind();
     this.view?.dispose();
-    const net = getNet();
+    const net = this.transport;
     net.onInputReceived = undefined;
     net.onStateReceived = undefined;
     net.onSnapshotRequested = undefined;

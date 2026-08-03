@@ -34,6 +34,8 @@ function validMedia(path: string): boolean {
         return ascii.startsWith('OggS');
       case '.mp3':
         return ascii.startsWith('ID3') || (bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0);
+      case '.webm':
+        return bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
       default:
         return true;
     }
@@ -89,6 +91,14 @@ for (const url of [
   '/assets/audio/sfx/generated/hero_thug.mp3',
   '/assets/audio/sfx/generated/hero_inspector_shuffle.mp3',
   '/assets/audio/voice/work_done.mp3',
+  '/assets/audio/voice/server/server_water.mp3',
+  '/assets/audio/voice/server/server_water.webm',
+  '/assets/audio/voice/server/server_evening.mp3',
+  '/assets/audio/voice/server/server_evening.webm',
+  '/assets/audio/voice/server/server_refill.mp3',
+  '/assets/audio/voice/server/server_refill.webm',
+  '/assets/audio/voice/server/server_luck.mp3',
+  '/assets/audio/voice/server/server_luck.webm',
 ]) {
   register(url.includes('/images/') ? '公共牌背' : '对战音频', url);
 }
@@ -103,7 +113,7 @@ if (invalid.length > 0) {
 const imageRoot = resolve(publicRoot, 'assets/images');
 const audioRoot = resolve(publicRoot, 'assets/audio');
 const unoptimizedImages = filesUnder(imageRoot).filter(
-  (path) => !['.webp', '.svg'].includes(extname(path).toLowerCase())
+  (path) => !['.avif', '.webp', '.svg'].includes(extname(path).toLowerCase())
 );
 const oversizedImages = filesUnder(imageRoot).filter((path) => statSync(path).size > 512 * 1024);
 const invalidAudio = filesUnder(audioRoot).filter(
@@ -119,5 +129,5 @@ if (unoptimizedImages.length || oversizedImages.length || invalidAudio.length) {
 
 const minionCount = effects.filter((effect) => effect.kind === 'minion').length;
 console.log(
-  `媒体检查通过：${effects.length} 张炉石立绘、${minionCount * 3} 条随从语音、${HEROES.length} 名英雄立绘、${HEROES.length * HERO_EMOTES.length} 条英雄表情语音；共校验 ${expected.size} 个必需文件，并确认全部游戏图片已使用 WebP/SVG。`
+  `媒体检查通过：${effects.length} 张炉石立绘、${minionCount * 3} 条随从语音、${HEROES.length} 名英雄立绘、${HEROES.length * HERO_EMOTES.length} 条英雄表情语音；共校验 ${expected.size} 个必需文件，并确认全部游戏图片已使用 AVIF/WebP/SVG。`
 );

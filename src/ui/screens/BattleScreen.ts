@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import type { GameEvent } from '../../game/core/events';
 import { nextActiveFrom } from '../../game/core/flow';
 import {
@@ -18,7 +17,7 @@ import {
   minionHasTaunt,
   requiredOwnUnoCardCount,
 } from '../../game/hearth/effects/registry';
-import { getHero, HERO_EMOTES, type HeroId } from '../../game/heroes';
+import { getHero, getHeroEmote, HERO_EMOTES, type HeroId } from '../../game/heroes';
 import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
 import type { StoryMatch, StorySession } from '../../game/story';
 import {
@@ -37,10 +36,13 @@ import { MERCY_HAND_LIMIT } from '../../game/uno/constants';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
 import { audio } from '../audio/AudioManager';
+import { battleMusicTier } from '../audio/BattleMusicState';
+import { scheduleBattleUiIntegrity } from '../dev/BattleUiIntegrity';
 import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
   type ActivityEntry,
@@ -48,7 +50,12 @@ import {
   clearActivityHover,
   formatActivity,
 } from './ActivityFormatter';
-import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import {
+  type HandCountDelta,
+  handCountDeltas,
+  pendingDrawHandCountDelta,
+  renderHandCountLabel,
+} from './HandCountDelta';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -70,9 +77,6 @@ export class BattleScreen extends Screen {
   private playerCrystalEl: HTMLElement | null = null;
   private playerFrozenEl: HTMLElement | null = null;
   private opponentCardsEl: HTMLElement | null = null;
-  private opponentNameEl: HTMLElement | null = null;
-  private opponentSubtitleEl: HTMLElement | null = null;
-  private tableSeats: HTMLElement[] = [];
   private playerTargetButtons = new Map<number, HTMLButtonElement>();
   private opponentHeroEl: HTMLButtonElement | null = null;
   private opponentShieldEl: HTMLElement | null = null;
@@ -104,28 +108,24 @@ export class BattleScreen extends Screen {
   private turnDeadlineSerial = -1;
   private turnDeadline = 0;
   private timeoutResolving = false;
+  private cancelUiIntegrityCheck: () => void = () => {};
 
   private opponentTimer: number | null = null;
   private pause: PauseMenu | null = null;
   private match: StoryMatch;
-  private readonly playerCount: number;
-  private readonly localTest: boolean;
+  private readonly playerCount = 2;
   private readonly deckCardIds: string[];
   private readonly heroId: HeroId;
 
   constructor(
     match: StoryMatch,
     options: {
-      playerCount?: number;
-      localTest?: boolean;
       deckCardIds?: string[];
       heroId?: HeroId;
     } = {}
   ) {
     super();
     this.match = match;
-    this.playerCount = Math.max(2, Math.min(options.playerCount ?? 2, 8));
-    this.localTest = options.localTest ?? false;
     const profile = loadLoadoutProfile();
     this.deckCardIds = [...(options.deckCardIds ?? activeDeck(profile).cardIds)];
     this.heroId = options.heroId ?? profile.activeHeroId;
@@ -134,10 +134,10 @@ export class BattleScreen extends Screen {
   override async render(): Promise<void> {
     // 进入新对局时清掉上一局的胜利音乐
     audio.stopMusic();
-    document.title = this.localTest
-      ? `${this.playerCount} 人单机混战 · UnoStore`
-      : `对战 ${this.match.opponentName} · UnoStore`;
-    this.root.classList.toggle('local-battle', this.localTest);
+    audio.startBattleMusic('calm');
+    void audio.startTavernAmbience();
+    document.title = `对战 ${this.match.opponentName} · UnoStore`;
+    this.root.classList.remove('local-battle');
     // 3D 场景容器
     const canvasHost = this.el('div', 'battle-canvas');
     this.root.append(canvasHost);
@@ -149,17 +149,15 @@ export class BattleScreen extends Screen {
       onSelectAttacker: (id) => this.selectAttacker(id),
       onAttackMinion: (id) => this.targetMinion(id),
       onPlaceAt: (index) => this.placeMinion(index),
+      onServerClick: (_seat, position) => audio.speakRandomServerLine(position),
+      onCancelGameplaySelection: () => this.cancelTargeting(),
     });
     this.view.start();
     this.view.setupScene(this.root);
 
     // ESC 暂停菜单（退出对局）
     this.pause = new PauseMenu(this.root, () => {
-      if (this.localTest) {
-        void import('./MainMenuScreen').then((m) => new m.MainMenuScreen().enter());
-      } else {
-        void import('./ChapterSelectScreen').then((m) => new m.ChapterSelectScreen().enter());
-      }
+      void import('./ChapterSelectScreen').then((m) => new m.ChapterSelectScreen().enter());
     });
     this.pause.bind();
 
@@ -188,58 +186,17 @@ export class BattleScreen extends Screen {
     this.opponentShieldEl.setAttribute('aria-hidden', 'true');
     opponentPortrait.appendChild(this.opponentShieldEl);
     const opponentCopy = this.el('div', 'hero-copy');
-    this.opponentNameEl = this.el('strong', 'hero-name', this.match.opponentName);
-    this.opponentSubtitleEl = this.el(
+    const opponentName = this.el('strong', 'hero-name', this.match.opponentName);
+    const opponentSubtitle = this.el(
       'small',
       'hero-subtitle',
-      this.localTest
-        ? `${this.playerCount} 人混战 · 当前席位`
-        : difficultyLabel(this.match.difficulty)
+      difficultyLabel(this.match.difficulty)
     );
-    opponentCopy.append(this.opponentNameEl, this.opponentSubtitleEl);
+    opponentCopy.append(opponentName, opponentSubtitle);
     this.opponentCardsEl = this.el('span', 'hero-counter', 'UNO 5 · 炉石 3 · 💎 0');
     this.opponentCardsEl.title = '对手 UNO、炉石手牌数量与可用水晶';
     opponentCard.append(opponentPortrait, opponentCopy, this.opponentCardsEl);
     this.root.appendChild(opponentCard);
-
-    if (this.localTest) {
-      const roster = this.el('ol', 'table-seat-ring');
-      roster.setAttribute('aria-label', '八人牌桌座次');
-      roster.setAttribute('role', 'list');
-      for (let player = 0; player < this.playerCount; player++) {
-        const seat = this.el('li', 'table-seat');
-        seat.dataset.seat = String(player);
-        const angle = Math.PI / 2 + (Math.PI * 2 * player) / this.playerCount;
-        seat.style.setProperty('--seat-x', `${50 + Math.cos(angle) * 50}%`);
-        seat.style.setProperty('--seat-y', `${50 + Math.sin(angle) * 50}%`);
-        const target = this.btn('', () => this.choosePlayerTarget(player), 'seat-target-button');
-        const seatHero = getHero(
-          player === 0 ? this.heroId : (['cardMaster', 'thug', 'inspector'][player % 3] as HeroId)
-        );
-        const seatPortrait = new Image();
-        seatPortrait.src = assetUrl(seatHero.portrait);
-        seatPortrait.alt = '';
-        seatPortrait.className = 'seat-hero-portrait';
-        const seatPortraitWrap = this.el('span', 'seat-portrait-wrap');
-        const seatShield = this.el('span', 'seat-shield-badge');
-        seatShield.hidden = true;
-        seatShield.setAttribute('aria-hidden', 'true');
-        seatPortraitWrap.append(seatPortrait, seatShield);
-        target.append(
-          seatPortraitWrap,
-          this.el('span', 'seat-index', String(player + 1)),
-          this.el('strong', undefined, player === 0 ? '你' : `AI ${player}`),
-          this.el('small', 'seat-card-count', 'UNO 5 · 炉石 3'),
-          this.el('small', 'seat-crystal-count', '💎 0'),
-          this.el('span', 'seat-hand-fan')
-        );
-        seat.append(target);
-        roster.appendChild(seat);
-        this.tableSeats.push(seat);
-        this.playerTargetButtons.set(player, target);
-      }
-      this.root.appendChild(roster);
-    }
 
     const hero = getHero(this.heroId);
     const playerCard = this.el('aside', 'hero-frame player-hero');
@@ -292,9 +249,8 @@ export class BattleScreen extends Screen {
     emotePopover.append(this.el('strong', undefined, '发送英雄语音'));
     const emoteGrid = this.el('div', 'hero-emote-grid');
     for (const emote of HERO_EMOTES) {
-      emoteGrid.append(
-        this.btn(`${emote.label} · ${emote.text}`, () => this.sendHeroEmote(emote.id))
-      );
+      const line = getHeroEmote(emote.id, this.heroId)?.text ?? '';
+      emoteGrid.append(this.btn(`${emote.label} · ${line}`, () => this.sendHeroEmote(emote.id)));
     }
     emotePopover.appendChild(emoteGrid);
     this.root.appendChild(emotePopover);
@@ -348,6 +304,8 @@ export class BattleScreen extends Screen {
     this.root.appendChild(this.targetingHudEl);
     window.addEventListener('keydown', this.handleTargetingKey);
     this.root.addEventListener('contextmenu', this.handleTargetingContextMenu);
+    document.addEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
+    document.addEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
 
     // 会话
     const pools = Array.from({ length: this.playerCount }, (_, player) =>
@@ -362,6 +320,7 @@ export class BattleScreen extends Screen {
     this.turnTimeoutInterval = window.setInterval(() => this.refreshTurnTimer(), 250);
     this.activityEntries.push({ text: `对局开始 · ${this.playerCount} 人` });
     this.refreshUI();
+    this.cancelUiIntegrityCheck = scheduleBattleUiIntegrity(this.root);
     this.showIntro();
     // 首次对局：玩法引导
     if (TutorialOverlay.shouldShow()) {
@@ -375,12 +334,17 @@ export class BattleScreen extends Screen {
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
     if (this.workDoneTimer !== null) window.clearTimeout(this.workDoneTimer);
     if (this.turnTimeoutInterval !== null) window.clearInterval(this.turnTimeoutInterval);
+    this.cancelUiIntegrityCheck();
     window.removeEventListener('keydown', this.handleTargetingKey);
     this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
+    document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
+    document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
     this.view?.dispose();
+    audio.stopTavernAmbience();
+    audio.stopMusic();
     super.exit();
   }
 
@@ -399,19 +363,16 @@ export class BattleScreen extends Screen {
 
   /** 对手 AI 循环 */
   private startOpponentLoop(): void {
-    this.opponentTimer = window.setInterval(
-      () => {
-        if (this.session?.phase !== 'playing' || this.actionAnimating) return;
-        const player = this.session.state.turn;
-        if (player === 0) return;
-        const action = opponentDecide(this.session, this.match, player);
-        if (action) {
-          const result = storyDispatch(this.session, action);
-          if (result.ok) void this.afterAction(result.events);
-        }
-      },
-      this.localTest ? 300 : 800
-    );
+    this.opponentTimer = window.setInterval(() => {
+      if (this.session?.phase !== 'playing' || this.actionAnimating) return;
+      const player = this.session.state.turn;
+      if (player === 0) return;
+      const action = opponentDecide(this.session, this.match, player);
+      if (action) {
+        const result = storyDispatch(this.session, action);
+        if (result.ok) void this.afterAction(result.events);
+      }
+    }, 800);
   }
 
   /** 玩家操作后刷新 UI + 检查胜负 + 报牌音效 */
@@ -443,7 +404,7 @@ export class BattleScreen extends Screen {
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         const penaltyCount = event.penaltyAdded ?? 0;
         if (penaltyCount === 0) audio.playSfx(soundAsset(presentation.sound), 0.4);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(event.player, this.playerCount);
         if (penaltyCount > 0) {
           const target = event.penaltyTarget ?? nextActiveFrom(this.session!.state, event.player);
           if ((event.penaltyTransferred ?? 0) > 0) {
@@ -470,7 +431,7 @@ export class BattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.6);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(event.player, this.playerCount);
         if (effect?.kind !== 'minion') {
           const minionOwner = event.targetMinionId
             ? this.session?.state.players.findIndex((player) =>
@@ -488,7 +449,12 @@ export class BattleScreen extends Screen {
           );
         }
       } else if (event.type === 'heroPowerUsed') {
-        audio.playSfx(`/assets/audio/voice/heroes/${event.heroId}_power.mp3`, 1);
+        void audio.playSpatialSfx(
+          `/assets/audio/voice/heroes/${event.heroId}_power.mp3`,
+          seatWorldPosition(event.player, this.playerCount),
+          1
+        );
+        this.view.playHeroEmoteAnimation(event.player, 'threat', 3600);
         audio.playSfx(
           event.heroId === 'cardMaster'
             ? '/assets/audio/sfx/generated/hero_cardmaster.mp3'
@@ -497,9 +463,14 @@ export class BattleScreen extends Screen {
               : '/assets/audio/sfx/generated/hero_inspector_shuffle.mp3',
           0.78
         );
-        await this.view.playHeroPowerAnimation(event.heroId);
+        await this.view.playHeroPowerAnimation(event.heroId, event.player, this.playerCount);
       } else if (event.type === 'heroEmote') {
-        audio.playSfx(`/assets/audio/voice/heroes/emotes/${event.heroId}_${event.emoteId}.mp3`, 1);
+        void audio.playSpatialSfx(
+          `/assets/audio/voice/heroes/emotes/${event.heroId}_${event.emoteId}.mp3`,
+          seatWorldPosition(event.player, this.playerCount),
+          1
+        );
+        this.view.playHeroEmoteAnimation(event.player, event.emoteId, 4200);
         await this.showHeroEmote(event.player, event.text);
       } else if (event.type === 'unoAlert') {
         audio.playSfx('/assets/audio/sfx/uno_cheer.mp3', 1);
@@ -573,13 +544,6 @@ export class BattleScreen extends Screen {
     }
   }
 
-  private actionOrigin(player: number): THREE.Vector3 {
-    if (player === 0) return new THREE.Vector3(0, 0.6, 4.2);
-    const denominator = Math.max(1, this.playerCount - 1);
-    const angle = Math.PI * (0.12 + (player - 1) / denominator) + Math.PI * 0.38;
-    return new THREE.Vector3(Math.cos(angle) * 3.7, 0.75, Math.sin(angle) * 2.7);
-  }
-
   private applyAnimationHandDeltas(event: GameEvent): void {
     for (const change of handCountDeltas(event)) {
       const current = this.animationHandDeltas.get(change.player) ?? {
@@ -599,22 +563,16 @@ export class BattleScreen extends Screen {
   private renderAnimationHandDelta(player: number): void {
     const statePlayer = this.session?.state.players[player];
     if (!statePlayer?.active) return;
-    const target = this.localTest
-      ? this.tableSeats[player]?.querySelector<HTMLElement>('.seat-card-count')
-      : player === 0
-        ? this.handSummaryEl
-        : player === 1
-          ? this.opponentCardsEl
-          : null;
+    const target = player === 0 ? this.handSummaryEl : player === 1 ? this.opponentCardsEl : null;
     if (!target) return;
     const change = this.animationHandDeltas.get(player);
     if (!change) return;
     const suffix =
-      !this.localTest && player === 1
+      player === 1
         ? ` · 💎 ${statePlayer.free}${statePlayer.frozen ? ` · ❄ ${statePlayer.frozen}` : ''}`
         : '';
     renderHandCountLabel(target, statePlayer.hand.length, statePlayer.hearthHand.length, change, {
-      unoSuffix: !this.localTest && player === 0 ? ' / 25 张淘汰' : '',
+      unoSuffix: player === 0 ? ' / 25 张淘汰' : '',
       suffix,
     });
   }
@@ -644,6 +602,18 @@ export class BattleScreen extends Screen {
     this.heroEmotePopover.showPopover();
   }
 
+  private handleHeroEmoteLightDismiss = (event: Event): void => {
+    const target = event.target;
+    const menu = this.heroEmotePopover;
+    if (!(target instanceof Node && menu?.matches(':popover-open'))) return;
+    if (
+      (target instanceof Element && target.closest('.hero-emote-grid button')) ||
+      this.playerHeroPortraitEl?.contains(target)
+    )
+      return;
+    menu.hidePopover();
+  };
+
   private sendHeroEmote(emoteId: string): void {
     this.heroEmotePopover?.hidePopover();
     if (!this.session) return;
@@ -657,9 +627,9 @@ export class BattleScreen extends Screen {
 
   private showHeroEmote(player: number, text: string): Promise<void> {
     const bubble = this.el('div', 'hero-emote-bubble', text);
-    const angle = Math.PI / 2 + (Math.PI * 2 * player) / this.playerCount;
-    bubble.style.setProperty('--bubble-x', `${50 + Math.cos(angle) * 38}%`);
-    bubble.style.setProperty('--bubble-y', `${50 + Math.sin(angle) * 34}%`);
+    const bubblePosition = seatScreenPosition(player, this.playerCount, 38, 34);
+    bubble.style.setProperty('--bubble-x', `${bubblePosition.x}%`);
+    bubble.style.setProperty('--bubble-y', `${bubblePosition.y}%`);
     this.root.appendChild(bubble);
     return new Promise((resolve) => {
       window.setTimeout(() => {
@@ -1117,7 +1087,7 @@ export class BattleScreen extends Screen {
     this.playHearthCard(this.hearthSelection.cardId, undefined, undefined, undefined, index);
   }
 
-  private cancelTargeting(announce = true): void {
+  private cancelTargeting(announce = true): boolean {
     const hadSelection = Boolean(
       this.hearthSelection ||
         this.selectedAttackerId ||
@@ -1134,6 +1104,7 @@ export class BattleScreen extends Screen {
       this.refreshUI();
       if (announce) this.setStatus('已取消目标选择');
     }
+    return hadSelection;
   }
 
   private handleTargetingKey = (event: KeyboardEvent): void => {
@@ -1170,6 +1141,18 @@ export class BattleScreen extends Screen {
     const s = this.session.state;
     this.syncLocalTurnDeadline();
     const p = s.players[0]!;
+    this.view?.syncPuppets(s.players.map((player) => player.heroId));
+    audio.setBattleMusicTier(
+      battleMusicTier({
+        phase: s.phase,
+        players: s.players.map((player) => ({
+          active: player.active,
+          unoCount: player.hand.length,
+          pendingDraw: player.pendingDraw,
+          unoAlert: player.unoAlert,
+        })),
+      })
+    );
     if (s.turn !== 0) {
       this.hearthSelection = null;
       this.selectedAttackerId = null;
@@ -1198,12 +1181,7 @@ export class BattleScreen extends Screen {
       p.pendingDrawMin > 0
         ? `<span class="stat penalty"><small>罚抽链</small><strong>${p.pendingDraw}</strong><small>仅可叠 +${p.pendingDrawMin} 或更大</small></span>`
         : '';
-    const turnLabel =
-      s.turn === 0
-        ? '你的回合'
-        : this.localTest
-          ? `AI ${s.turn} 思考中`
-          : `${this.match.opponentName} 思考中`;
+    const turnLabel = s.turn === 0 ? '你的回合' : `${this.match.opponentName} 思考中`;
     this.statusEl.innerHTML =
       `<span class="turn-tag ${s.turn === 0 ? 'mine' : 'opponent'}">${turnLabel}</span>` +
       `<span class="stat" title="本回合还能打几张 Uno 牌"><small>行动</small><strong>${s.unoActionsLeft}</strong></span>` +
@@ -1221,47 +1199,16 @@ export class BattleScreen extends Screen {
     if (this.playerCrystalEl) this.playerCrystalEl.textContent = String(p.free);
     if (this.playerFrozenEl) this.playerFrozenEl.textContent = String(p.frozen);
     if (this.opponentCardsEl)
-      this.opponentCardsEl.textContent = `UNO ${opp.hand.length} · 炉石 ${opp.hearthHand.length} · 💎 ${opp.free}${opp.frozen ? ` · ❄ ${opp.frozen}` : ''}${opp.shield > 0 ? ` · ⬟ ${opp.shield}` : ''}`;
-    if (this.localTest) {
-      if (this.opponentNameEl) this.opponentNameEl.textContent = `AI ${focusedOpponent}`;
-      if (this.opponentSubtitleEl)
-        this.opponentSubtitleEl.textContent = `${this.playerCount} 人混战 · 席位 ${focusedOpponent + 1}`;
-      for (let player = 0; player < this.playerCount; player++) {
-        const seat = this.tableSeats[player];
-        const state = s.players[player];
-        if (!(seat && state)) continue;
-        seat.classList.toggle('active', s.turn === player);
-        seat.classList.toggle('next', nextPlayer === player && s.turn !== player);
-        seat.classList.toggle('eliminated', !state.active);
-        const count = seat.querySelector('.seat-card-count');
-        if (count)
-          count.textContent = state.active
-            ? `UNO ${state.hand.length} · 炉石 ${state.hearthHand.length}`
-            : '已淘汰 · UNO 0 · 炉石 0';
-        const crystals = seat.querySelector('.seat-crystal-count');
-        if (crystals)
-          crystals.textContent = state.active
-            ? `💎 ${state.free}${state.frozen ? ` · ❄ ${state.frozen}` : ''}`
-            : '💎 0';
-        this.updateShieldBadge(seat.querySelector<HTMLElement>('.seat-shield-badge'), state.shield);
-        const fan = seat.querySelector<HTMLElement>('.seat-hand-fan');
-        if (fan) {
-          fan.replaceChildren();
-          const visibleBacks = state.active ? state.hand.length + state.hearthHand.length : 0;
-          const spacing = Math.min(0.55, 4.8 / Math.max(1, visibleBacks - 1));
-          for (let index = 0; index < visibleBacks; index++) {
-            const back = document.createElement('i');
-            const offset = index - (visibleBacks - 1) / 2;
-            back.style.setProperty('--fan-x', `${offset * spacing}rem`);
-            back.style.setProperty(
-              '--fan-angle',
-              `${offset * Math.min(7, 36 / Math.max(1, visibleBacks - 1))}deg`
-            );
-            fan.appendChild(back);
-          }
+      renderHandCountLabel(
+        this.opponentCardsEl,
+        opp.hand.length,
+        opp.hearthHand.length,
+        this.animationHandDeltas.get(focusedOpponent) ??
+          pendingDrawHandCountDelta(focusedOpponent, opp.pendingDraw),
+        {
+          suffix: ` · 💎 ${opp.free}${opp.frozen ? ` · ❄ ${opp.frozen}` : ''}${opp.shield > 0 ? ` · ⬟ ${opp.shield}` : ''}`,
         }
-      }
-    }
+      );
     // 3D 手牌同步：Uno + 炉石，可打高亮（索引 → 卡牌 ID）
     const capabilities = playerCapabilities(s, 0);
     const playableIdx = !this.actionAnimating ? capabilities.playableUnoIndices : [];
@@ -1303,7 +1250,7 @@ export class BattleScreen extends Screen {
     }
     this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards);
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
-    this.view?.syncOpponentHand(this.localTest ? 0 : opp.hand.length + opp.hearthHand.length);
+    this.view?.syncOpponentHand(opp.hand.length + opp.hearthHand.length);
     const selected = p.board.find(
       (minion) => minion.id === this.selectedAttackerId && !minion.exhausted
     );
@@ -1345,7 +1292,7 @@ export class BattleScreen extends Screen {
             return false;
           })())
     );
-    const focusedTarget = this.localTest ? -1 : 1;
+    const focusedTarget = 1;
     if (this.opponentHeroEl) {
       const targetState = s.players[focusedTarget];
       const attackBlocked = Boolean(
@@ -1395,9 +1342,17 @@ export class BattleScreen extends Screen {
     this.refreshTargetingHud();
     this.refreshLedger();
     if (this.handSummaryEl) {
-      this.handSummaryEl.textContent = p.active
-        ? `UNO ${p.hand.length} / ${MERCY_HAND_LIMIT} 张淘汰 · 炉石 ${p.hearthHand.length}`
-        : `已淘汰 · UNO 0 · 炉石 0`;
+      if (p.active) {
+        renderHandCountLabel(
+          this.handSummaryEl,
+          p.hand.length,
+          p.hearthHand.length,
+          this.animationHandDeltas.get(0) ?? pendingDrawHandCountDelta(0, p.pendingDraw),
+          { unoSuffix: ` / ${MERCY_HAND_LIMIT} 张淘汰` }
+        );
+      } else {
+        this.handSummaryEl.textContent = '已淘汰 · UNO 0 · 炉石 0';
+      }
     }
     if (this.playerHeroPowerEl) {
       // 不可用时给出具体原因（罚抽链中/每回合一次/水晶不足等），而非笼统的“不可使用”
@@ -1473,7 +1428,7 @@ export class BattleScreen extends Screen {
         const latest = playerCapabilities(this.session.state, 0);
         if (latest.hasAnyAction || this.session.state.players[0]!.roulettePending) return;
         this.workDoneAnnouncedTurn = scheduledTurn;
-        audio.playSfx('/assets/audio/voice/work_done.mp3', 1);
+        audio.playSfx('/assets/audio/voice/work_done.mp3', 0.7);
         this.setStatus('收工了！当前已无可执行操作，请结束回合');
       }, 260);
     }
@@ -1971,39 +1926,6 @@ export class BattleScreen extends Screen {
     }
     if (!this.session) return;
     const won = playerWon(this.session);
-    const gameOver = [...this.session.state.pendingEvents]
-      .reverse()
-      .find(
-        (event): event is Extract<GameEvent, { type: 'gameOver' }> => event.type === 'gameOver'
-      );
-    const victoryReason = gameOver?.reason ?? 'unoEmpty';
-    if (this.localTest) {
-      if (won) audio.playMusic('/assets/audio/music/victory.mp3');
-      const overlay = this.el('div', 'result-overlay');
-      const card = this.el('div', 'result-card');
-      const winner = this.session.winner ?? 0;
-      card.append(
-        this.el('h2', undefined, won ? `🎉 ${this.playerCount} 人混战胜利！` : `AI ${winner} 获胜`),
-        this.el(
-          'p',
-          undefined,
-          won
-            ? victoryReason === 'lastStanding'
-              ? '其他玩家均已被淘汰，你成为最后一名仍在场的玩家。'
-              : '你率先清空了 UNO 手牌。'
-            : victoryReason === 'lastStanding'
-              ? `你已被淘汰，AI ${winner} 成为最后一名仍在场的玩家。`
-              : `AI ${winner} 率先清空了 UNO 手牌。`
-        ),
-        this.btn('返回主菜单', () => {
-          overlay.remove();
-          void import('./MainMenuScreen').then((m) => new m.MainMenuScreen().enter());
-        })
-      );
-      overlay.appendChild(card);
-      this.root.appendChild(overlay);
-      return;
-    }
     const ch = STORY_CHAPTERS.find((c) => c.matches.some((m) => m.id === this.match.id));
     const nextCh = ch ? STORY_CHAPTERS[STORY_CHAPTERS.indexOf(ch) + 1] : undefined;
     const updated = recordStoryMatchResult(loadSave(), won, ch?.id ?? null, nextCh?.id ?? null);

@@ -3,7 +3,14 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    background: radial-gradient(circle at 50% 48%, rgb(57 41 85 / 24%), transparent 34%), #080b17;
+    background-color: #0b0907;
+    background-image: image-set(
+      url("/assets/images/tavern/background.avif") type("image/avif"),
+      url("/assets/images/tavern/background.webp") type("image/webp")
+    );
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
   }
 
   .battle-canvas canvas {
@@ -84,7 +91,13 @@
   }
 
   .opponent-hero {
-    inset-block-start: 0.65rem;
+    inset-block-start: 27%;
+  }
+
+  @media (min-width: 58.01rem) {
+    .opponent-hero {
+      inset-inline-start: 50%;
+    }
   }
 
   .local-battle .opponent-hero {
@@ -335,6 +348,10 @@
     pointer-events: none;
   }
 
+  .table-seat-ring.world-anchored-seat-ring {
+    inset: 0;
+  }
+
   .table-seat {
     position: absolute;
     display: grid;
@@ -350,12 +367,21 @@
     box-shadow: 0 0.5rem 1.1rem rgb(0 0 0 / 38%);
     font-family: var(--font-utility);
     translate: -50% -50%;
-    inset-block-start: var(--seat-y, 50%);
-    inset-inline-start: var(--seat-x, 50%);
+    inset-block-start: var(--seat-screen-y, var(--seat-y, 50%));
+    inset-inline-start: var(--seat-screen-x, var(--seat-x, 50%));
     transition:
       border-color 160ms ease,
       box-shadow 160ms ease,
       scale 160ms ease;
+  }
+
+  .table-seat.far-seat {
+    /* The far player's HUD sits over the character's waist, not above the head. */
+    translate: -50% 92%;
+  }
+
+  .table-seat[data-world-anchored="true"] {
+    translate: -50% -50%;
   }
 
   .seat-target-button {
@@ -818,6 +844,12 @@
     transform: translateX(-50%);
   }
 
+  @media (min-width: 58.01rem) {
+    .battle-panel {
+      inset-inline-start: 27%;
+    }
+  }
+
   .battle-status {
     display: flex;
     align-items: center;
@@ -1113,11 +1145,11 @@
   .action-bar {
     position: absolute;
     z-index: 15;
-    inset-block-start: 62%;
-    inset-inline-end: 1rem;
+    inset-block-start: 65%;
+    inset-inline-end: 0.35rem;
     display: flex;
     perspective: 40rem;
-    transform: translateY(-50%);
+    transform: translateY(calc(-50% + 6.2rem));
   }
 
   .action-btn {
@@ -1131,7 +1163,7 @@
     cursor: pointer;
     clip-path: polygon(12% 0, 88% 0, 100% 22%, 100% 78%, 88% 100%, 12% 100%, 0 78%, 0 22%);
     filter: drop-shadow(0 0.65rem 0 rgb(20 11 6 / 75%)) drop-shadow(0 0 1rem rgb(85 151 255 / 26%));
-    transform: rotateY(-7deg);
+    transform: rotateY(-7deg) scale(0.86);
     transform-origin: right center;
     transition:
       transform 150ms ease,
@@ -1181,7 +1213,7 @@
   .action-btn:hover:not(:disabled) {
     filter: drop-shadow(0 0.72rem 0 rgb(20 11 6 / 72%))
       drop-shadow(0 0 1.25rem rgb(94 174 255 / 70%));
-    transform: translateX(-0.22rem) rotateY(-2deg) scale(1.035);
+    transform: translateX(-0.22rem) rotateY(-2deg) scale(0.89);
   }
 
   .action-btn:focus-visible {
@@ -1205,9 +1237,35 @@
       drop-shadow(0 0 1.35rem rgb(255 194 77 / 82%));
   }
 
+  .hand-collapse-button {
+    position: absolute;
+    z-index: 18;
+    inset-block-end: 4.25rem;
+    inset-inline-start: 0.8rem;
+    min-inline-size: 5.4rem;
+    min-block-size: 2.35rem;
+    border: 1px solid rgb(231 199 125 / 70%);
+    border-radius: 999px;
+    padding: 0.35rem 0.8rem;
+    background: rgb(16 24 37 / 88%);
+    color: #ffe7ad;
+    box-shadow: 0 0.45rem 1rem rgb(0 0 0 / 45%);
+    cursor: pointer;
+    font: 900 0.72rem / 1 var(--font-utility);
+    backdrop-filter: blur(0.45rem);
+  }
+
+  .hand-collapse-button:hover,
+  .hand-collapse-button:focus-visible,
+  .hand-collapse-button[aria-pressed="true"] {
+    border-color: #ffe9aa;
+    background: rgb(36 63 79 / 95%);
+    outline: none;
+  }
+
   @keyframes end-turn-prompt {
     50% {
-      transform: translateX(-0.15rem) rotateY(-3deg) scale(1.045);
+      transform: translateX(-0.15rem) rotateY(-3deg) scale(0.9);
     }
   }
 
@@ -1239,7 +1297,9 @@
   }
 
   .minion-row.player {
-    inset-block-end: 31%;
+    inset-block-start: var(--minion-y, 69%);
+    inset-inline-start: var(--minion-x, 50%);
+    transform: translate(-50%, -50%);
   }
 
   .minion-enemy-zones {
@@ -1422,6 +1482,7 @@
     background: transparent;
     color: #fff0c9;
     box-shadow: none;
+    pointer-events: none;
     translate: -50% 0;
   }
 
@@ -1441,7 +1502,7 @@
     grid-auto-flow: column;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: repeat(3, auto);
-    gap: 0.4rem 9rem;
+    gap: 0.4rem 6.5rem;
   }
   .hero-emote-grid button {
     border: 1px solid rgb(112 202 234 / 28%);
@@ -1450,8 +1511,16 @@
     background: rgb(22 53 76 / 91%);
     color: #eaf9ff;
     cursor: pointer;
+    pointer-events: auto;
     font: 700 0.68rem / 1.35 var(--font-utility);
     text-align: start;
+  }
+  /* The two columns point inward at the portrait like mirrored speech tails. */
+  .hero-emote-grid button:nth-child(-n + 3) {
+    border-radius: 999px 999px 0.4rem 999px;
+  }
+  .hero-emote-grid button:nth-child(n + 4) {
+    border-radius: 999px 999px 999px 0.4rem;
   }
   .hero-emote-grid button:hover,
   .hero-emote-grid button:focus-visible {
@@ -1526,12 +1595,12 @@
 
   @keyframes grab-from-deck {
     45% {
-      translate: -7rem -5rem;
+      translate: var(--vfx-deck-x) var(--vfx-deck-y);
       rotate: -18deg;
       scale: 1.12;
     }
     to {
-      translate: 2rem 7rem;
+      translate: 0 0;
       rotate: 20deg;
       opacity: 0;
     }
@@ -1541,7 +1610,7 @@
       translate: 0;
     }
     to {
-      translate: -7rem 8rem;
+      translate: calc(var(--vfx-actor-x) - 1.2rem) var(--vfx-actor-y);
       rotate: -22deg;
       opacity: 0;
     }
@@ -1551,7 +1620,7 @@
       translate: 0;
     }
     to {
-      translate: 1rem 9rem;
+      translate: calc(var(--vfx-actor-x) + 1.2rem) var(--vfx-actor-y);
       rotate: 16deg;
       opacity: 0;
     }
@@ -1569,14 +1638,14 @@
   }
   @keyframes discard-left {
     to {
-      translate: -13rem 10rem;
+      translate: calc(var(--vfx-discard-x) - 1rem) var(--vfx-discard-y);
       rotate: -70deg;
       opacity: 0;
     }
   }
   @keyframes discard-right {
     to {
-      translate: 13rem 10rem;
+      translate: calc(var(--vfx-discard-x) + 1rem) var(--vfx-discard-y);
       rotate: 70deg;
       opacity: 0;
     }
@@ -1604,7 +1673,7 @@
       translate: 1rem;
     }
     to {
-      translate: -7rem 6rem;
+      translate: calc(var(--vfx-center-x) - 1rem) var(--vfx-center-y);
       opacity: 0;
     }
   }
@@ -1617,7 +1686,7 @@
       translate: -1rem;
     }
     to {
-      translate: 6rem 6rem;
+      translate: calc(var(--vfx-center-x) + 1rem) var(--vfx-center-y);
       opacity: 0;
     }
   }
@@ -1630,7 +1699,7 @@
       translate: 0;
     }
     to {
-      translate: 1rem 7rem;
+      translate: var(--vfx-center-x) calc(var(--vfx-center-y) + 1rem);
       opacity: 0;
     }
   }
@@ -2335,7 +2404,7 @@
       transform: translateX(-50%) scale(0.82);
     }
     .opponent-hero {
-      inset-block-start: 0.25rem;
+      inset-block-start: 22%;
     }
     .player-hero {
       inset-block-end: 0.2rem;
@@ -2354,7 +2423,7 @@
       inset-inline-end: 0.45rem;
     }
     .action-bar {
-      inset-block-start: 63%;
+      inset-block-start: 66%;
     }
     .action-btn {
       inline-size: 6.3rem;
@@ -2396,7 +2465,7 @@
       inline-size: calc(100vw - 1rem);
     }
     .hero-emote-grid {
-      gap: 0.35rem 5.5rem;
+      gap: 0.35rem 4rem;
     }
     @starting-style {
       .card-detail {
@@ -2537,8 +2606,8 @@
 
     .action-bar {
       inset-block-start: auto;
-      inset-block-end: calc(env(safe-area-inset-bottom) + 4.25rem);
-      inset-inline-end: calc(env(safe-area-inset-right) + 0.35rem);
+      inset-block-end: calc(env(safe-area-inset-bottom) + 0.25rem);
+      inset-inline-end: calc(env(safe-area-inset-right) + 0.1rem);
       transform: none;
     }
 
