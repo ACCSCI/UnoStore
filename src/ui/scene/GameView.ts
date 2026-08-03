@@ -4,6 +4,7 @@ import { getEffect } from '../../game/hearth/effects/registry';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
 import type { CardVisual } from '../effects/CardEffects';
+import { createDrawCardBackMesh, loadCardBackTexture } from './CardBackRenderer';
 import { CardDetailPanel } from './CardDetailPanel';
 import { HandRenderer } from './HandRenderer';
 import { MinionBoardRenderer } from './MinionBoard';
@@ -30,6 +31,7 @@ export class GameView {
   private detailPanel: CardDetailPanel | null = null;
   private actionBar: UIActionBar | null = null;
   private minionBoard: MinionBoardRenderer | null = null;
+  private readonly drawCardBackTexture: Promise<THREE.Texture>;
 
   // 回调（由 BattleScreen 注入）
   private onCardClick: (id: string, isHearth: boolean, position?: number) => void = () => {};
@@ -39,6 +41,8 @@ export class GameView {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    // 游戏场景创建时立即预取；第一次抽牌会等待真实牌背（失败则使用程序化牌背）。
+    this.drawCardBackTexture = loadCardBackTexture();
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -93,6 +97,7 @@ export class GameView {
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) material.dispose();
     });
+    void this.drawCardBackTexture.then((texture) => texture.dispose());
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
@@ -231,17 +236,10 @@ export class GameView {
   }
 
   /** 自动抽牌演出：牌从公共牌库飞入玩家手牌。 */
-  playDrawAnimation(player = 0, playerCount = 2): Promise<void> {
+  async playDrawAnimation(player = 0, playerCount = 2): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(80);
-    const geometry = new THREE.BoxGeometry(0.55, 0.04, 0.74);
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x35205c,
-      emissive: 0x8d5bd5,
-      emissiveIntensity: 0.45,
-      roughness: 0.35,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = createDrawCardBackMesh(await this.drawCardBackTexture);
     const from = new THREE.Vector3(-1.05, 0.85, 0);
     const to = this.seatPosition(player, playerCount).setY(1);
     const via = new THREE.Vector3(-0.5, 2.15, 1.7);
@@ -260,8 +258,9 @@ export class GameView {
         if (t < 1) requestAnimationFrame(step);
         else {
           this.scene.remove(mesh);
-          geometry.dispose();
-          material.dispose();
+          mesh.geometry.dispose();
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const material of materials) material.dispose();
           resolve();
         }
       };
