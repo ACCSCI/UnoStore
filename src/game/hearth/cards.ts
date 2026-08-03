@@ -628,8 +628,8 @@ registerEffect({
   id: 'unoAnnihilation',
   name: 'UNO 湮灭',
   cost: 7,
-  description: '拥有至少 5 张 UNO 时选择并弃掉 5 张；不足 5 张时无需选择，直接弃掉全部。',
-  targeting: { type: 'ownUnoCards', count: 5, useAllWhenShort: true },
+  description: '拥有超过 5 张 UNO 时选择并弃掉 5 张；5 张及以下无需选择，直接弃掉全部。',
+  targeting: { type: 'ownUnoCards', count: 5, useAllWhenAtMostCount: true },
   apply: (ctx) => discardSelectedUno(ctx, 'UNO 湮灭'),
 });
 

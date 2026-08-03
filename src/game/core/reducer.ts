@@ -483,7 +483,7 @@ export function hearthPlayError(state: GameState, player: number, cardIdx: numbe
   }
   if (
     targeting?.type === 'ownUnoCards' &&
-    !targeting.useAllWhenShort &&
+    !targeting.useAllWhenAtMostCount &&
     p.hand.length < targeting.count
   ) {
     return `自己的 UNO 手牌不足 ${targeting.count} 张`;
@@ -561,7 +561,7 @@ function playHearthAction(
     if (selected.length !== requiredCount || selected.some((id) => !handIds.has(id))) {
       return { ok: false, error: `必须从自己的手牌中选择 ${requiredCount} 张 UNO 牌` };
     }
-    if (targeting.useAllWhenShort && p.hand.length < targeting.count) {
+    if (targeting.useAllWhenAtMostCount && p.hand.length <= targeting.count) {
       resolvedUnoCardIds = p.hand.map((uno) => uno.id);
     }
   }

@@ -50,6 +50,7 @@ import {
   formatActivity,
 } from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -106,6 +107,7 @@ export class BattleScreen extends Screen {
   private turnDeadlineSerial = -1;
   private turnDeadline = 0;
   private timeoutResolving = false;
+  private focusedOpponent = 1;
 
   private opponentTimer: number | null = null;
   private pause: PauseMenu | null = null;
@@ -201,6 +203,15 @@ export class BattleScreen extends Screen {
     this.opponentCardsEl = this.el('span', 'hero-counter', 'UNO 5 · 炉石 3 · 💎 0');
     this.opponentCardsEl.title = '对手 UNO、炉石手牌数量与可用水晶';
     opponentCard.append(opponentPortrait, opponentCopy, this.opponentCardsEl);
+    opponentCard.setAttribute('aria-label', `${this.match.opponentName}的英雄卡；悬停查看英雄技能`);
+    attachHeroDetailHover(opponentCard, () => {
+      const state = this.session?.state;
+      const hero = getHero(state?.players[this.focusedOpponent]?.heroId ?? 'thug');
+      return {
+        hero,
+        cost: state ? heroPowerCost(state, this.focusedOpponent) : hero.powerCost,
+      };
+    });
     this.root.appendChild(opponentCard);
 
     if (this.localTest) {
@@ -234,6 +245,17 @@ export class BattleScreen extends Screen {
           this.el('small', 'seat-crystal-count', '💎 0'),
           this.el('span', 'seat-hand-fan')
         );
+        if (player !== 0) {
+          target.setAttribute('aria-label', `AI ${player}的${seatHero.name}英雄卡；悬停查看技能`);
+          attachHeroDetailHover(target, () => {
+            const state = this.session?.state;
+            const currentHero = getHero(state?.players[player]?.heroId ?? seatHero.id);
+            return {
+              hero: currentHero,
+              cost: state ? heroPowerCost(state, player) : currentHero.powerCost,
+            };
+          });
+        }
         seat.append(target);
         roster.appendChild(seat);
         this.tableSeats.push(seat);
@@ -381,6 +403,7 @@ export class BattleScreen extends Screen {
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     super.exit();
   }
@@ -1162,6 +1185,7 @@ export class BattleScreen extends Screen {
       this.heroUnoSelection = null;
     }
     const focusedOpponent = s.turn === 0 ? nextActiveFrom(s, 0) : s.turn;
+    this.focusedOpponent = focusedOpponent;
     const opp = s.players[focusedOpponent]!;
     this.updateShieldBadge(this.playerShieldEl, p.shield);
     this.updateShieldBadge(this.opponentShieldEl, opp.shield);

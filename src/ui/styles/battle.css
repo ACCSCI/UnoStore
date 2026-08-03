@@ -54,7 +54,9 @@
     border: 0;
     padding: 0;
     background: transparent;
+    cursor: help;
     font: inherit;
+    pointer-events: auto;
     text-align: start;
   }
 
@@ -370,12 +372,46 @@
     color: inherit;
     font: inherit;
     text-align: start;
-    pointer-events: none;
+    cursor: help;
+    pointer-events: auto;
   }
 
   .seat-target-button.legal-target {
     cursor: crosshair;
+  }
+
+  .hero-skill-detail {
+    position: fixed;
+    z-index: 75;
+    display: grid;
+    gap: 0.32rem;
+    inline-size: min(18rem, calc(100vw - 1rem));
+    border: 1px solid rgb(239 197 102 / 72%);
+    border-radius: 0.75rem;
+    padding: 0.72rem 0.82rem;
+    background: linear-gradient(145deg, rgb(30 25 50 / 98%), rgb(10 15 33 / 98%));
+    color: #f8ebcb;
+    box-shadow: 0 0.75rem 1.8rem rgb(0 0 0 / 58%);
+    font-family: var(--font-utility);
     pointer-events: auto;
+  }
+
+  .hero-skill-detail strong {
+    color: #ffe39a;
+    font-size: 0.86rem;
+  }
+
+  .hero-skill-detail .hero-skill-name {
+    color: #8fe5ff;
+    font-size: 0.76rem;
+    font-weight: 900;
+  }
+
+  .hero-skill-detail p {
+    margin: 0;
+    color: #d6dfef;
+    font-size: 0.7rem;
+    line-height: 1.55;
   }
 
   .table-seat:has(.seat-target-button.legal-target) {

@@ -1929,7 +1929,6 @@ test('七费 UNO 湮灭弃五张己方 UNO，四费强制征牌给对手塞五�
       type: 'playHearth',
       player: 0,
       cardIdx: 0,
-      unoCardIds: purge.players[0]!.hand.map((card) => card.id),
     })
   );
   expect(purge.players[0]!.hand).toHaveLength(0);
@@ -1948,6 +1947,36 @@ test('七费 UNO 湮灭弃五张己方 UNO，四费强制征牌给对手塞五�
     })
   );
   expect(burden.players[1]!.hand).toHaveLength(before + 5);
+});
+
+test('UNO 湮灭超过五张时仍必须明确选择五张', () => {
+  const purge = createGame(2, ['unoAnnihilation'], 631);
+  purge.players[0]!.free = 7;
+  purge.players[0]!.hand = Array.from({ length: 6 }, (_, index) => ({
+    id: `long-purge-${index}`,
+    color: 'green' as const,
+    value: String(index) as UnoCard['value'],
+  }));
+  purge.players[0]!.hearthHand = [hearth('long-purge-card', 'unoAnnihilation')];
+
+  const missingSelection = dispatch(purge, new Rng(631), {
+    type: 'playHearth',
+    player: 0,
+    cardIdx: 0,
+  });
+  expect(missingSelection).toMatchObject({ ok: false });
+
+  const selectedIds = purge.players[0]!.hand.slice(0, 5).map((card) => card.id);
+  okEvents(
+    dispatch(purge, new Rng(631), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      unoCardIds: selectedIds,
+    })
+  );
+  expect(purge.players[0]!.hand).toHaveLength(1);
+  expect(purge.players[0]!.hand[0]!.id).toBe('long-purge-5');
 });
 
 test('UNO 湮灭只检查费用，UNO 不足五张时弃掉现有全部手牌', () => {

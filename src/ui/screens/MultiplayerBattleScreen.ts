@@ -41,6 +41,7 @@ import {
   formatActivity,
 } from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -1011,6 +1012,7 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderRoster(snapshot: MultiplayerSnapshot): void {
     if (!this.rosterEl) return;
+    clearHeroDetailHover();
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
     snapshot.players.forEach((player, index) => {
@@ -1037,12 +1039,23 @@ export class MultiplayerBattleScreen extends Screen {
         'aria-label',
         `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}`
       );
-      if (targetable) {
-        target.tabIndex = 0;
-      } else {
-        target.tabIndex = -1;
-      }
       const hero = getHero(player.heroId);
+      target.tabIndex = index === snapshot.viewer ? -1 : 0;
+      if (index !== snapshot.viewer) {
+        const currentCost = Math.max(
+          0,
+          hero.powerCost -
+            player.board.reduce(
+              (total, minion) => total + (getEffect(minion.effectId)?.heroPowerCostReduction ?? 0),
+              0
+            )
+        );
+        target.setAttribute(
+          'aria-label',
+          `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}，${hero.name}，技能${hero.powerName}，${currentCost}费；悬停查看说明`
+        );
+        attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+      }
       const heroPortrait = new Image();
       heroPortrait.src = assetUrl(hero.portrait);
       heroPortrait.alt = '';
@@ -2024,6 +2037,7 @@ export class MultiplayerBattleScreen extends Screen {
     window.removeEventListener('keydown', this.handleEscape);
     this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     const net = getNet();
     net.onInputReceived = undefined;
