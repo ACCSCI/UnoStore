@@ -31,8 +31,8 @@ export const HEROES: HeroDefinition[] = [
     name: '卡牌大师',
     title: '万牌归一',
     powerName: '借牌生花',
-    powerCost: 2,
-    description: '从本局所有玩家的出战牌库中，随机抽取 2 张炉石牌。',
+    powerCost: 1,
+    description: '选择并弃掉自己 1 张 UNO 牌，从本局所有玩家的出战牌库中随机换取 1 张炉石牌。',
     portrait: '/assets/images/heroes/cardMaster.webp',
   },
   {
@@ -41,7 +41,7 @@ export const HEROES: HeroDefinition[] = [
     title: '孤注一掷',
     powerName: '清空口袋',
     powerCost: 2,
-    description: '从自己的 UNO 与炉石手牌中随机弃掉至多 2 张牌。',
+    description: '从自己的 UNO 与炉石手牌中随机弃掉至多 2 张牌，并获得 1 层护盾。',
     portrait: '/assets/images/heroes/thug.webp',
   },
   {
