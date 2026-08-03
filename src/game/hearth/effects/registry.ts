@@ -10,16 +10,16 @@ export type HearthTargeting =
       includeSelf: boolean;
       requireMinions?: boolean;
     }
-  | { type: 'ownUnoCards'; count: number; useAllWhenShort?: boolean }
+  | { type: 'ownUnoCards'; count: number; useAllWhenAtMostCount?: boolean }
   | { type: 'giveCards'; count: number }
   | { type: 'minion'; count: 1; side: 'friendly' | 'enemy' | 'any' };
 
-/** 需要玩家手动选择的己方 UNO 数量；允许短缺的牌在不足上限时由规则层自动使用全部手牌。 */
+/** 需要玩家手动选择的己方 UNO 数量；牌数不超过上限时可由规则层自动使用全部手牌。 */
 export function requiredOwnUnoCardCount(
   targeting: Extract<HearthTargeting, { type: 'ownUnoCards' }>,
   available: number
 ): number {
-  return targeting.useAllWhenShort && available < targeting.count ? 0 : targeting.count;
+  return targeting.useAllWhenAtMostCount && available <= targeting.count ? 0 : targeting.count;
 }
 
 export type HearthKeywordId = 'charge' | 'taunt' | 'battlecry' | 'deathrattle';
@@ -89,9 +89,10 @@ export interface HearthEffect {
   requiresColor?: boolean;
   /** 随从死亡并移入墓地后结算。 */
   deathrattle?: (ctx: EffectCtx) => void;
-  /** 该随从在拥有者回合开始/结束时结算的持续效果。 */
+  /** 该随从在拥有者回合开始/结束，或任意玩家回合开始时结算的持续效果。 */
   onTurnStart?: (ctx: EffectCtx) => void;
   onTurnEnd?: (ctx: EffectCtx) => void;
+  onAnyTurnStart?: (ctx: EffectCtx) => void;
   /** 拥有者受到强制罚抽时，由该随从承受等量伤害并吞掉全部罚抽。 */
   absorbsPenalty?: boolean;
   /** 攻击不造成伤害，改为拥有者随机弃掉等同攻击力的 UNO 牌。 */

@@ -12,6 +12,12 @@ export interface BossRules {
 
 export type BossRulesMap = Record<number, BossRules>;
 
+/** 可独立切换的对局规则，供确定性实验和房主权威房间共用。 */
+export interface GameRules {
+  /** 颜色轮盘抽牌后，允许出加牌把已抽数量连同加值转给下一位。 */
+  rouletteStacking: boolean;
+}
+
 /** 游戏阶段 */
 export type GamePhase = 'playUno' | 'playHearth' | 'gameOver';
 
@@ -57,6 +63,8 @@ export interface PlayerState {
   roulettePending: boolean;
   /** 颜色轮盘真正承受抽牌的玩家；选色者与抽牌者可以不同。 */
   rouletteDrawer: number | null;
+  /** 已经抽完、但仍可通过加牌转移给下一位的颜色轮盘数量。 */
+  rouletteTransfer: number;
   heroId: HeroId;
   /** 本回合已经使用英雄技能的次数。 */
   heroPowerUses: number;
@@ -86,6 +94,8 @@ export interface GameState {
   unoCycle: number;
   /** Boss 特殊规则（玩家 index → 规则，剧情模式用） */
   bossRules: BossRulesMap;
+  /** 本局启用的可切换规则。 */
+  rules: GameRules;
   /** 当前行动玩家 index */
   turn: number;
   direction: 1 | -1;

@@ -42,6 +42,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
   type ActivityEntry,
@@ -50,6 +51,7 @@ import {
   formatActivity,
 } from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -106,6 +108,7 @@ export class BattleScreen extends Screen {
   private turnDeadlineSerial = -1;
   private turnDeadline = 0;
   private timeoutResolving = false;
+  private focusedOpponent = 1;
 
   private opponentTimer: number | null = null;
   private pause: PauseMenu | null = null;
@@ -201,6 +204,15 @@ export class BattleScreen extends Screen {
     this.opponentCardsEl = this.el('span', 'hero-counter', 'UNO 5 · 炉石 3 · 💎 0');
     this.opponentCardsEl.title = '对手 UNO、炉石手牌数量与可用水晶';
     opponentCard.append(opponentPortrait, opponentCopy, this.opponentCardsEl);
+    opponentCard.setAttribute('aria-label', `${this.match.opponentName}的英雄卡；悬停查看英雄技能`);
+    attachHeroDetailHover(opponentCard, () => {
+      const state = this.session?.state;
+      const hero = getHero(state?.players[this.focusedOpponent]?.heroId ?? 'thug');
+      return {
+        hero,
+        cost: state ? heroPowerCost(state, this.focusedOpponent) : hero.powerCost,
+      };
+    });
     this.root.appendChild(opponentCard);
 
     if (this.localTest) {
@@ -234,6 +246,17 @@ export class BattleScreen extends Screen {
           this.el('small', 'seat-crystal-count', '💎 0'),
           this.el('span', 'seat-hand-fan')
         );
+        if (player !== 0) {
+          target.setAttribute('aria-label', `AI ${player}的${seatHero.name}英雄卡；悬停查看技能`);
+          attachHeroDetailHover(target, () => {
+            const state = this.session?.state;
+            const currentHero = getHero(state?.players[player]?.heroId ?? seatHero.id);
+            return {
+              hero: currentHero,
+              cost: state ? heroPowerCost(state, player) : currentHero.powerCost,
+            };
+          });
+        }
         seat.append(target);
         roster.appendChild(seat);
         this.tableSeats.push(seat);
@@ -381,6 +404,7 @@ export class BattleScreen extends Screen {
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     super.exit();
   }
@@ -439,12 +463,15 @@ export class BattleScreen extends Screen {
     for (const event of events) {
       this.applyAnimationHandDeltas(event);
       if (event.type === 'unoPlayed') {
-        const card = this.session?.state.unoDiscard.find((entry) => entry.id === event.cardId);
-        const presentation = unoPresentation(card?.value ?? 'number');
+        const card = event.card;
+        const presentation = unoPresentation(card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         const penaltyCount = event.penaltyAdded ?? 0;
         if (penaltyCount === 0) audio.playSfx(soundAsset(presentation.sound), 0.4);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(this.actionOrigin(event.player), {
+          kind: 'uno',
+          card,
+        });
         if (penaltyCount > 0) {
           const target = event.penaltyTarget ?? nextActiveFrom(this.session!.state, event.player);
           if ((event.penaltyTransferred ?? 0) > 0) {
@@ -458,7 +485,7 @@ export class BattleScreen extends Screen {
           }
           audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.72);
           await this.view.playPenaltyDealAnimation(target, penaltyCount, this.playerCount);
-        } else if (card && !/^\d$/.test(card.value)) {
+        } else if (!/^\d$/.test(card.value)) {
           await this.view.playCardEffectAnimation(
             presentation.visual,
             event.player,
@@ -471,7 +498,10 @@ export class BattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.6);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(this.actionOrigin(event.player), {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const minionOwner = event.targetMinionId
             ? this.session?.state.players.findIndex((player) =>
@@ -700,7 +730,7 @@ export class BattleScreen extends Screen {
       this.refreshUI();
       this.setStatus(
         this.unoTargetCardId
-          ? '数字 7：直接点击桌上发光的对手席位，交换双方全部 UNO 与炉石手牌'
+          ? '数字 7：直接点击桌上发光的对手席位，只交换双方 UNO 手牌'
           : '已取消数字 7 的换牌目标选择'
       );
     } else if (card.color === null && card.value !== 'wildColorRoulette') {
@@ -1162,6 +1192,7 @@ export class BattleScreen extends Screen {
       this.heroUnoSelection = null;
     }
     const focusedOpponent = s.turn === 0 ? nextActiveFrom(s, 0) : s.turn;
+    this.focusedOpponent = focusedOpponent;
     const opp = s.players[focusedOpponent]!;
     this.updateShieldBadge(this.playerShieldEl, p.shield);
     this.updateShieldBadge(this.opponentShieldEl, opp.shield);
@@ -1285,7 +1316,12 @@ export class BattleScreen extends Screen {
       for (const id of this.heroUnoSelection) selectedCards.add(id);
       interactionCards = new Set(p.hand.map((card) => card.id));
     }
-    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards, handInteractionMode);
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
     this.view?.syncOpponentHand(this.localTest ? 0 : opp.hand.length + opp.hearthHand.length);
     const selected = p.board.find(
@@ -1416,15 +1452,19 @@ export class BattleScreen extends Screen {
       0,
       p.roulettePending
         ? '请先结算颜色轮盘'
-        : p.pendingDrawMin > 0
+        : p.rouletteTransfer > 0
           ? playableIdx.length > 0
-            ? `累计罚抽 ${p.pendingDraw} 张 · 可继续叠加`
-            : `无法叠加 · 结束回合罚抽 ${p.pendingDraw} 张`
-          : shouldPromptEnd
-            ? s.unoPlayedThisTurn
-              ? '收工了 · 结束后抽 1 张炉石'
-              : '收工了 · 结束后抽 1 张 UNO + 1 张炉石'
-            : '结束当前回合'
+            ? `轮盘已抽 ${p.rouletteTransfer} 张 · 可用加牌转移`
+            : `轮盘已抽 ${p.rouletteTransfer} 张 · 可继续行动或结束回合`
+          : p.pendingDrawMin > 0
+            ? playableIdx.length > 0
+              ? `累计罚抽 ${p.pendingDraw} 张 · 可继续叠加`
+              : `无法叠加 · 结束回合罚抽 ${p.pendingDraw} 张`
+            : shouldPromptEnd
+              ? s.unoPlayedThisTurn
+                ? '收工了 · 结束后抽 1 张炉石'
+                : '收工了 · 结束后抽 1 张 UNO + 1 张炉石'
+              : '结束当前回合'
     );
     this.view?.setActionAttention(0, shouldPromptEnd);
     if (!shouldPromptEnd && this.workDoneTimer !== null) {
@@ -1546,7 +1586,11 @@ export class BattleScreen extends Screen {
         );
       } else if (event.type === 'handSwap' && (event.player === 0 || event.targetPlayer === 0)) {
         const other = event.player === 0 ? event.targetPlayer : event.player;
-        this.showTurnNotice('手牌已交换', `你与 ${playerLabel(other)} 交换了全部手牌。`, 'swap');
+        this.showTurnNotice(
+          'UNO 手牌已交换',
+          `你与 ${playerLabel(other)} 只交换了 UNO 手牌。`,
+          'swap'
+        );
       } else if (event.type === 'handPass') {
         this.showTurnNotice(
           '全桌传牌',
@@ -1577,8 +1621,8 @@ export class BattleScreen extends Screen {
     if (this.unoTargetCardId) {
       const copy = this.el('span', 'targeting-copy');
       copy.append(
-        this.el('strong', undefined, '数字 7 · 全手牌交换'),
-        this.el('small', undefined, '直接点击桌上发光的对手席位；交换双方全部 UNO 与炉石手牌')
+        this.el('strong', undefined, '数字 7 · UNO 手牌交换'),
+        this.el('small', undefined, '直接点击桌上发光的对手席位；双方炉石牌保持不变')
       );
       this.targetingHudEl.append(copy, cancel);
       this.targetingHudEl.classList.add('visible');
@@ -1726,7 +1770,13 @@ export class BattleScreen extends Screen {
                 : `罚抽链正在传向你，最低需要 +${player.pendingDrawMin} 才能反击。`,
             kind: 'penalty',
           }
-        : null;
+        : player.rouletteTransfer > 0
+          ? {
+              title: `颜色轮盘已抽 ${player.rouletteTransfer} 张`,
+              detail: '本回合可打出任意加牌，把已抽数量连同加值转给下一位。',
+              kind: 'roulette',
+            }
+          : null;
     const notice = persistent ?? this.transientNotice;
     this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
     this.turnNoticeEl.innerHTML = notice

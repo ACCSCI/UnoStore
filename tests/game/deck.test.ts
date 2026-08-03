@@ -69,6 +69,12 @@ test('强力随从在每套炉石预设中均有两张，避免长期抽不到',
   }
 });
 
+test('厄运司牌者在每套预设中只放一张，限制全局发牌效果叠加', () => {
+  for (const deck of PRESET_DECKS) {
+    expect(deck.cardIds.filter((id) => id === 'doomDealer')).toHaveLength(1);
+  }
+});
+
 test('预设牌组不超 80 张上限', () => {
   for (const deck of PRESET_DECKS) {
     expect(deck.cardIds.length).toBeLessThanOrEqual(80);

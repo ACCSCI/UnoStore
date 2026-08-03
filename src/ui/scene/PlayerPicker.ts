@@ -27,7 +27,7 @@ export function pickPlayer(
     title.id = 'player-picker-title';
     title.textContent = options.title ?? '数字 7：选择换牌玩家';
     const hint = document.createElement('p');
-    hint.textContent = options.hint ?? '你必须与一名仍在对局中的玩家交换全部手牌。';
+    hint.textContent = options.hint ?? '你必须与一名仍在对局中的玩家交换全部 UNO 手牌。';
     const list = document.createElement('div');
     list.className = 'player-picker-list';
 

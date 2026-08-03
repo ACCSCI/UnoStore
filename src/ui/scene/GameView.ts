@@ -2,12 +2,18 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import { getEffect } from '../../game/hearth/effects/registry';
 import type { UnoCard } from '../../game/uno/types';
-import { assetUrl } from '../assets/url';
 import type { CardVisual } from '../effects/CardEffects';
+import { createDrawCardBackMesh, loadCardBackTexture } from './CardBackRenderer';
 import { CardDetailPanel } from './CardDetailPanel';
+import type { HandInteractionMode } from './HandInteractionMode';
 import { HandRenderer } from './HandRenderer';
 import { MinionBoardRenderer } from './MinionBoard';
 import { OpponentHandRenderer } from './OpponentHandRenderer';
+import {
+  createPlayedCardMesh,
+  disposePlayedCardMesh,
+  type PlayedCardVisual,
+} from './PlayedCardRenderer';
 import { TableCenterRenderer } from './TableCenter';
 import { UIActionBar } from './UIActionBar';
 
@@ -30,6 +36,7 @@ export class GameView {
   private detailPanel: CardDetailPanel | null = null;
   private actionBar: UIActionBar | null = null;
   private minionBoard: MinionBoardRenderer | null = null;
+  private readonly drawCardBackTexture: Promise<THREE.Texture>;
 
   // 回调（由 BattleScreen 注入）
   private onCardClick: (id: string, isHearth: boolean, position?: number) => void = () => {};
@@ -39,6 +46,8 @@ export class GameView {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    // 游戏场景创建时立即预取；第一次抽牌会等待真实牌背（失败则使用程序化牌背）。
+    this.drawCardBackTexture = loadCardBackTexture();
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -93,6 +102,7 @@ export class GameView {
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const material of materials) material.dispose();
     });
+    void this.drawCardBackTexture.then((texture) => texture.dispose());
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
@@ -141,18 +151,21 @@ export class GameView {
     uno: UnoCard[],
     hearth: HearthCard[],
     playableIds: Set<string>,
-    selectedIds: Set<string> = new Set()
+    selectedIds: Set<string> = new Set(),
+    interactionMode: HandInteractionMode = 'play'
   ): void {
     this.hand?.sync(uno, hearth);
     this.hand?.setPlayable(playableIds);
     this.hand?.setSelected(selectedIds);
+    this.hand?.setInteractionMode(interactionMode);
   }
 
   clearHandInteraction(): void {
     this.hand?.clearPreviewSelection();
     this.hand?.setPlayable(new Set());
     this.hand?.setSelected(new Set());
-    this.detailPanel?.clearPinned();
+    // 行动演出会暂时清空手牌交互，但当前 hover/固定详情仍然有效；保留它，
+    // 等真正的 pointerleave 或下一次状态同步再更新。
   }
 
   /** 同步桌面中央（牌堆 + 弃牌堆） */
@@ -186,6 +199,7 @@ export class GameView {
     playerCount: number,
     spellTargetSide: 'friendly' | 'enemy' | 'any' | null = null
   ): void {
+    this.detailPanel?.setSuppressed(Boolean(selectedAttackerId) || Boolean(spellTargetSide));
     this.minionBoard?.sync(
       playerBoard,
       enemyBoard,
@@ -197,13 +211,10 @@ export class GameView {
   }
 
   /** 出牌飞行动画：牌从手牌位置飞到弃牌堆（贝塞尔弧线） */
-  playCardAnimation(from: THREE.Vector3): Promise<void> {
+  playCardAnimation(from: THREE.Vector3, visual: PlayedCardVisual): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(70);
-    // 创建一个临时卡牌飞行
-    const geo = new THREE.BoxGeometry(0.5, 0.03, 0.65);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.4 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = createPlayedCardMesh(visual);
     mesh.position.copy(from);
     this.scene.add(mesh);
     const to = new THREE.Vector3(1.2, 0.36, 0);
@@ -216,11 +227,11 @@ export class GameView {
         const t = Math.min((performance.now() - start) / duration, 1);
         const e = 1 - (1 - t) ** 3; // easeOutCubic
         mesh.position.copy(curve.getPoint(e));
+        mesh.rotation.z = e * Math.PI * 2;
         if (t < 1) requestAnimationFrame(step);
         else {
           this.scene.remove(mesh);
-          geo.dispose();
-          mat.dispose();
+          disposePlayedCardMesh(mesh, visual.kind === 'uno');
           resolve();
         }
       };
@@ -229,17 +240,10 @@ export class GameView {
   }
 
   /** 自动抽牌演出：牌从公共牌库飞入玩家手牌。 */
-  playDrawAnimation(player = 0, playerCount = 2): Promise<void> {
+  async playDrawAnimation(player = 0, playerCount = 2): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(80);
-    const geometry = new THREE.BoxGeometry(0.55, 0.04, 0.74);
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x35205c,
-      emissive: 0x8d5bd5,
-      emissiveIntensity: 0.45,
-      roughness: 0.35,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = createDrawCardBackMesh(await this.drawCardBackTexture);
     const from = new THREE.Vector3(-1.05, 0.85, 0);
     const to = this.seatPosition(player, playerCount).setY(1);
     const via = new THREE.Vector3(-0.5, 2.15, 1.7);
@@ -258,8 +262,9 @@ export class GameView {
         if (t < 1) requestAnimationFrame(step);
         else {
           this.scene.remove(mesh);
-          geometry.dispose();
-          material.dispose();
+          mesh.geometry.dispose();
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          for (const material of materials) material.dispose();
           resolve();
         }
       };
@@ -271,20 +276,15 @@ export class GameView {
   playSummonAnimation(player: number, playerCount: number, effectId = ''): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(90);
-    const geometry = new THREE.PlaneGeometry(0.86, 1.08);
-    const texture = effectId
-      ? new THREE.TextureLoader().load(
-          assetUrl(`/assets/images/hearth/${encodeURIComponent(effectId)}.webp`)
-        )
-      : null;
-    const material = new THREE.MeshBasicMaterial({
-      color: 0xffe0a0,
-      map: texture,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
+    const mesh = createPlayedCardMesh({
+      kind: 'hearth',
+      card: { id: `summon-${effectId || 'unknown'}`, effectId },
     });
-    const mesh = new THREE.Mesh(geometry, material);
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = 0.9;
+    }
     const from = this.seatPosition(player, playerCount).setY(2.2);
     const to = from.clone().multiplyScalar(0.69).setY(0.74);
     mesh.position.copy(from);
@@ -295,7 +295,8 @@ export class GameView {
       mesh.scale.setScalar(0.35 + eased * 0.85);
       mesh.lookAt(this.camera.position);
       mesh.rotation.z = (1 - eased) * -0.18;
-      material.opacity = t < 0.72 ? 0.9 : (1 - t) / 0.28;
+      const opacity = t < 0.72 ? 0.9 : (1 - t) / 0.28;
+      for (const material of materials) material.opacity = opacity;
     });
   }
 

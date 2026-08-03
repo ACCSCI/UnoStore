@@ -17,7 +17,13 @@ export const HEARTH_EXPANSION_CARD_IDS = [
   'chaosConscription',
   'equalityOfAll',
   'formationCommander',
+  'doomDealer',
 ] as const;
+
+/** 默认扩展牌补两张；极高压的厄运司牌者只补一张。 */
+export const HEARTH_EXPANSION_CARD_COPIES: Partial<
+  Record<(typeof HEARTH_EXPANSION_CARD_IDS)[number], number>
+> = { doomDealer: 1 };
 
 /**
  * 预设炉石牌组。强力随从均放入两张，避免在长牌池中迟迟抽不到。
@@ -56,6 +62,7 @@ export const PRESET_DECKS: HearthDeck[] = [
       'graveArchivist',
       'calamityDealer',
       'calamityDealer',
+      'doomDealer',
       'penaltyBulwark',
       'penaltyBulwark',
       'voidGambler',
@@ -135,6 +142,7 @@ export const PRESET_DECKS: HearthDeck[] = [
       'graveArchivist',
       'calamityDealer',
       'calamityDealer',
+      'doomDealer',
       'penaltyBulwark',
       'penaltyBulwark',
       'voidGambler',

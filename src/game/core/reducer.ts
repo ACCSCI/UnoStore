@@ -31,6 +31,7 @@ import { Rng } from './rng';
 import {
   type BossRulesMap,
   type GameAction,
+  type GameRules,
   type GameState,
   type HearthCard,
   MAX_MINIONS_PER_PLAYER,
@@ -51,7 +52,8 @@ export function createGame(
   hearthEffectIds: string[] | string[][],
   seed = 42,
   bossRules: BossRulesMap = {},
-  heroIds: HeroId[] = []
+  heroIds: HeroId[] = [],
+  rules: Partial<GameRules> = {}
 ): GameState {
   if (!Number.isInteger(playerCount) || playerCount < MIN_PLAYERS || playerCount > MAX_PLAYERS) {
     throw new RangeError(`玩家人数必须为 ${MIN_PLAYERS}–${MAX_PLAYERS} 人`);
@@ -89,6 +91,7 @@ export function createGame(
       pendingDrawMin: 0,
       roulettePending: false,
       rouletteDrawer: null,
+      rouletteTransfer: 0,
       heroId: heroIds[i] ?? DEFAULT_HERO_ID,
       heroPowerUses: 0,
       shield: 0,
@@ -107,6 +110,7 @@ export function createGame(
     mercyPile: [],
     unoCycle: 0,
     bossRules,
+    rules: { rouletteStacking: true, ...rules },
     turn: 0,
     direction: 1,
     phase: 'playUno',
@@ -216,7 +220,7 @@ function playUnoAction(
 ): ActionResult {
   if (action.player !== state.turn) return { ok: false, error: '不是你的回合' };
   const p = state.players[action.player]!;
-  if (state.unoActionsLeft <= 0 && p.pendingDrawMin <= 0)
+  if (state.unoActionsLeft <= 0 && p.pendingDrawMin <= 0 && p.rouletteTransfer <= 0)
     return { ok: false, error: '本回合 Uno 行动已用完' };
   if (p.roulettePending) return { ok: false, error: '请先结算颜色轮盘' };
   const card = p.hand[action.cardIdx];
@@ -230,7 +234,7 @@ function playUnoAction(
   }
   const events: GameEvent[] = [];
   state.unoPlayedThisTurn = true;
-  const stackedPenalty = p.pendingDrawMin > 0 ? p.pendingDraw : 0;
+  const stackedPenalty = p.pendingDrawMin > 0 ? p.pendingDraw : p.rouletteTransfer;
   const clearsTwoPlayerReverseSkip =
     stackedPenalty > 0 &&
     state.players.filter((entry) => entry.active).length === 2 &&
@@ -239,6 +243,10 @@ function playUnoAction(
   if (stackedPenalty > 0) {
     p.pendingDraw = 0;
     p.pendingDrawMin = 0;
+    if (p.rouletteTransfer > 0) {
+      state.log.push(`玩家 ${action.player} 将颜色轮盘已抽的 ${p.rouletteTransfer} 张通过加牌转移`);
+      p.rouletteTransfer = 0;
+    }
     // 双人局首张反转 +4 会暂存“跳过对手、罚抽回到自己”。若自己继续叠加，
     // 罚抽链已经被传回对手，原本的跳过标记必须撤销，给对手保留响应窗口。
     if (clearsTwoPlayerReverseSkip) state.skipQueue.shift();
@@ -407,7 +415,7 @@ function applyUnoAction(
   }
 }
 
-/** No Mercy 7：出牌者必须与指定活跃玩家交换全部剩余手牌。 */
+/** No Mercy 7：出牌者必须与指定活跃玩家交换剩余 UNO 手牌。 */
 function swapHands(
   state: GameState,
   player: number,
@@ -415,13 +423,10 @@ function swapHands(
   events: GameEvent[]
 ): void {
   const ownHand = state.players[player]!.hand;
-  const ownHearthHand = state.players[player]!.hearthHand;
   state.players[player]!.hand = state.players[targetPlayer]!.hand;
-  state.players[player]!.hearthHand = state.players[targetPlayer]!.hearthHand;
   state.players[targetPlayer]!.hand = ownHand;
-  state.players[targetPlayer]!.hearthHand = ownHearthHand;
   events.push({ type: 'handSwap', player, targetPlayer });
-  state.log.push(`玩家 ${player} 与玩家 ${targetPlayer} 交换全部手牌`);
+  state.log.push(`玩家 ${player} 与玩家 ${targetPlayer} 交换 UNO 手牌`);
 }
 
 /** No Mercy 0：所有活跃玩家按当前方向把手牌传给下一位。 */
@@ -478,7 +483,7 @@ export function hearthPlayError(state: GameState, player: number, cardIdx: numbe
   }
   if (
     targeting?.type === 'ownUnoCards' &&
-    !targeting.useAllWhenShort &&
+    !targeting.useAllWhenAtMostCount &&
     p.hand.length < targeting.count
   ) {
     return `自己的 UNO 手牌不足 ${targeting.count} 张`;
@@ -556,7 +561,7 @@ function playHearthAction(
     if (selected.length !== requiredCount || selected.some((id) => !handIds.has(id))) {
       return { ok: false, error: `必须从自己的手牌中选择 ${requiredCount} 张 UNO 牌` };
     }
-    if (targeting.useAllWhenShort && p.hand.length < targeting.count) {
+    if (targeting.useAllWhenAtMostCount && p.hand.length <= targeting.count) {
       resolvedUnoCardIds = p.hand.map((uno) => uno.id);
     }
   }
@@ -869,6 +874,28 @@ function runMinionTrigger(
   }
 }
 
+/** 任意玩家回合开始触发：按玩家座位、再按场上顺序结算，保证联机重放确定性。 */
+function runAnyTurnStartTriggers(state: GameState, rng: Rng, events: GameEvent[]): void {
+  const boards = state.players.map((player) => [...player.board]);
+  for (let owner = 0; owner < boards.length; owner++) {
+    if (!state.players[owner]!.active) continue;
+    for (const minion of boards[owner]!) {
+      if (!state.players[owner]!.board.some((entry) => entry.id === minion.id)) continue;
+      const hook = getEffect(minion.effectId)?.onAnyTurnStart;
+      if (!hook) continue;
+      events.push({
+        type: 'minionTriggered',
+        player: owner,
+        minionId: minion.id,
+        effectId: minion.effectId,
+        trigger: 'anyTurnStart',
+      });
+      hook(createEffectContext(state, rng, owner, events, { sourceMinionId: minion.id }));
+      if (state.phase === 'gameOver') return;
+    }
+  }
+}
+
 function destroyDeadMinions(state: GameState, rng: Rng, player: number, events: GameEvent[]): void {
   const p = state.players[player]!;
   const dead = p.board.filter((minion) => minion.health <= 0);
@@ -934,6 +961,14 @@ function endTurnAction(
   const p = state.players[action.player]!;
   if (p.roulettePending) return { ok: false, error: '请先结算颜色轮盘' };
   const events: GameEvent[] = [];
+  if (p.rouletteTransfer > 0) {
+    state.log.push(`玩家 ${action.player} 放弃转移颜色轮盘的 ${p.rouletteTransfer} 张`);
+    p.rouletteTransfer = 0;
+    if (settlePendingUnoWin(state, events)) {
+      state.pendingEvents.push(...events);
+      return { ok: true, events };
+    }
+  }
   if (p.pendingDrawMin > 0) {
     resolveDrawPenalty(state, rng, action.player, events);
     if (state.phase === 'gameOver') {
@@ -1010,6 +1045,7 @@ function startTurn(
   state.turn = player;
   state.turnSerial += 1;
   state.unoPlayedThisTurn = false;
+  p.rouletteTransfer = 0;
   p.heroPowerUses = 0;
   for (const minion of p.board) minion.exhausted = false;
   if (p.pendingDraw > 0 && p.pendingDrawMin === 0) {
@@ -1030,9 +1066,14 @@ function startTurn(
     state.log.push(`玩家 ${player} Boss 规则：+${boss.bonusCrystalPerTurn} 水晶`);
   }
   runMinionTrigger(state, rng, player, 'turnStart', events);
-  if (state.phase === 'gameOver') {
+  if (state.phase !== 'gameOver') runAnyTurnStartTriggers(state, rng, events);
+  if (!p.active || state.phase === 'gameOver') {
     state.pendingEvents.push(...events);
-    return events;
+    if (state.phase === 'gameOver') return events;
+    const next = nextActiveFrom(state, player);
+    const skippedEvent: GameEvent = { type: 'playerSkipped', player };
+    state.pendingEvents.push(skippedEvent);
+    return [...events, skippedEvent, ...startTurn(state, rng, next, bossRules)];
   }
   events.push({
     type: 'turnStart',
@@ -1110,6 +1151,9 @@ function resolveRouletteAction(
     `玩家 ${action.player} 颜色轮盘选择 ${action.color}，玩家 ${drawer} 抽取 ${drawn.length} 张`
   );
   applyMercyRule(state, events);
+  if (state.rules.rouletteStacking && drawPlayer.active) {
+    drawPlayer.rouletteTransfer = drawn.length;
+  }
   if (state.phase === 'gameOver') {
     state.pendingEvents.push(...events);
     return { ok: true, events };
@@ -1129,14 +1173,15 @@ function resolveRouletteAction(
   return { ok: true, events };
 }
 
-/** 当前英雄技能的实际费用。相同减费随从不叠加，避免与无限次数形成零费死循环。 */
+/** 当前英雄技能的实际费用。每个在场减费效果独立累计，最低为 0。 */
 export function heroPowerCost(state: GameState, player: number): number {
   const p = state.players[player];
   if (!p) return 2;
-  const hasReduction = p.board.some(
-    (minion) => (getEffect(minion.effectId)?.heroPowerCostReduction ?? 0) > 0
+  const reduction = p.board.reduce(
+    (total, minion) => total + (getEffect(minion.effectId)?.heroPowerCostReduction ?? 0),
+    0
   );
-  return Math.max(0, getHero(p.heroId).powerCost - (hasReduction ? 1 : 0));
+  return Math.max(0, getHero(p.heroId).powerCost - reduction);
 }
 
 export function heroPowerError(
@@ -1199,8 +1244,9 @@ export function playerCapabilities(state: GameState, player: number) {
     };
   }
   const canRespondToPenalty = p.pendingDrawMin > 0;
+  const canTransferRoulette = p.rouletteTransfer > 0;
   const playableUnoIndices =
-    state.unoActionsLeft > 0 || canRespondToPenalty
+    state.unoActionsLeft > 0 || canRespondToPenalty || canTransferRoulette
       ? p.hand
           .map((card, index) => (canPlayUnoCard(state, player, card) ? index : -1))
           .filter((index) => index >= 0)
@@ -1407,6 +1453,7 @@ function applyMercyRule(state: GameState, events: GameEvent[]): void {
     p.pendingDrawMin = 0;
     p.roulettePending = false;
     p.rouletteDrawer = null;
+    p.rouletteTransfer = 0;
     p.heroPowerUses = 0;
     p.shield = 0;
     p.unoAlert = false;
@@ -1430,7 +1477,9 @@ function queueUnoWinCandidate(state: GameState, player: number): void {
 /** 罚抽可继续叠加、或颜色轮盘尚未完成时，任何清空手牌都只是候选胜利。 */
 function hasUnresolvedUnoEffect(state: GameState): boolean {
   return state.players.some(
-    (player) => player.active && (player.pendingDrawMin > 0 || player.roulettePending)
+    (player) =>
+      player.active &&
+      (player.pendingDrawMin > 0 || player.roulettePending || player.rouletteTransfer > 0)
   );
 }
 

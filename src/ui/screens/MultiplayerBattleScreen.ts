@@ -34,6 +34,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import {
   type ActivityEntry,
   attachActivityHover,
@@ -41,6 +42,7 @@ import {
   formatActivity,
 } from './ActivityFormatter';
 import { type HandCountDelta, handCountDeltas, renderHandCountLabel } from './HandCountDelta';
+import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { Screen } from './Screen';
 
@@ -64,6 +66,7 @@ interface PrivatePlayerState {
   pendingDrawMin: number;
   roulettePending: boolean;
   rouletteDrawer: number | null;
+  rouletteTransfer: number;
 }
 
 interface MultiplayerSnapshot {
@@ -545,6 +548,7 @@ export class MultiplayerBattleScreen extends Screen {
         hearthHand: mine.hearthHand,
         roulettePending: mine.roulettePending,
         rouletteDrawer: mine.rouletteDrawer,
+        rouletteTransfer: mine.rouletteTransfer,
         pendingDrawMin: mine.pendingDrawMin,
       },
       playableIds,
@@ -732,7 +736,18 @@ export class MultiplayerBattleScreen extends Screen {
     if (selection) selectedCardIds.add(selection.cardId);
     if (this.unoTargetCardId) selectedCardIds.add(this.unoTargetCardId);
     for (const id of this.heroUnoSelection ?? []) selectedCardIds.add(id);
-    this.view?.syncHand(snapshot.mine.hand, snapshot.mine.hearthHand, playable, selectedCardIds);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(
+      snapshot.mine.hand,
+      snapshot.mine.hearthHand,
+      playable,
+      selectedCardIds,
+      handInteractionMode
+    );
     this.view?.syncTable(snapshot.deckCount, snapshot.topCard, snapshot.chosenColor);
     // 圆桌席位已经按实际手牌数渲染牌背，不再保留旧的正前方重复手牌。
     this.view?.syncOpponentHand(0);
@@ -778,13 +793,17 @@ export class MultiplayerBattleScreen extends Screen {
       0,
       snapshot.mustResolveRoulette
         ? '请先结算颜色轮盘'
-        : canAct && mine.pendingDraw > 0
-          ? snapshot.playableIds.length > 0
-            ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
-            : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
-          : canAct
-            ? '结束回合并结算补牌'
-            : `等待玩家 ${snapshot.turn + 1}`
+        : snapshot.mine.rouletteTransfer > 0
+          ? snapshot.playableIds.some((id) => snapshot.mine.hand.some((card) => card.id === id))
+            ? `轮盘已抽 ${snapshot.mine.rouletteTransfer} 张 · 可用加牌转移`
+            : `轮盘已抽 ${snapshot.mine.rouletteTransfer} 张 · 可继续行动或结束回合`
+          : canAct && mine.pendingDraw > 0
+            ? snapshot.playableIds.length > 0
+              ? `累计罚抽 ${mine.pendingDraw} 张 · 可继续叠加`
+              : `无法叠加 · 结束回合罚抽 ${mine.pendingDraw} 张`
+            : canAct
+              ? '结束回合并结算补牌'
+              : `等待玩家 ${snapshot.turn + 1}`
     );
     if (this.heroPowerEl) {
       const hero = getHero(mine.heroId);
@@ -1005,6 +1024,7 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderRoster(snapshot: MultiplayerSnapshot): void {
     if (!this.rosterEl) return;
+    clearHeroDetailHover();
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
     snapshot.players.forEach((player, index) => {
@@ -1031,12 +1051,23 @@ export class MultiplayerBattleScreen extends Screen {
         'aria-label',
         `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}`
       );
-      if (targetable) {
-        target.tabIndex = 0;
-      } else {
-        target.tabIndex = -1;
-      }
       const hero = getHero(player.heroId);
+      target.tabIndex = index === snapshot.viewer ? -1 : 0;
+      if (index !== snapshot.viewer) {
+        const currentCost = Math.max(
+          0,
+          hero.powerCost -
+            player.board.reduce(
+              (total, minion) => total + (getEffect(minion.effectId)?.heroPowerCostReduction ?? 0),
+              0
+            )
+        );
+        target.setAttribute(
+          'aria-label',
+          `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}，${hero.name}，技能${hero.powerName}，${currentCost}费；悬停查看说明`
+        );
+        attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+      }
       const heroPortrait = new Image();
       heroPortrait.src = assetUrl(hero.portrait);
       heroPortrait.alt = '';
@@ -1200,7 +1231,7 @@ export class MultiplayerBattleScreen extends Screen {
       this.renderSnapshot(snapshot);
       this.setStatus(
         this.unoTargetCardId
-          ? '数字 7：直接点击桌上发光的对手席位，交换双方全部手牌'
+          ? '数字 7：直接点击桌上发光的对手席位，只交换双方 UNO 手牌'
           : '已取消数字 7 的换牌目标选择'
       );
       return;
@@ -1337,7 +1368,7 @@ export class MultiplayerBattleScreen extends Screen {
         this.el(
           'span',
           undefined,
-          '数字 7 · 全手牌交换：直接点击桌上发光的对手席位（UNO 与炉石全部交换）'
+          '数字 7 · UNO 手牌交换：直接点击桌上发光的对手席位（炉石牌保持不变）'
         ),
         this.btn('取消', () => this.cancelTargeting())
       );
@@ -1538,7 +1569,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = unoPresentation(event.card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         if (!(event.penaltyAdded ?? 0)) audio.playSfx(soundAsset(presentation.sound), 0.55);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length), {
+          kind: 'uno',
+          card: event.card,
+        });
         if ((event.penaltyAdded ?? 0) > 0 && event.penaltyTarget !== undefined) {
           const target = this.visualSeat(event.penaltyTarget, snapshot);
           if ((event.penaltyTransferred ?? 0) > 0)
@@ -1567,7 +1601,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length), {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const targetGlobal =
             event.targets?.[0] ??
@@ -1688,7 +1725,7 @@ export class MultiplayerBattleScreen extends Screen {
       (event.player === snapshot.viewer || event.targetPlayer === snapshot.viewer)
     ) {
       const other = event.player === snapshot.viewer ? event.targetPlayer : event.player;
-      this.showTurnNotice('手牌已交换', `你与 ${name(other)} 交换了全部手牌。`, 'swap');
+      this.showTurnNotice('UNO 手牌已交换', `你与 ${name(other)} 只交换了 UNO 手牌。`, 'swap');
     } else if (event.type === 'handPass') {
       this.showTurnNotice(
         '全桌传牌',
@@ -1771,7 +1808,13 @@ export class MultiplayerBattleScreen extends Screen {
                 : `罚抽链正在传向你，最低需要 +${minePrivate.pendingDrawMin} 才能反击。`,
             kind: 'penalty' as const,
           }
-        : null;
+        : minePrivate.rouletteTransfer > 0
+          ? {
+              title: `颜色轮盘已抽 ${minePrivate.rouletteTransfer} 张`,
+              detail: '本回合可打出任意加牌，把已抽数量连同加值转给下一位。',
+              kind: 'roulette' as const,
+            }
+          : null;
     this.turnNoticeEl.className = `turn-notice${persistent ? ` visible ${persistent.kind}` : ''}`;
     if (persistent) {
       const icon = this.el('span', 'notice-icon', '!');
@@ -2012,6 +2055,7 @@ export class MultiplayerBattleScreen extends Screen {
     window.removeEventListener('keydown', this.handleEscape);
     this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
     this.pause?.unbind();
+    clearHeroDetailHover();
     this.view?.dispose();
     const net = getNet();
     net.onInputReceived = undefined;

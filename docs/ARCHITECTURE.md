@@ -114,13 +114,14 @@ type HearthEffect = {
 
 ### 2.6 UNO Show 'Em No Mercy 牌集
 
-公共 UNO 牌库采用 168 张 No Mercy 核心牌表：数字 0-9 每色各两张；彩色 Skip、Reverse、+2、+4、Discard All、Skip Everyone；万能 Reverse +4、+6、+10、Color Roulette。数字 7 强制指定玩家交换手牌，数字 0 让所有活跃玩家按当前方向传递手牌；罚抽牌只允许用等值或更大的罚抽牌叠加，手牌达到 25 张触发慈悲规则淘汰。所有功能牌**不产出水晶**。
+公共 UNO 牌库采用 168 张 No Mercy 核心牌表：数字 0-9 每色各两张；彩色 Skip、Reverse、+2、+4、Discard All、Skip Everyone；万能 Reverse +4、+6、+10、Color Roulette。数字 7 强制指定玩家交换 UNO 手牌（炉石牌不交换），数字 0 让所有活跃玩家按当前方向传递 UNO 手牌；罚抽牌只允许用等值或更大的罚抽牌叠加。颜色轮盘结算后，抽牌者可用任意加牌将“已抽数量 + 新加值”转给下一位；该规则由 `GameRules.rouletteStacking` 控制且默认开启。UNO 手牌达到 25 张触发慈悲规则淘汰。所有功能牌**不产出水晶**。
 
 ### 2.7 测试策略
 
 - `tests/game/` 镜像 src 结构；关键路径全覆盖
 - 确定性测试：同 seed 两局结果必须逐事件一致
 - 可扩展性测试：注册一张新效果卡 → 不打核心代码即可进牌池
+- 颜色轮盘平衡实验：`bun run analyze:roulette --games=1200 --players=3 --deck=combo` 使用成对 seed 输出胜率、步数、回合数、慈悲淘汰与转移次数；支持 2–8 人及 `combo` / `burst` 牌组。
 
 ## 3. AI 设计（Phase 2）
 

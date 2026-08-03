@@ -54,7 +54,9 @@
     border: 0;
     padding: 0;
     background: transparent;
+    cursor: help;
     font: inherit;
+    pointer-events: auto;
     text-align: start;
   }
 
@@ -370,12 +372,46 @@
     color: inherit;
     font: inherit;
     text-align: start;
-    pointer-events: none;
+    cursor: help;
+    pointer-events: auto;
   }
 
   .seat-target-button.legal-target {
     cursor: crosshair;
+  }
+
+  .hero-skill-detail {
+    position: fixed;
+    z-index: 75;
+    display: grid;
+    gap: 0.32rem;
+    inline-size: min(18rem, calc(100vw - 1rem));
+    border: 1px solid rgb(239 197 102 / 72%);
+    border-radius: 0.75rem;
+    padding: 0.72rem 0.82rem;
+    background: linear-gradient(145deg, rgb(30 25 50 / 98%), rgb(10 15 33 / 98%));
+    color: #f8ebcb;
+    box-shadow: 0 0.75rem 1.8rem rgb(0 0 0 / 58%);
+    font-family: var(--font-utility);
     pointer-events: auto;
+  }
+
+  .hero-skill-detail strong {
+    color: #ffe39a;
+    font-size: 0.86rem;
+  }
+
+  .hero-skill-detail .hero-skill-name {
+    color: #8fe5ff;
+    font-size: 0.76rem;
+    font-weight: 900;
+  }
+
+  .hero-skill-detail p {
+    margin: 0;
+    color: #d6dfef;
+    font-size: 0.7rem;
+    line-height: 1.55;
   }
 
   .table-seat:has(.seat-target-button.legal-target) {
@@ -809,9 +845,11 @@
     z-index: 12;
     inset-block-start: var(--battle-panel-top, 6.3rem);
     inset-inline-start: 50%;
-    padding: 0.35rem;
+    inline-size: fit-content;
+    max-inline-size: calc(100% - 2rem);
+    padding: 0.18rem;
     border: 1px solid rgb(230 190 107 / 35%);
-    border-radius: 0.8rem;
+    border-radius: 0.72rem;
     background: rgb(11 10 20 / 68%);
     box-shadow: 0 0.7rem 1.8rem rgb(0 0 0 / 28%);
     backdrop-filter: blur(0.65rem);
@@ -819,10 +857,13 @@
   }
 
   .battle-status {
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    place-items: center;
     justify-content: center;
-    gap: 0.35rem;
+    gap: 0.3rem;
+    line-height: 1;
   }
 
   .turn-route {
@@ -968,11 +1009,15 @@
   .turn-tag,
   .stat {
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
     gap: 0.3rem;
-    min-block-size: 2rem;
+    block-size: 2.1rem;
+    min-block-size: 0;
     border-radius: 0.45rem;
-    padding: 0.42rem 0.58rem;
+    padding: 0 0.58rem;
+    line-height: 1;
     white-space: nowrap;
   }
 
@@ -980,6 +1025,7 @@
     border: 1px solid transparent;
     font-size: 0.75rem;
     font-weight: 900;
+    text-box: trim-both cap alphabetic;
   }
 
   .turn-tag.mine {
@@ -1001,25 +1047,21 @@
   .stat small {
     color: #aeadbd;
     font-size: 0.6rem;
+    line-height: 1;
   }
 
   .stat strong {
     color: var(--paper);
     font-family: var(--font-utility);
     font-size: 0.78rem;
+    line-height: 1;
   }
 
   .stat.top-card {
     border: 1px solid rgb(230 190 107 / 30%);
-    grid-template-columns: auto auto;
-    grid-template-rows: auto auto;
     min-inline-size: 5.6rem;
     overflow: hidden;
     position: relative;
-  }
-
-  .stat.top-card small {
-    grid-column: 1 / -1;
   }
 
   .top-card-swatch {
@@ -2371,7 +2413,7 @@
     }
     .battle-status {
       overflow-x: auto;
-      justify-content: flex-start;
+      justify-content: start;
       scrollbar-width: thin;
     }
     .pause-trigger {

@@ -13,6 +13,7 @@ import { hearthCardDataURL } from './HearthCardRenderer';
 export class CardDetailPanel {
   private el: HTMLDivElement | null = null;
   private requestVersion = 0;
+  private suppressed = false;
   private pinned:
     | { type: 'card'; entry: HandCardEntry }
     | { type: 'minion'; minion: MinionState }
@@ -21,6 +22,7 @@ export class CardDetailPanel {
   constructor(private root: HTMLElement) {}
 
   show(entry: HandCardEntry | null): void {
+    if (this.suppressed) return;
     if (!entry) {
       this.restorePinnedOrHide();
       return;
@@ -29,11 +31,13 @@ export class CardDetailPanel {
   }
 
   pin(entry: HandCardEntry): void {
+    if (this.suppressed) return;
     this.pinned = { type: 'card', entry };
     this.renderCard(entry);
   }
 
   pinMinion(minion: MinionState): void {
+    if (this.suppressed) return;
     this.pinned = { type: 'minion', minion };
     this.renderMinion(minion);
   }
@@ -78,6 +82,7 @@ export class CardDetailPanel {
   }
 
   showMinion(minion: MinionState | null): void {
+    if (this.suppressed) return;
     if (!minion) {
       this.restorePinnedOrHide();
       return;
@@ -123,6 +128,13 @@ export class CardDetailPanel {
   hide(): void {
     this.pinned = null;
     this.removePanel();
+  }
+
+  /** 攻击或选目标期间详情已失效：立即关闭，并阻止 hover 再次打开。 */
+  setSuppressed(suppressed: boolean): void {
+    if (this.suppressed === suppressed) return;
+    this.suppressed = suppressed;
+    if (suppressed) this.hide();
   }
 
   private restorePinnedOrHide(): void {
