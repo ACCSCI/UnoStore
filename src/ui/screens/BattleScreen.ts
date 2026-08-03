@@ -42,6 +42,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
   type ActivityEntry,
@@ -1309,7 +1310,12 @@ export class BattleScreen extends Screen {
       for (const id of this.heroUnoSelection) selectedCards.add(id);
       interactionCards = new Set(p.hand.map((card) => card.id));
     }
-    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards, handInteractionMode);
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
     this.view?.syncOpponentHand(this.localTest ? 0 : opp.hand.length + opp.hearthHand.length);
     const selected = p.board.find(

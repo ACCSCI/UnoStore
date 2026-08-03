@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import type { UnoCard } from '../../game/uno/types';
 import { createCardMesh, unoCardDataURL } from './CardRenderer';
+import { type HandInteractionMode, shouldSelectHandCard } from './HandInteractionMode';
 import { createHearthCardMesh, hearthCardDataURL } from './HearthCardRenderer';
 
 /**
@@ -47,6 +48,7 @@ export class HandRenderer {
   private pointer = new THREE.Vector2();
   private stagedId: string | null = null;
   private previewOnlyId: string | null = null;
+  private interactionMode: HandInteractionMode = 'play';
   private touchGesture: {
     pointerId: number;
     cardId: string;
@@ -238,6 +240,13 @@ export class HandRenderer {
     }
   }
 
+  /** 所有“从手牌中选择卡牌”的技能/法术共用此模式，不依赖当前是否已有 selected 卡。 */
+  setInteractionMode(mode: HandInteractionMode): void {
+    if (this.interactionMode === mode) return;
+    this.interactionMode = mode;
+    if (mode === 'select') this.clearPreviewSelection();
+  }
+
   private layoutCard(id: string, index: number, total: number): void {
     const mesh = this.meshes.get(id);
     if (!mesh) return;
@@ -371,7 +380,7 @@ export class HandRenderer {
     this.cancelTouchGesture();
     this.updateRaycaster(e);
     const entry = this.hitEntry();
-    if (!entry || this.hasGameplaySelection()) return;
+    if (!entry || this.interactionMode === 'select') return;
     const gesture = {
       pointerId: e.pointerId,
       cardId: entry.id,
@@ -448,7 +457,7 @@ export class HandRenderer {
       this.clearPreviewSelection();
       return;
     }
-    if (this.hasGameplaySelection() && entry.playable) {
+    if (shouldSelectHandCard(this.interactionMode, entry.playable)) {
       this.onClick(entry);
       return;
     }
@@ -486,7 +495,7 @@ export class HandRenderer {
       this.clearPreviewSelection();
       return;
     }
-    if (this.hasGameplaySelection() && entry.playable) {
+    if (shouldSelectHandCard(this.interactionMode, entry.playable)) {
       this.onClick(entry);
       return;
     }
@@ -521,13 +530,6 @@ export class HandRenderer {
 
   private entryById(id: string): HandCardEntry | null {
     return (this.meshes.get(id)?.userData.entry as HandCardEntry | undefined) ?? null;
-  }
-
-  private hasGameplaySelection(): boolean {
-    for (const mesh of this.meshes.values()) {
-      if ((mesh.userData.entry as HandCardEntry | undefined)?.selected) return true;
-    }
-    return false;
   }
 
   private isOverTable(): boolean {
@@ -616,6 +618,7 @@ export class HandRenderer {
     }
     this.hitMeshes.clear();
     this.orderedIds = [];
+    this.interactionMode = 'play';
     this.stagedId = null;
     this.onStagedPointer?.(null);
     this.previewOnlyId = null;

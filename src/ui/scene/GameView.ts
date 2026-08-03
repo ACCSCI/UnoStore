@@ -6,6 +6,7 @@ import { assetUrl } from '../assets/url';
 import type { CardVisual } from '../effects/CardEffects';
 import { createDrawCardBackMesh, loadCardBackTexture } from './CardBackRenderer';
 import { CardDetailPanel } from './CardDetailPanel';
+import type { HandInteractionMode } from './HandInteractionMode';
 import { HandRenderer } from './HandRenderer';
 import { MinionBoardRenderer } from './MinionBoard';
 import { OpponentHandRenderer } from './OpponentHandRenderer';
@@ -146,11 +147,13 @@ export class GameView {
     uno: UnoCard[],
     hearth: HearthCard[],
     playableIds: Set<string>,
-    selectedIds: Set<string> = new Set()
+    selectedIds: Set<string> = new Set(),
+    interactionMode: HandInteractionMode = 'play'
   ): void {
     this.hand?.sync(uno, hearth);
     this.hand?.setPlayable(playableIds);
     this.hand?.setSelected(selectedIds);
+    this.hand?.setInteractionMode(interactionMode);
   }
 
   clearHandInteraction(): void {

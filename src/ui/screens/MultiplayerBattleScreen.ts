@@ -34,6 +34,7 @@ import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEf
 import { unoCardDataURL } from '../scene/CardRenderer';
 import { pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
+import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import {
   type ActivityEntry,
   attachActivityHover,
@@ -735,7 +736,18 @@ export class MultiplayerBattleScreen extends Screen {
     if (selection) selectedCardIds.add(selection.cardId);
     if (this.unoTargetCardId) selectedCardIds.add(this.unoTargetCardId);
     for (const id of this.heroUnoSelection ?? []) selectedCardIds.add(id);
-    this.view?.syncHand(snapshot.mine.hand, snapshot.mine.hearthHand, playable, selectedCardIds);
+    const handInteractionMode = resolveHandInteractionMode({
+      hearthCardId: this.hearthSelection?.cardId ?? null,
+      unoTargetCardId: this.unoTargetCardId,
+      heroUnoSelection: this.heroUnoSelection,
+    });
+    this.view?.syncHand(
+      snapshot.mine.hand,
+      snapshot.mine.hearthHand,
+      playable,
+      selectedCardIds,
+      handInteractionMode
+    );
     this.view?.syncTable(snapshot.deckCount, snapshot.topCard, snapshot.chosenColor);
     // 圆桌席位已经按实际手牌数渲染牌背，不再保留旧的正前方重复手牌。
     this.view?.syncOpponentHand(0);
