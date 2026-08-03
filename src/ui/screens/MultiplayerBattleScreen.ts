@@ -1569,7 +1569,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = unoPresentation(event.card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         if (!(event.penaltyAdded ?? 0)) audio.playSfx(soundAsset(presentation.sound), 0.55);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length), {
+          kind: 'uno',
+          card: event.card,
+        });
         if ((event.penaltyAdded ?? 0) > 0 && event.penaltyTarget !== undefined) {
           const target = this.visualSeat(event.penaltyTarget, snapshot);
           if ((event.penaltyTransferred ?? 0) > 0)
@@ -1598,7 +1601,10 @@ export class MultiplayerBattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.62);
-        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length));
+        await this.view.playCardAnimation(this.actionOrigin(source, snapshot.players.length), {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const targetGlobal =
             event.targets?.[0] ??

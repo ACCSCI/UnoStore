@@ -463,12 +463,15 @@ export class BattleScreen extends Screen {
     for (const event of events) {
       this.applyAnimationHandDeltas(event);
       if (event.type === 'unoPlayed') {
-        const card = this.session?.state.unoDiscard.find((entry) => entry.id === event.cardId);
-        const presentation = unoPresentation(card?.value ?? 'number');
+        const card = event.card;
+        const presentation = unoPresentation(card.value);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         const penaltyCount = event.penaltyAdded ?? 0;
         if (penaltyCount === 0) audio.playSfx(soundAsset(presentation.sound), 0.4);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(this.actionOrigin(event.player), {
+          kind: 'uno',
+          card,
+        });
         if (penaltyCount > 0) {
           const target = event.penaltyTarget ?? nextActiveFrom(this.session!.state, event.player);
           if ((event.penaltyTransferred ?? 0) > 0) {
@@ -482,7 +485,7 @@ export class BattleScreen extends Screen {
           }
           audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.72);
           await this.view.playPenaltyDealAnimation(target, penaltyCount, this.playerCount);
-        } else if (card && !/^\d$/.test(card.value)) {
+        } else if (!/^\d$/.test(card.value)) {
           await this.view.playCardEffectAnimation(
             presentation.visual,
             event.player,
@@ -495,7 +498,10 @@ export class BattleScreen extends Screen {
         const presentation = cardPresentation(event.effectId);
         audio.playSfx('/assets/audio/sfx/card_flip.mp3');
         audio.playSfx(soundAsset(presentation.sound), event.effectId === 'bolt' ? 0.82 : 0.6);
-        await this.view.playCardAnimation(this.actionOrigin(event.player));
+        await this.view.playCardAnimation(this.actionOrigin(event.player), {
+          kind: 'hearth',
+          card: { id: event.cardId, effectId: event.effectId },
+        });
         if (effect?.kind !== 'minion') {
           const minionOwner = event.targetMinionId
             ? this.session?.state.players.findIndex((player) =>

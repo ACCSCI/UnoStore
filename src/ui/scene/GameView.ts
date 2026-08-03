@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import { getEffect } from '../../game/hearth/effects/registry';
 import type { UnoCard } from '../../game/uno/types';
-import { assetUrl } from '../assets/url';
 import type { CardVisual } from '../effects/CardEffects';
 import { createDrawCardBackMesh, loadCardBackTexture } from './CardBackRenderer';
 import { CardDetailPanel } from './CardDetailPanel';
@@ -10,6 +9,11 @@ import type { HandInteractionMode } from './HandInteractionMode';
 import { HandRenderer } from './HandRenderer';
 import { MinionBoardRenderer } from './MinionBoard';
 import { OpponentHandRenderer } from './OpponentHandRenderer';
+import {
+  createPlayedCardMesh,
+  disposePlayedCardMesh,
+  type PlayedCardVisual,
+} from './PlayedCardRenderer';
 import { TableCenterRenderer } from './TableCenter';
 import { UIActionBar } from './UIActionBar';
 
@@ -207,13 +211,10 @@ export class GameView {
   }
 
   /** 出牌飞行动画：牌从手牌位置飞到弃牌堆（贝塞尔弧线） */
-  playCardAnimation(from: THREE.Vector3): Promise<void> {
+  playCardAnimation(from: THREE.Vector3, visual: PlayedCardVisual): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(70);
-    // 创建一个临时卡牌飞行
-    const geo = new THREE.BoxGeometry(0.5, 0.03, 0.65);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffd700, roughness: 0.4 });
-    const mesh = new THREE.Mesh(geo, mat);
+    const mesh = createPlayedCardMesh(visual);
     mesh.position.copy(from);
     this.scene.add(mesh);
     const to = new THREE.Vector3(1.2, 0.36, 0);
@@ -226,11 +227,11 @@ export class GameView {
         const t = Math.min((performance.now() - start) / duration, 1);
         const e = 1 - (1 - t) ** 3; // easeOutCubic
         mesh.position.copy(curve.getPoint(e));
+        mesh.rotation.z = e * Math.PI * 2;
         if (t < 1) requestAnimationFrame(step);
         else {
           this.scene.remove(mesh);
-          geo.dispose();
-          mat.dispose();
+          disposePlayedCardMesh(mesh, visual.kind === 'uno');
           resolve();
         }
       };
@@ -275,20 +276,15 @@ export class GameView {
   playSummonAnimation(player: number, playerCount: number, effectId = ''): Promise<void> {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       return this.animationPause(90);
-    const geometry = new THREE.PlaneGeometry(0.86, 1.08);
-    const texture = effectId
-      ? new THREE.TextureLoader().load(
-          assetUrl(`/assets/images/hearth/${encodeURIComponent(effectId)}.webp`)
-        )
-      : null;
-    const material = new THREE.MeshBasicMaterial({
-      color: 0xffe0a0,
-      map: texture,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
+    const mesh = createPlayedCardMesh({
+      kind: 'hearth',
+      card: { id: `summon-${effectId || 'unknown'}`, effectId },
     });
-    const mesh = new THREE.Mesh(geometry, material);
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = 0.9;
+    }
     const from = this.seatPosition(player, playerCount).setY(2.2);
     const to = from.clone().multiplyScalar(0.69).setY(0.74);
     mesh.position.copy(from);
@@ -299,7 +295,8 @@ export class GameView {
       mesh.scale.setScalar(0.35 + eased * 0.85);
       mesh.lookAt(this.camera.position);
       mesh.rotation.z = (1 - eased) * -0.18;
-      material.opacity = t < 0.72 ? 0.9 : (1 - t) / 0.28;
+      const opacity = t < 0.72 ? 0.9 : (1 - t) / 0.28;
+      for (const material of materials) material.opacity = opacity;
     });
   }
 

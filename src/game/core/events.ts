@@ -1,3 +1,5 @@
+import type { UnoCard } from '../uno/types';
+
 /** 游戏内所有事件的统一类型（渲染层、AI、联机只消费事件流） */
 export type GameEvent =
   | { type: 'gameStart' }
@@ -7,7 +9,7 @@ export type GameEvent =
       player: number;
       cardId: string;
       /** 公开牌面；联机客户端据此播放正确的 UNO 演出，不依赖私有手牌。 */
-      card: { id: string; color: string | null; value: string };
+      card: UnoCard;
       crystalFrozen: number;
       penaltyTarget?: number;
       penaltyAdded?: number;
