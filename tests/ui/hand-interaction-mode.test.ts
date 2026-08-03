@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  HAND_CANDIDATE_OUTLINE,
+  HAND_SELECTED_OUTLINE,
+  resolveHandCardOutline,
   resolveHandInteractionMode,
   shouldSelectHandCard,
 } from '../../src/ui/scene/HandInteractionMode';
@@ -37,5 +40,21 @@ describe('shared hand selection mode', () => {
         heroUnoSelection: null,
       })
     ).toBe('play');
+  });
+
+  test('uses a red outline for every selected card and gold only for candidates', () => {
+    expect(resolveHandCardOutline(true, false)).toMatchObject({
+      visible: true,
+      color: HAND_CANDIDATE_OUTLINE,
+    });
+    expect(resolveHandCardOutline(true, true)).toMatchObject({
+      visible: true,
+      color: HAND_SELECTED_OUTLINE,
+    });
+    expect(resolveHandCardOutline(false, true)).toMatchObject({
+      visible: true,
+      color: HAND_SELECTED_OUTLINE,
+    });
+    expect(resolveHandCardOutline(false, false).visible).toBe(false);
   });
 });

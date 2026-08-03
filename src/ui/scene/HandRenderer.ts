@@ -2,7 +2,12 @@ import * as THREE from 'three';
 import type { HearthCard } from '../../game/core/state';
 import type { UnoCard } from '../../game/uno/types';
 import { createCardMesh, unoCardDataURL } from './CardRenderer';
-import { type HandInteractionMode, shouldSelectHandCard } from './HandInteractionMode';
+import {
+  HAND_CANDIDATE_OUTLINE,
+  type HandInteractionMode,
+  resolveHandCardOutline,
+  shouldSelectHandCard,
+} from './HandInteractionMode';
 import { createHearthCardMesh, hearthCardDataURL } from './HearthCardRenderer';
 
 /**
@@ -24,7 +29,6 @@ const MAX_HAND_WIDTH = 5.4;
 const MAX_CARD_GAP = 0.3;
 const ROW_Z = 3.42;
 const CARD_TILT = 0.38;
-const PLAYABLE_OUTLINE = 0xffdc64;
 const TOUCH_HOLD_MS = 180;
 const TABLE_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.48);
 
@@ -171,7 +175,7 @@ export class HandRenderer {
         const outline = new THREE.LineSegments(
           new THREE.EdgesGeometry(mesh.geometry),
           new THREE.LineBasicMaterial({
-            color: PLAYABLE_OUTLINE,
+            color: HAND_CANDIDATE_OUTLINE,
             transparent: false,
             depthTest: false,
             depthWrite: false,
@@ -202,8 +206,6 @@ export class HandRenderer {
       const entry = mesh.userData.entry as HandCardEntry | undefined;
       if (!entry) continue;
       entry.playable = ids.has(id);
-      const outline = mesh.getObjectByName('playable-outline');
-      if (outline) outline.visible = entry.playable;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const material of materials) {
         if (material instanceof THREE.MeshStandardMaterial) {
@@ -227,12 +229,12 @@ export class HandRenderer {
       const entry = mesh.userData.entry as HandCardEntry | undefined;
       if (!entry) continue;
       entry.selected = ids.has(id);
+      // 选中反馈由统一红色外轮廓承担，不再给卡面增白或染色。
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const material of materials) {
-        if (material instanceof THREE.MeshStandardMaterial && entry.selected) {
-          material.emissive.set(0x087ca8);
-          material.emissiveIntensity = 0.42;
-        }
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        material.emissive.set(0x000000);
+        material.emissiveIntensity = 0;
       }
     }
     for (let i = 0; i < this.orderedIds.length; i++) {
@@ -275,13 +277,14 @@ export class HandRenderer {
     mesh.renderOrder = isHover ? 1000 : index * 2;
     const outline = mesh.getObjectByName('playable-outline');
     if (outline instanceof THREE.LineSegments) {
-      outline.visible = playable;
+      const outlineVisual = resolveHandCardOutline(playable, selected);
+      outline.visible = outlineVisual.visible;
       outline.renderOrder = mesh.renderOrder + 1;
       const material = outline.material as THREE.LineBasicMaterial;
-      material.color.setHex(PLAYABLE_OUTLINE);
-      material.opacity = 0.96;
-      outline.scale.setScalar(1.055);
-      outline.scale.y = 1.18;
+      material.color.setHex(outlineVisual.color);
+      material.opacity = 1;
+      outline.scale.setScalar(outlineVisual.scale);
+      outline.scale.y = outlineVisual.scaleY;
     }
 
     // 命中代理始终留在基础扇形槽位；视觉卡上浮后不会改变下一帧的命中结果。
