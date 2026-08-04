@@ -639,7 +639,7 @@ test('虹彩指挥家登场时可重新指定当前 UNO 颜色', () => {
   expect(s.players[0]!.board[0]).toMatchObject({ attack: 5, health: 5 });
 });
 
-test('命运馈赠选择两张混合手牌并交给指定对手', () => {
+test('命运馈赠可选牌正好两张时无需手动选择，自动全部赠送', () => {
   const s = createGame(2, ['fatefulGift', 'shield', 'bolt'], 114);
   s.players[0]!.free = 2;
   s.players[0]!.hand = [{ id: 'gift-uno', color: 'red', value: '2' }];
@@ -652,7 +652,6 @@ test('命运馈赠选择两张混合手牌并交给指定对手', () => {
       player: 0,
       cardIdx: 0,
       targets: [1],
-      cardIds: ['gift-uno', 'gift-hearth'],
     })
   );
   expect(s.players[1]!.hand).toHaveLength(beforeUno + 1);
@@ -660,6 +659,64 @@ test('命运馈赠选择两张混合手牌并交给指定对手', () => {
   expect(s.players[0]!.hand).toHaveLength(0);
   expect(s.players[0]!.hearthHand).toHaveLength(0);
   expect(events.some((event) => event.type === 'cardsGifted')).toBe(true);
+});
+
+test('命运馈赠可选牌少于两张时仍可施放并自动赠送全部', () => {
+  const s = createGame(2, ['fatefulGift'], 115);
+  s.players[0]!.free = 2;
+  s.players[0]!.hand = [{ id: 'only-gift', color: 'yellow', value: '4' }];
+  s.players[0]!.hearthHand = [hearth('short-gift-spell', 'fatefulGift')];
+  const before = s.players[1]!.hand.length;
+
+  expect(canInitiateHearthPlay(s, 0, 0)).toBe(true);
+  okEvents(
+    dispatch(s, new Rng(115), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      targets: [1],
+    })
+  );
+
+  expect(s.players[1]!.hand).toHaveLength(before + 1);
+  expect(s.players[1]!.hand.at(-1)?.id).toBe('only-gift');
+});
+
+test('命运馈赠可选牌多于两张时仍必须精确选择两张', () => {
+  const s = createGame(2, ['fatefulGift', 'shield'], 116);
+  s.players[0]!.free = 2;
+  s.players[0]!.hand = [
+    { id: 'gift-a', color: 'red', value: '2' },
+    { id: 'gift-b', color: 'blue', value: '3' },
+  ];
+  s.players[0]!.hearthHand = [hearth('long-gift-spell', 'fatefulGift'), hearth('gift-c', 'shield')];
+
+  expect(
+    dispatch(s, new Rng(116), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      targets: [1],
+    }).ok
+  ).toBe(false);
+  expect(
+    dispatch(s, new Rng(116), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      targets: [1],
+      cardIds: ['gift-a'],
+    }).ok
+  ).toBe(false);
+  okEvents(
+    dispatch(s, new Rng(116), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      targets: [1],
+      cardIds: ['gift-a', 'gift-c'],
+    })
+  );
 });
 
 test('每名玩家最多拥有 5 个场上随从，满场后卡牌从一开始就不可操作', () => {
@@ -731,6 +788,24 @@ test('血契泰坦必须选择两张自己的 UNO 手牌，战吼只弃掉所选
   expect(events.some((event) => event.type === 'unoDiscarded')).toBe(true);
 });
 
+test('血契泰坦的 UNO 数量不超过两张时无需选牌并自动全部弃置', () => {
+  for (const count of [1, 2]) {
+    const s = createGame(2, ['bloodboundTitan'], 220 + count);
+    s.players[0]!.hand = Array.from({ length: count }, (_, index) => ({
+      id: `short-titan-${count}-${index}`,
+      color: 'green' as const,
+      value: String(index + 1) as UnoCard['value'],
+    }));
+    s.players[0]!.free = 10;
+    s.players[0]!.hearthHand = [hearth(`short-titan-card-${count}`, 'bloodboundTitan')];
+
+    expect(canInitiateHearthPlay(s, 0, 0)).toBe(true);
+    okEvents(dispatch(s, new Rng(220 + count), { type: 'playHearth', player: 0, cardIdx: 0 }));
+    expect(s.players[0]!.hand).toHaveLength(0);
+    expect(s.players[0]!.board[0]?.effectId).toBe('bloodboundTitan');
+  }
+});
+
 test('窥镜先知查看对手四张牌，并从中拿一张、弃一张', () => {
   const s = createGame(3, ['spyglassOracle'], 23);
   s.players[0]!.free = 10;
@@ -769,6 +844,26 @@ test('窥镜先知查看对手四张牌，并从中拿一张、弃一张', () =>
     expect(s.players[0]!.hand.some((card) => card.id === takenId)).toBe(true);
     expect(s.players[2]!.hand.some((card) => card.id === discardedId)).toBe(false);
   }
+});
+
+test('窥镜先知的目标不足两张 UNO 时仍可施放，且不会留下待结算交互', () => {
+  const s = createGame(2, ['spyglassOracle'], 24);
+  s.players[0]!.free = 10;
+  s.players[0]!.hearthHand = [hearth('short-oracle-card', 'spyglassOracle')];
+  s.players[1]!.hand = [{ id: 'only-oracle-target', color: 'blue', value: '5' }];
+
+  const events = okEvents(
+    dispatch(s, new Rng(24), {
+      type: 'playHearth',
+      player: 0,
+      cardIdx: 0,
+      targets: [1],
+    })
+  );
+  const reveal = events.find((event) => event.type === 'handRevealed');
+  expect(reveal?.type === 'handRevealed' ? reveal.cards : []).toHaveLength(1);
+  expect(reveal).not.toHaveProperty('chooseTakeAndDiscard');
+  expect(s.oraclePending).toBeNull();
 });
 
 test('强化抽牌术的三次抽取独立随机来自 UNO 或炉石牌库', () => {
@@ -2216,6 +2311,21 @@ test('UNO 湮灭只检查费用，UNO 不足五张时弃掉现有全部手牌', 
   expect(purge.players[0]!.free).toBe(0);
   expect(purge.players[0]!.hand).toHaveLength(0);
   expect(purge.players[0]!.hearthHand).toHaveLength(0);
+});
+
+test('UNO 湮灭正好五张时也无需选牌，自动全部弃置', () => {
+  const purge = createGame(2, ['unoAnnihilation'], 651);
+  purge.players[0]!.free = 7;
+  purge.players[0]!.hand = Array.from({ length: 5 }, (_, index) => ({
+    id: `exact-purge-${index}`,
+    color: 'yellow' as const,
+    value: String(index) as UnoCard['value'],
+  }));
+  purge.players[0]!.hearthHand = [hearth('exact-purge-card', 'unoAnnihilation')];
+
+  expect(canInitiateHearthPlay(purge, 0, 0)).toBe(true);
+  okEvents(dispatch(purge, new Rng(651), { type: 'playHearth', player: 0, cardIdx: 0 }));
+  expect(purge.players[0]!.hand).toHaveLength(0);
 });
 
 test('UNO 湮灭在没有 UNO 手牌时也能消耗费用空放', () => {

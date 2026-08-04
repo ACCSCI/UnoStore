@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test';
-import { formatTurnClock, remainingTurnSeconds } from '../../src/game/core/turnTimeout';
+import {
+  formatTurnClock,
+  isSameActiveTurn,
+  remainingTurnSeconds,
+} from '../../src/game/core/turnTimeout';
 import type { LoadoutProfile } from '../../src/game/loadout';
 import type { SaveData } from '../../src/game/story/save';
 import { mergeLoadouts, mergeStory } from '../../src/net/cloudSave';
@@ -47,4 +51,10 @@ test('回合时钟按房主截止时间显示且不会变成负数', () => {
   expect(remainingTurnSeconds(500, 1_000)).toBe(0);
   expect(formatTurnClock(120)).toBe('2:00');
   expect(formatTurnClock(9)).toBe('0:09');
+});
+
+test('超时强制结算只能结束截止时的原回合', () => {
+  expect(isSameActiveTurn({ turn: 0, turnSerial: 4, phase: 'playing' }, 0, 4)).toBe(true);
+  expect(isSameActiveTurn({ turn: 1, turnSerial: 5, phase: 'playing' }, 0, 4)).toBe(false);
+  expect(isSameActiveTurn({ turn: 0, turnSerial: 4, phase: 'gameOver' }, 0, 4)).toBe(false);
 });

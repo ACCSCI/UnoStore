@@ -1,9 +1,24 @@
 import { expect, test } from 'bun:test';
 import type { GameEvent } from '../../src/game/core/events';
 import '../../src/game/hearth/cards';
-import { formatActivity } from '../../src/ui/screens/ActivityFormatter';
+import { formatActivity, shouldFollowActivityLedger } from '../../src/ui/screens/ActivityFormatter';
 
 const playerLabel = (player: number): string => `玩家${player + 1}`;
+
+test('对局记录只在读者仍处于底部时跟随新内容', () => {
+  expect(shouldFollowActivityLedger({ scrollTop: 160, clientHeight: 40, scrollHeight: 200 })).toBe(
+    true
+  );
+  expect(shouldFollowActivityLedger({ scrollTop: 157, clientHeight: 40, scrollHeight: 200 })).toBe(
+    true
+  );
+  expect(shouldFollowActivityLedger({ scrollTop: 100, clientHeight: 40, scrollHeight: 200 })).toBe(
+    false
+  );
+  expect(shouldFollowActivityLedger({ scrollTop: 0, clientHeight: 80, scrollHeight: 80 })).toBe(
+    true
+  );
+});
 
 test('随从攻击记录明确显示使用者、攻击者、目标和双方结果，并支持多牌悬停', () => {
   const event: GameEvent = {

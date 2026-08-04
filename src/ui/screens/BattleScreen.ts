@@ -8,13 +8,16 @@ import {
 } from '../../game/core/reducer';
 import {
   formatTurnClock,
+  isSameActiveTurn,
   remainingTurnSeconds,
   TURN_TIMEOUT_MS,
 } from '../../game/core/turnTimeout';
 import { getDeck } from '../../game/hearth/decks';
 import {
   getEffect,
+  type HearthTargeting,
   minionHasTaunt,
+  requiredGiveCardCount,
   requiredOwnUnoCardCount,
 } from '../../game/hearth/effects/registry';
 import { getHero, getHeroEmote, HERO_EMOTES, type HeroId } from '../../game/heroes';
@@ -40,7 +43,7 @@ import { battleMusicTier } from '../audio/BattleMusicState';
 import { scheduleBattleUiIntegrity } from '../dev/BattleUiIntegrity';
 import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
 import { unoCardDataURL } from '../scene/CardRenderer';
-import { pickColor } from '../scene/ColorPicker';
+import { dismissColorPickers, pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
@@ -114,6 +117,7 @@ export class BattleScreen extends Screen {
   private turnDeadlineSerial = -1;
   private turnDeadline = 0;
   private timeoutResolving = false;
+  private readonly queuedTimeoutEvents: GameEvent[] = [];
   private cancelUiIntegrityCheck: () => void = () => {};
 
   private opponentTimer: number | null = null;
@@ -354,6 +358,7 @@ export class BattleScreen extends Screen {
     this.root.removeEventListener('contextmenu', this.handleTargetingContextMenu);
     document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
     document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
+    dismissColorPickers(this.root);
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
@@ -402,11 +407,16 @@ export class BattleScreen extends Screen {
       await this.playEventAnimations(events);
       this.reactToEvents(events);
       this.refreshUI();
-      if (this.session?.phase === 'gameOver') this.finish();
+      if (this.session?.phase === 'gameOver' && this.queuedTimeoutEvents.length === 0)
+        this.finish();
     } finally {
       this.clearAnimationHandDeltas();
       this.actionAnimating = false;
       if (this.session?.phase === 'playing') this.refreshUI();
+    }
+    if (this.queuedTimeoutEvents.length > 0) {
+      const timeoutEvents = this.queuedTimeoutEvents.splice(0);
+      await this.afterAction(timeoutEvents);
     }
   }
 
@@ -806,7 +816,8 @@ export class BattleScreen extends Screen {
       if (this.hearthSelection.selectedCardIds.has(id)) {
         this.hearthSelection.selectedCardIds.delete(id);
       } else if (
-        this.hearthSelection.selectedCardIds.size < activeSelectionEffect.targeting.count
+        this.hearthSelection.selectedCardIds.size <
+        this.giftSelectionCount(activeSelectionEffect.targeting)
       ) {
         this.hearthSelection.selectedCardIds.add(id);
       }
@@ -827,6 +838,8 @@ export class BattleScreen extends Screen {
         targeting?.type === 'ownUnoCards'
           ? requiredOwnUnoCardCount(targeting, this.session.state.players[0]!.hand.length)
           : null;
+      const giftTargetCount =
+        targeting?.type === 'giveCards' ? this.giftSelectionCount(targeting) : null;
       if (targeting?.type === 'ownUnoCards' && ownUnoTargetCount === 0) {
         this.playHearthCard(id, undefined, undefined, undefined, position);
         return;
@@ -851,7 +864,9 @@ export class BattleScreen extends Screen {
           targeting.type === 'enemyPlayer'
             ? `已选 ${effect.name}：点击发光的对手英雄`
             : targeting.type === 'giveCards'
-              ? `已选 ${effect.name}：先选择 ${targeting.count} 张自己的手牌，再点击对手`
+              ? giftTargetCount === 0
+                ? `已选 ${effect.name}：手牌数量不超过 ${targeting.count} 张，将自动全部赠送；请点击对手`
+                : `已选 ${effect.name}：先选择 ${giftTargetCount} 张自己的手牌，再点击对手`
               : targeting.type === 'minion'
                 ? `已选 ${effect.name}：点击发光的场上随从`
                 : targeting.type === 'players'
@@ -1005,11 +1020,13 @@ export class BattleScreen extends Screen {
         player !== 0 &&
         (effect?.targeting?.type === 'enemyPlayer' || effect?.targeting?.type === 'giveCards')
       ) {
+        const requiredGiftCards =
+          effect.targeting.type === 'giveCards' ? this.giftSelectionCount(effect.targeting) : null;
         if (
           effect.targeting.type === 'giveCards' &&
-          this.hearthSelection.selectedCardIds.size !== effect.targeting.count
+          this.hearthSelection.selectedCardIds.size !== requiredGiftCards
         ) {
-          this.setStatus(`请先选择 ${effect.targeting.count} 张要赠送的手牌`);
+          this.setStatus(`请先选择 ${requiredGiftCards} 张要赠送的手牌`);
           return;
         }
         this.playHearthCard(this.hearthSelection.cardId, [player]);
@@ -1135,6 +1152,12 @@ export class BattleScreen extends Screen {
     } else {
       this.setStatus(`✗ ${r.error}`);
     }
+  }
+
+  private giftSelectionCount(targeting: Extract<HearthTargeting, { type: 'giveCards' }>): number {
+    const player = this.session?.state.players[0];
+    const available = player ? player.hand.length + Math.max(0, player.hearthHand.length - 1) : 0;
+    return requiredGiveCardCount(targeting, available);
   }
 
   private cancelTargeting(announce = true): boolean {
@@ -1288,7 +1311,9 @@ export class BattleScreen extends Screen {
         targeting?.type === 'ownUnoCards'
           ? [...p.hand.map((card) => card.id), this.hearthSelection.cardId]
           : targeting?.type === 'giveCards'
-            ? [...p.hand.map((card) => card.id), ...p.hearthHand.map((card) => card.id)]
+            ? this.giftSelectionCount(targeting) === 0
+              ? [this.hearthSelection.cardId]
+              : [...p.hand.map((card) => card.id), ...p.hearthHand.map((card) => card.id)]
             : [this.hearthSelection.cardId]
       );
     } else if (this.unoTargetCardId) {
@@ -1337,7 +1362,9 @@ export class BattleScreen extends Screen {
             if (targeting?.type === 'players') return true;
             if (targeting?.type === 'enemyPlayer') return true;
             if (targeting?.type === 'giveCards') {
-              return this.hearthSelection.selectedCardIds.size === targeting.count;
+              return (
+                this.hearthSelection.selectedCardIds.size === this.giftSelectionCount(targeting)
+              );
             }
             return false;
           })())
@@ -1503,9 +1530,10 @@ export class BattleScreen extends Screen {
   }
 
   private expireLocalTurn(): void {
+    const waitingForReveal = Boolean(this.revealDialog?.open);
     if (
       this.timeoutResolving ||
-      this.actionAnimating ||
+      (this.actionAnimating && !waitingForReveal) ||
       !this.session ||
       this.session.phase === 'gameOver'
     )
@@ -1514,6 +1542,7 @@ export class BattleScreen extends Screen {
     const events: GameEvent[] = [];
     const state = this.session.state;
     const current = state.turn;
+    const turnSerial = state.turnSerial;
     const player = state.players[current]!;
     if (player.roulettePending) {
       const colors = ['red', 'yellow', 'green', 'blue'] as const;
@@ -1534,11 +1563,21 @@ export class BattleScreen extends Screen {
       });
       if (oracle.ok) events.push(...oracle.events);
     }
-    if (!events.some((event) => event.type === 'gameOver')) {
-      const ended = storyDispatch(this.session, { type: 'endTurn', player: state.turn });
+    if (isSameActiveTurn(state, current, turnSerial)) {
+      const ended = storyDispatch(this.session, { type: 'endTurn', player: current });
       if (ended.ok) events.push(...ended.events);
     }
+    this.cancelTargeting(false);
+    dismissColorPickers(this.root);
     this.setStatus(`玩家 ${current + 1} 回合达到 2 分钟上限，已自动结束`);
+    if (waitingForReveal) {
+      // The current animation is awaiting this dialog promise. Queue the
+      // authoritative timeout events first, then release that animation chain.
+      this.queuedTimeoutEvents.push(...events);
+      if (this.revealDialog?.open) this.revealDialog.close('timed-out');
+      this.timeoutResolving = false;
+      return;
+    }
     if (events.length > 0) {
       void this.afterAction(events).finally(() => {
         this.timeoutResolving = false;
@@ -1651,6 +1690,8 @@ export class BattleScreen extends Screen {
               this.session?.state.players[0]?.hand.length ?? 0
             )
           : null;
+      const giftTargetCount =
+        effect.targeting.type === 'giveCards' ? this.giftSelectionCount(effect.targeting) : null;
       const copy = this.el('span', 'targeting-copy');
       copy.append(
         this.el('strong', undefined, `已选：${effect.name}`),
@@ -1660,7 +1701,9 @@ export class BattleScreen extends Screen {
           effect.targeting.type === 'enemyPlayer'
             ? '点击带蓝色符文的对手头像'
             : effect.targeting.type === 'giveCards'
-              ? `选择自己的任意手牌 ${this.hearthSelection.selectedCardIds.size}/${effect.targeting.count}；选满后点击对手头像`
+              ? giftTargetCount === 0
+                ? `当前可选牌不超过 ${effect.targeting.count} 张，将自动赠送全部；点击对手头像`
+                : `选择自己的任意手牌 ${this.hearthSelection.selectedCardIds.size}/${giftTargetCount}；选满后点击对手头像`
               : effect.targeting.type === 'minion'
                 ? effect.targeting.side === 'friendly'
                   ? '点击带红色目标环的己方随从'

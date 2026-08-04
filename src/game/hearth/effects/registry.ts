@@ -10,16 +10,24 @@ export type HearthTargeting =
       includeSelf: boolean;
       requireMinions?: boolean;
     }
-  | { type: 'ownUnoCards'; count: number; useAllWhenAtMostCount?: boolean }
+  | { type: 'ownUnoCards'; count: number }
   | { type: 'giveCards'; count: number }
   | { type: 'minion'; count: 1; side: 'friendly' | 'enemy' | 'any' };
 
-/** 需要玩家手动选择的己方 UNO 数量；牌数不超过上限时可由规则层自动使用全部手牌。 */
+/** 只有可选 UNO 多于牌面数量时才需手动选择；否则规则层自动使用全部。 */
 export function requiredOwnUnoCardCount(
   targeting: Extract<HearthTargeting, { type: 'ownUnoCards' }>,
   available: number
 ): number {
-  return targeting.useAllWhenAtMostCount && available <= targeting.count ? 0 : targeting.count;
+  return available <= targeting.count ? 0 : targeting.count;
+}
+
+/** 只有可选混合手牌多于牌面数量时才需手动选择。 */
+export function requiredGiveCardCount(
+  targeting: Extract<HearthTargeting, { type: 'giveCards' }>,
+  available: number
+): number {
+  return available <= targeting.count ? 0 : targeting.count;
 }
 
 export type HearthKeywordId =

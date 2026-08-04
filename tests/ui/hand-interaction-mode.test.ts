@@ -58,3 +58,25 @@ describe('shared hand selection mode', () => {
     expect(resolveHandCardOutline(false, false).visible).toBe(false);
   });
 });
+
+test('所有回合内交互在超时或权威回合变更时都会被清理', async () => {
+  const localSource = await Bun.file(
+    new URL('../../src/ui/screens/BattleScreen.ts', import.meta.url)
+  ).text();
+  const multiplayerSource = await Bun.file(
+    new URL('../../src/ui/screens/MultiplayerBattleScreen.ts', import.meta.url)
+  ).text();
+  const localTimeout = localSource.slice(
+    localSource.indexOf('private expireLocalTurn'),
+    localSource.indexOf('private reactToEvents')
+  );
+  const multiplayerSnapshot = multiplayerSource.slice(
+    multiplayerSource.indexOf('private applySnapshot'),
+    multiplayerSource.indexOf('private playHeroEmoteSideChannel')
+  );
+
+  expect(localTimeout).toContain('this.cancelTargeting(false)');
+  expect(localTimeout).toContain('dismissColorPickers(this.root)');
+  expect(multiplayerSnapshot).toContain('this.cancelTargeting(false)');
+  expect(multiplayerSnapshot).toContain('dismissColorPickers(this.root)');
+});

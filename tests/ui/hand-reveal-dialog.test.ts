@@ -15,3 +15,10 @@ test('窥镜只有点击确认后才返回选择，确认后无需等待结束�
     discardCardId: 'discard',
   });
 });
+
+test('窥镜确认键会提交对话框表单', async () => {
+  const source = await Bun.file(
+    new URL('../../src/ui/screens/HandRevealDialog.ts', import.meta.url)
+  ).text();
+  expect(source).toContain("confirm.type = 'submit'");
+});

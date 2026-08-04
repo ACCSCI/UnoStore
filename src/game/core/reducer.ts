@@ -5,6 +5,7 @@ import {
   getEffect,
   hearthCardCost,
   minionHasTaunt,
+  requiredGiveCardCount,
   requiredOwnUnoCardCount,
 } from '../hearth/effects/registry';
 import { DEFAULT_HERO_ID, getHero, getHeroEmote, type HeroId } from '../heroes';
@@ -496,19 +497,6 @@ export function hearthPlayError(state: GameState, player: number, cardIdx: numbe
         : `至少需要 ${targeting.count} 名可选的活跃英雄`;
     }
   }
-  if (
-    targeting?.type === 'ownUnoCards' &&
-    !targeting.useAllWhenAtMostCount &&
-    p.hand.length < targeting.count
-  ) {
-    return `自己的 UNO 手牌不足 ${targeting.count} 张`;
-  }
-  if (
-    targeting?.type === 'giveCards' &&
-    p.hand.length + p.hearthHand.length - 1 < targeting.count
-  ) {
-    return `除这张法术外，自己的手牌不足 ${targeting.count} 张`;
-  }
   if (targeting?.type === 'minion') {
     const available = state.players.flatMap((entry, owner) =>
       entry.active &&
@@ -542,6 +530,7 @@ function playHearthAction(
     effect.targeting ??
     (effect.requiresTarget ? { type: 'enemyPlayer' as const, count: 1 as const } : null);
   let resolvedUnoCardIds = action.unoCardIds;
+  let resolvedCardIds = action.cardIds;
   if (targeting?.type === 'enemyPlayer' || targeting?.type === 'giveCards') {
     const targets = [...new Set(action.targets ?? [])];
     if (
@@ -577,7 +566,7 @@ function playHearthAction(
     if (selected.length !== requiredCount || selected.some((id) => !handIds.has(id))) {
       return { ok: false, error: `必须从自己的手牌中选择 ${requiredCount} 张 UNO 牌` };
     }
-    if (targeting.useAllWhenAtMostCount && p.hand.length <= targeting.count) {
+    if (requiredCount === 0) {
       resolvedUnoCardIds = p.hand.map((uno) => uno.id);
     }
   }
@@ -587,9 +576,11 @@ function playHearthAction(
       ...p.hand.map((uno) => uno.id),
       ...p.hearthHand.filter((entry) => entry.id !== card.id).map((entry) => entry.id),
     ]);
-    if (selected.length !== targeting.count || selected.some((id) => !handIds.has(id))) {
-      return { ok: false, error: `必须从自己的手牌中选择 ${targeting.count} 张牌` };
+    const requiredCount = requiredGiveCardCount(targeting, handIds.size);
+    if (selected.length !== requiredCount || selected.some((id) => !handIds.has(id))) {
+      return { ok: false, error: `必须从自己的手牌中选择 ${requiredCount} 张牌` };
     }
+    if (requiredCount === 0) resolvedCardIds = [...handIds];
   }
   if (effect.requiresColor && !['red', 'yellow', 'green', 'blue'].includes(action.color ?? '')) {
     return { ok: false, error: '必须选择红、黄、绿、蓝中的一种颜色' };
@@ -656,7 +647,7 @@ function playHearthAction(
       createEffectContext(state, rng, action.player, events, {
         targets: action.targets,
         unoCardIds: resolvedUnoCardIds,
-        cardIds: action.cardIds,
+        cardIds: resolvedCardIds,
         targetMinionId: action.targetMinionId,
         color: action.color,
         sourceMinionId: minionId,
@@ -669,7 +660,7 @@ function playHearthAction(
       createEffectContext(state, rng, action.player, events, {
         targets: action.targets,
         unoCardIds: resolvedUnoCardIds,
-        cardIds: action.cardIds,
+        cardIds: resolvedCardIds,
         targetMinionId: action.targetMinionId,
         color: action.color,
       })
