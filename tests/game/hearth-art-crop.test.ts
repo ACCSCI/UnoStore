@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { hearthArtCoverCrop } from '../../src/ui/scene/HearthCardRenderer';
+import { hearthArtCoverCrop, hearthArtVerticalOffset } from '../../src/ui/scene/HearthCardRenderer';
 
 test('竖版炉石立绘按 cover 裁切并完整铺满椭圆窗', () => {
   const crop = hearthArtCoverCrop(768, 1024, 348, 317, 0.5, 0.34);
@@ -27,4 +27,9 @@ test('带圆形留白的立绘可通过放大裁切把底色移出椭圆窗', ()
   expect(overscanned.sh).toBeLessThan(regular.sh);
   expect(overscanned.sw / overscanned.sh).toBeCloseTo(348 / 317, 8);
   expect(overscanned.sx).toBeGreaterThan(0);
+});
+
+test('血铸巨匠在椭圆窗内下移，为贴顶的头部保留安全区', () => {
+  expect(hearthArtVerticalOffset('bloodforgeColossus', 704)).toBeCloseTo(19.712, 6);
+  expect(hearthArtVerticalOffset('stormDrake', 704)).toBe(0);
 });

@@ -67,10 +67,16 @@ type ArtCrop = {
   sh: number;
 };
 
-const ART_CROP_OVERRIDES: Record<string, { x: number; y: number; zoom?: number }> = {
+const ART_CROP_OVERRIDES: Record<
+  string,
+  { x: number; y: number; zoom?: number; offsetY?: number; backdrop?: string }
+> = {
   // These restored illustrations contain a baked circular matte. A small overscan keeps that
   // matte outside the card's wider oval window instead of leaving white wedges at its sides.
   bloodboundTitan: { x: 0.5, y: 0.38, zoom: 1.08 },
+  // The source portrait touches the top edge. Lower it inside the oval so the helmet is not
+  // pinched by the narrow apex, and fill the small exposed cap with the artwork's warm shadow.
+  bloodforgeColossus: { x: 0.5, y: 0.34, offsetY: 0.028, backdrop: '#51231f' },
   penaltyBulwark: { x: 0.5, y: 0.34 },
   penitentChampion: { x: 0.5, y: 0.34 },
   spyglassOracle: { x: 0.5, y: 0.38, zoom: 1.1 },
@@ -92,6 +98,11 @@ export function hearthArtCoverCrop(
   const sx = Math.max(0, Math.min(sourceWidth - sw, focusX * sourceWidth - sw / 2));
   const sy = Math.max(0, Math.min(sourceHeight - sh, focusY * sourceHeight - sh / 2));
   return { sx, sy, sw, sh };
+}
+
+/** 个别源图贴近画布上缘，需要在椭圆窗中留出头部安全区。 */
+export function hearthArtVerticalOffset(effectId: string, cardHeight: number): number {
+  return cardHeight * (ART_CROP_OVERRIDES[effectId]?.offsetY ?? 0);
 }
 
 function shade(hex: string, amt: number): string {
@@ -321,8 +332,15 @@ export function drawHearthArtInWindow(
     cropOverride?.y,
     cropOverride?.zoom
   );
+  const artX = w * 0.16;
+  const artY = h * 0.085;
+  const artOffsetY = effectId ? hearthArtVerticalOffset(effectId, h) : 0;
+  if (artOffsetY > 0) {
+    ctx.fillStyle = cropOverride?.backdrop ?? '#211722';
+    ctx.fillRect(artX, artY, aw, ah);
+  }
   // cover 裁切会完整铺满椭圆窗；偏上的视觉焦点避免竖版人物被切掉头部。
-  ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, w * 0.16, h * 0.085, aw, ah);
+  ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, artX, artY + artOffsetY, aw, ah);
   ctx.restore();
   ctx.beginPath();
   ctx.ellipse(w / 2, h * 0.31, w * 0.34, h * 0.225, 0, 0, Math.PI * 2);
