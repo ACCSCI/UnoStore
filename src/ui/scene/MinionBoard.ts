@@ -21,6 +21,17 @@ type SeatAnchorResolver = (seat: number, playerCount: number) => { x: number; y:
 
 type RoutePoint = { x: number; y: number };
 
+/**
+ * 英雄攻击目标按可见界面优先级解析。本机的圆桌席位仍保留在 DOM 中，
+ * 但会被 CSS 隐藏，因此 0 号视觉席必须先指向下方的真实英雄徽记。
+ */
+export function combatHeroTargetSelectors(targetPlayer: number): string[] {
+  const tableSeat = `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`;
+  if (targetPlayer === 0) return ['.player-hero .player-crest', tableSeat];
+  if (targetPlayer === 1) return [tableSeat, '.opponent-hero'];
+  return [tableSeat];
+}
+
 /** 屏幕空间的大圆航线近似：弧线始终偏向桌面中心，并避免退化为直线。 */
 export function attackRouteGeometry(
   from: RoutePoint,
@@ -271,15 +282,15 @@ export class MinionBoardRenderer {
   }
 
   private resolveHeroTarget(targetPlayer: number): HTMLElement | null {
+    const candidates = combatHeroTargetSelectors(targetPlayer)
+      .map((selector) => this.queryRoot.querySelector<HTMLElement>(selector))
+      .filter((candidate): candidate is HTMLElement => candidate !== null);
     return (
-      this.queryRoot.querySelector<HTMLElement>(
-        `.table-seat[data-seat="${targetPlayer}"] .seat-target-button`
+      candidates.find(
+        (candidate) => candidate.isConnected && candidate.getClientRects().length > 0
       ) ??
-      (targetPlayer === 0
-        ? this.queryRoot.querySelector<HTMLElement>('.player-hero .player-crest')
-        : targetPlayer === 1
-          ? this.queryRoot.querySelector<HTMLElement>('.opponent-hero')
-          : null)
+      candidates[0] ??
+      null
     );
   }
 
