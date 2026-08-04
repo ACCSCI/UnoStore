@@ -32,9 +32,10 @@ import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import {
   type ActivityEntry,
-  attachActivityHover,
+  appendActivityEntry,
   clearActivityHover,
   formatActivity,
+  replaceActivityEntries,
 } from './ActivityFormatter';
 import { type BattleTransport, VibeHubBattleTransport } from './BattleTransport';
 import {
@@ -43,8 +44,10 @@ import {
   pendingDrawHandCountDelta,
   renderHandCountLabel,
 } from './HandCountDelta';
+import { openHandRevealDialog } from './HandRevealDialog';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
+import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
 import { Screen } from './Screen';
 
 interface PublicPlayerState {
@@ -171,6 +174,7 @@ export class MultiplayerBattleScreen extends Screen {
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
   private turnNoticeEl: HTMLElement | null = null;
   private turnNoticeTimer: number | null = null;
+  private transientNotice: { title: string; detail: string; kind: string } | null = null;
   private workDoneTimer: number | null = null;
   private workDoneAnnouncedTurn = -1;
   private cancelUiIntegrityCheck: () => void = () => {};
@@ -1101,6 +1105,9 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderRoster(snapshot: MultiplayerSnapshot): void {
     if (!this.rosterEl) return;
+    const hoveredPlayer = this.rosterEl
+      .querySelector<HTMLElement>('.seat-target-button:hover')
+      ?.closest<HTMLElement>('.table-seat')?.dataset.player;
     clearHeroDetailHover();
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
@@ -1131,6 +1138,7 @@ export class MultiplayerBattleScreen extends Screen {
       );
       const hero = getHero(player.heroId);
       target.tabIndex = targetable || index !== snapshot.viewer ? 0 : -1;
+      let restoreHeroDetail: (() => void) | null = null;
       if (index !== snapshot.viewer) {
         const currentCost = Math.max(
           0,
@@ -1144,7 +1152,8 @@ export class MultiplayerBattleScreen extends Screen {
           'aria-label',
           `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}，${hero.name}，技能${hero.powerName}，${currentCost}费；悬停查看说明`
         );
-        attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+        const detailHover = attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+        if (hoveredPlayer === String(index)) restoreHeroDetail = detailHover.show;
       }
       const heroPortrait = new Image();
       heroPortrait.src = assetUrl(hero.portrait);
@@ -1198,6 +1207,7 @@ export class MultiplayerBattleScreen extends Screen {
       );
       item.append(target);
       this.rosterEl?.append(item);
+      restoreHeroDetail?.();
     });
     this.view?.bindSeatHudElements(
       Array.from(this.rosterEl.children).filter(
@@ -1747,6 +1757,15 @@ export class MultiplayerBattleScreen extends Screen {
         audio.playSfx(`/assets/audio/voice/minions/${event.effectId}_summon.mp3`, 0.95);
         audio.playSfx('/assets/audio/sfx/generated/minion_summon.mp3', 0.76);
         await this.view.playSummonAnimation(source, snapshot.players.length, event.effectId);
+        if (getEffect(event.effectId)?.charge) {
+          const presentation = cardPresentation(event.effectId);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            source,
+            null,
+            snapshot.players.length
+          );
+        }
       } else if (event.type === 'minionAttack') {
         audio.playSfx(`/assets/audio/voice/minions/${event.attackerEffectId}_attack.mp3`, 0.95);
         audio.playSfx('/assets/audio/sfx/generated/minion_attack_swing.mp3', 0.9);
@@ -1760,6 +1779,20 @@ export class MultiplayerBattleScreen extends Screen {
           event.counterDamage
         );
         audio.playSfx('/assets/audio/sfx/generated/minion_hit.mp3', 0.95);
+      } else if (event.type === 'minionsCleared') {
+        const effect = getEffect(event.effectId);
+        if (effect?.kind === 'minion') {
+          const presentation = cardPresentation(event.effectId);
+          audio.playSfx(soundAsset(presentation.sound), 0.74);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            source,
+            null,
+            snapshot.players.length
+          );
+        } else {
+          await this.view.animationPause(80);
+        }
       } else if (
         event.type === 'battlecry' ||
         event.type === 'deathrattle' ||
@@ -1769,7 +1802,25 @@ export class MultiplayerBattleScreen extends Screen {
         event.type === 'minionEmpowered' ||
         event.type === 'minionsEqualized'
       ) {
-        await this.view.playSpellAnimation(source, null, snapshot.players.length);
+        const effectId = 'effectId' in event ? event.effectId : undefined;
+        if (
+          (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) ||
+          (event.type === 'minionTriggered' && getEffect(event.effectId)?.massUnoDeal)
+        ) {
+          await this.view.animationPause(60);
+        } else {
+          await this.view.playSpellAnimation(source, null, snapshot.players.length, effectId);
+        }
+      } else if (event.type === 'massUnoDealt') {
+        audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.8);
+        await this.view.playMassUnoDealAnimation(
+          event.targets.map((target) => this.visualSeat(target, snapshot)),
+          event.countPerTarget,
+          snapshot.players.length
+        );
+      } else if (event.type === 'drawPenalty' && event.groupEffectId) {
+        // 房主事件已给出完整公开目标；客户端不再为每个目标重复播放一次普通抽牌。
+        await this.view.animationPause(30);
       } else if (
         event.type === 'drawUno' ||
         event.type === 'drawPenalty' ||
@@ -1791,12 +1842,14 @@ export class MultiplayerBattleScreen extends Screen {
           event.cards,
           Boolean(event.chooseTakeAndDiscard)
         );
-        if (choice)
+        if (choice) {
           this.sendAction({
             type: 'resolveOracle',
             takeCardId: choice.takeCardId,
             discardCardId: choice.discardCardId,
           });
+          this.setStatus('窥镜选择已确认，正在由房主立即结算');
+        }
       } else if (event.type === 'turnStart') {
         if (event.drawUno) await this.view.playDrawAnimation(source, snapshot.players.length);
         if (event.drawHearth) await this.view.playDrawAnimation(source, snapshot.players.length);
@@ -1883,17 +1936,13 @@ export class MultiplayerBattleScreen extends Screen {
   }
 
   private showTurnNotice(title: string, detail: string, kind: string): void {
-    if (!this.turnNoticeEl) return;
     if (this.turnNoticeTimer !== null) window.clearTimeout(this.turnNoticeTimer);
-    const icon = this.el('span', 'notice-icon', kind === 'swap' ? '↔' : '!');
-    icon.setAttribute('aria-hidden', 'true');
-    const copy = this.el('span');
-    copy.append(this.el('strong', undefined, title), this.el('small', undefined, detail));
-    this.turnNoticeEl.replaceChildren(icon, copy);
-    this.turnNoticeEl.className = `turn-notice visible ${kind}`;
+    this.transientNotice = { title, detail, kind };
+    if (this.snapshot) this.refreshPersistentNotice(this.snapshot);
     this.turnNoticeTimer = window.setTimeout(() => {
-      if (this.turnNoticeEl) this.turnNoticeEl.className = 'turn-notice';
+      this.transientNotice = null;
       this.turnNoticeTimer = null;
+      if (this.snapshot) this.refreshPersistentNotice(this.snapshot);
     }, 3600);
   }
 
@@ -1908,26 +1957,26 @@ export class MultiplayerBattleScreen extends Screen {
           detail: `玩家 ${(minePrivate.rouletteDrawer ?? 0) + 1} 将持续抽牌直到抽中你选择的颜色。`,
           kind: 'roulette' as const,
         }
-      : mine && mine.pendingDraw > 0
-        ? {
-            title: `罚抽威胁 +${mine.pendingDraw}`,
-            detail:
-              snapshot.turn === snapshot.viewer
-                ? `只能叠加 +${minePrivate.pendingDrawMin} 或更大的罚抽牌，否则结束回合接受全部罚牌。`
-                : `罚抽链正在传向你，最低需要 +${minePrivate.pendingDrawMin} 才能反击。`,
-            kind: 'penalty' as const,
-          }
+      : mine
+        ? penaltyTurnNotice(
+            mine.pendingDraw,
+            minePrivate.pendingDrawMin,
+            snapshot.turn === snapshot.viewer
+          )
         : null;
-    this.turnNoticeEl.className = `turn-notice${persistent ? ` visible ${persistent.kind}` : ''}`;
-    if (persistent) {
-      const icon = this.el('span', 'notice-icon', '!');
+    const notice = resolveTurnNotice(persistent, this.transientNotice);
+    this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
+    if (notice) {
+      const icon = this.el('span', 'notice-icon', notice.kind === 'swap' ? '↔' : '!');
       icon.setAttribute('aria-hidden', 'true');
       const copy = this.el('span');
       copy.append(
-        this.el('strong', undefined, persistent.title),
-        this.el('small', undefined, persistent.detail)
+        this.el('strong', undefined, notice.title),
+        this.el('small', undefined, notice.detail)
       );
       this.turnNoticeEl.replaceChildren(icon, copy);
+    } else {
+      this.turnNoticeEl.replaceChildren();
     }
   }
 
@@ -1938,19 +1987,13 @@ export class MultiplayerBattleScreen extends Screen {
     );
     if (!entry) return;
     this.activityEntries.push(entry);
-    this.renderActivityLedger();
+    if (this.activityEntries.length > 80) this.activityEntries.shift();
+    if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
   }
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
-    clearActivityHover();
-    this.activityLedgerEl.replaceChildren();
-    for (const entry of this.activityEntries.slice(-80)) {
-      const item = this.el('li', undefined, entry.text);
-      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
-      this.activityLedgerEl.append(item);
-    }
-    this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
+    replaceActivityEntries(this.activityLedgerEl, this.activityEntries);
   }
 
   private visualSeat(globalPlayer: number, snapshot: MultiplayerSnapshot): number {
@@ -2017,101 +2060,13 @@ export class MultiplayerBattleScreen extends Screen {
     cards: Array<{ id: string; color: string | null; value: string }>,
     choose = false
   ): Promise<{ takeCardId: string; discardCardId: string } | null> {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'hand-reveal-dialog';
-    dialog.setAttribute('aria-labelledby', 'multiplayer-hand-reveal-title');
-    const header = this.el('header');
-    const copy = this.el('div');
-    const title = this.el('h2', undefined, `窥镜：玩家 ${targetPlayer + 1} 的手牌`);
-    title.id = 'multiplayer-hand-reveal-title';
-    copy.append(
-      title,
-      this.el(
-        'p',
-        undefined,
-        choose
-          ? `随机展示 ${cards.length} 张：选择拿走 1 张，并选择另 1 张弃掉。`
-          : `随机展示 ${cards.length} 张；确认后关闭情报。`
-      )
-    );
-    const toggle = this.btn('隐藏窥镜', () => {}, 'hand-reveal-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    toggle.onclick = () => {
-      const observing = dialog.classList.toggle('is-observing');
-      toggle.textContent = observing ? '显示窥镜' : '隐藏窥镜';
-      toggle.setAttribute('aria-expanded', String(!observing));
-      toggle.setAttribute(
-        'aria-label',
-        observing ? '重新显示窥镜决策界面' : '隐藏窥镜界面以观察牌桌'
-      );
-    };
-    header.append(copy, toggle);
-    const list = this.el('div', 'hand-reveal-cards');
-    let take = '';
-    let discard = '';
-    const optionButtons: HTMLButtonElement[] = [];
-    const cardWrappers = new Map<string, HTMLElement>();
-    const confirm = this.btn(choose ? '确认拿取与弃置' : '确认情报', () => {});
-    confirm.disabled = choose;
-    const updateChoices = (): void => {
-      for (const [cardId, wrapper] of cardWrappers) {
-        wrapper.classList.toggle('is-selected', cardId === take || cardId === discard);
-      }
-      for (const button of optionButtons) {
-        const selected =
-          (button.dataset.choice === 'take' && button.dataset.cardId === take) ||
-          (button.dataset.choice === 'discard' && button.dataset.cardId === discard);
-        button.classList.toggle('selected', selected);
-        button.setAttribute('aria-pressed', String(selected));
-      }
-      confirm.disabled = choose && !(take && discard);
-    };
-    for (const card of cards) {
-      const wrap = this.el('div', 'hand-reveal-card');
-      cardWrappers.set(card.id, wrap);
-      const image = new Image();
-      image.src = unoCardDataURL(card as UnoCard);
-      image.alt = `${card.color ?? '四色'} ${card.value}`;
-      wrap.append(image);
-      if (choose) {
-        const takeButton = this.btn('拿走', () => {
-          take = card.id;
-          if (discard === card.id) discard = '';
-          updateChoices();
-        });
-        takeButton.dataset.cardId = card.id;
-        takeButton.dataset.choice = 'take';
-        const discardButton = this.btn('弃掉', () => {
-          discard = card.id;
-          if (take === card.id) take = '';
-          updateChoices();
-        });
-        discardButton.dataset.cardId = card.id;
-        discardButton.dataset.choice = 'discard';
-        optionButtons.push(takeButton, discardButton);
-        wrap.append(takeButton, discardButton);
-      }
-      list.append(wrap);
-    }
-    updateChoices();
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    confirm.type = 'submit';
-    form.append(confirm);
-    dialog.append(header, list, form);
-    this.root.append(dialog);
-    return new Promise((resolve) => {
-      dialog.addEventListener('cancel', (event) => event.preventDefault());
-      dialog.addEventListener(
-        'close',
-        () => {
-          dialog.remove();
-          resolve(choose && take && discard ? { takeCardId: take, discardCardId: discard } : null);
-        },
-        { once: true }
-      );
-      dialog.showModal();
-    });
+    return openHandRevealDialog({
+      root: this.root,
+      title: `窥镜：玩家 ${targetPlayer + 1} 的手牌`,
+      cards: cards as Array<Pick<UnoCard, 'id' | 'color' | 'value'>>,
+      chooseTakeAndDiscard: choose,
+      formatCard: (card) => `${card.color ?? '四色'} ${card.value}`,
+    }).result;
   }
 
   private isSnapshot(value: unknown): value is MultiplayerSnapshot {
@@ -2180,6 +2135,7 @@ export class MultiplayerBattleScreen extends Screen {
     document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
     document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause?.unbind();
+    clearActivityHover();
     clearHeroDetailHover();
     this.view?.dispose();
     const net = this.transport;

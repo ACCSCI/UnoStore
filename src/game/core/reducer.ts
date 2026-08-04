@@ -277,6 +277,8 @@ function playUnoAction(
     state.unoDiscard.push(card);
   }
   state.topCard = card;
+  let penaltyTarget: number | null = null;
+  const shieldsBefore = state.players.map((player) => player.shield);
   if (card.color !== null && /^\d$/.test(card.value)) {
     crystal = unoCrystalValue(card.value);
     p.frozen += crystal; // 冻结（本回合不可用，回合结束解冻）
@@ -285,22 +287,29 @@ function playUnoAction(
     else if (card.value === '0') passHands(state, action.player, events);
   } else {
     // 功能牌：不产水晶
-    applyUnoAction(state, action.player, card.value as UnoAction, action.color, stackedPenalty);
+    penaltyTarget = applyUnoAction(
+      state,
+      action.player,
+      card.value as UnoAction,
+      action.color,
+      stackedPenalty
+    );
   }
   const penaltyAdded = drawStackValue(card);
-  const penaltyTarget =
-    penaltyAdded > 0 ? state.players.findIndex((entry) => entry.pendingDrawMin > 0) : -1;
+  const penaltyPrevented =
+    penaltyTarget !== null && shieldsBefore[penaltyTarget]! > state.players[penaltyTarget]!.shield;
   events.push({
     type: 'unoPlayed',
     player: action.player,
     cardId: card.id,
     card: { id: card.id, color: card.color, value: card.value },
     crystalFrozen: crystal,
-    ...(penaltyTarget >= 0
+    ...(penaltyAdded > 0 && penaltyTarget !== null
       ? {
           penaltyTarget,
           penaltyAdded,
           penaltyTransferred: stackedPenalty,
+          ...(penaltyPrevented ? { penaltyPrevented: true } : {}),
         }
       : {}),
   });
@@ -337,8 +346,9 @@ function applyUnoAction(
   action: UnoAction,
   color?: UnoCard['color'],
   stackedPenalty = 0
-): void {
+): number | null {
   if (state.topCard.color !== null) state.chosenColor = state.topCard.color;
+  let penaltyTarget: number | null = null;
   switch (action) {
     case 'skip':
       state.skipQueue.push(1);
@@ -350,11 +360,13 @@ function applyUnoAction(
       state.log.push(`玩家 ${player} 打出反转`);
       break;
     case 'draw2':
-      addPenalty(state, nextActiveFrom(state, state.turn), stackedPenalty + 2, 2);
+      penaltyTarget = nextActiveFrom(state, state.turn);
+      addPenalty(state, penaltyTarget, stackedPenalty + 2, 2);
       state.log.push(`玩家 ${player} 打出 +2，累计罚抽 ${stackedPenalty + 2}`);
       break;
     case 'draw4':
-      addPenalty(state, nextActiveFrom(state, state.turn), stackedPenalty + 4, 4);
+      penaltyTarget = nextActiveFrom(state, state.turn);
+      addPenalty(state, penaltyTarget, stackedPenalty + 4, 4);
       state.log.push(`玩家 ${player} 打出彩色 +4，累计罚抽 ${stackedPenalty + 4}`);
       break;
     case 'wild':
@@ -363,7 +375,8 @@ function applyUnoAction(
       break;
     case 'wildDraw4':
       state.chosenColor = color ?? null;
-      addPenalty(state, nextActiveFrom(state, state.turn), stackedPenalty + 4, 4);
+      penaltyTarget = nextActiveFrom(state, state.turn);
+      addPenalty(state, penaltyTarget, stackedPenalty + 4, 4);
       state.log.push(`玩家 ${player} 打出 +4，累计罚抽 ${stackedPenalty + 4}`);
       break;
     case 'wildReverseDraw4': {
@@ -373,18 +386,21 @@ function applyUnoAction(
         state.players.filter((entry) => entry.active).length === 2 && stackedPenalty === 0;
       if (twoPlayerOpening) state.skipQueue.push(1);
       const target = twoPlayerOpening ? player : nextActiveFrom(state, state.turn);
+      penaltyTarget = target;
       addPenalty(state, target, stackedPenalty + 4, 4);
       state.log.push(`玩家 ${player} 打出反转 +4，方向反转，累计罚抽 ${stackedPenalty + 4}`);
       break;
     }
     case 'wildDraw6':
       state.chosenColor = color ?? null;
-      addPenalty(state, nextActiveFrom(state, state.turn), stackedPenalty + 6, 6);
+      penaltyTarget = nextActiveFrom(state, state.turn);
+      addPenalty(state, penaltyTarget, stackedPenalty + 6, 6);
       state.log.push(`玩家 ${player} 打出 +6，累计罚抽 ${stackedPenalty + 6}`);
       break;
     case 'wildDraw10':
       state.chosenColor = color ?? null;
-      addPenalty(state, nextActiveFrom(state, state.turn), stackedPenalty + 10, 10);
+      penaltyTarget = nextActiveFrom(state, state.turn);
+      addPenalty(state, penaltyTarget, stackedPenalty + 10, 10);
       state.log.push(`玩家 ${player} 打出 +10，累计罚抽 ${stackedPenalty + 10}`);
       break;
     case 'wildColorRoulette': {
@@ -411,6 +427,7 @@ function applyUnoAction(
       state.log.push(`玩家 ${player} 打出同色清场`);
       break;
   }
+  return penaltyTarget;
 }
 
 /** No Mercy 7：出牌者必须与指定活跃玩家交换剩余 UNO 手牌。 */
@@ -599,6 +616,11 @@ function playHearthAction(
     return { ok: false, error: '无效的随从放置位置' };
   }
   p.free -= cost;
+  const targetedMinion = action.targetMinionId
+    ? state.players
+        .flatMap((player, owner) => player.board.map((minion) => ({ minion, owner })))
+        .find(({ minion }) => minion.id === action.targetMinionId)
+    : undefined;
   p.hearthHand.splice(action.cardIdx, 1);
   const events: GameEvent[] = [];
   if (effect.kind === 'minion') {
@@ -627,7 +649,7 @@ function playHearthAction(
       health,
       position,
     });
-    if (effect.targeting) {
+    if (effect.battlecry || effect.targeting || effect.requiresColor || effect.boardClear) {
       events.push({ type: 'battlecry', player: action.player, minionId, effectId: effect.id });
     }
     effect.apply(
@@ -640,6 +662,7 @@ function playHearthAction(
         sourceMinionId: minionId,
       })
     );
+    applyBoardClearEffect(state, rng, effect, action.player, minionId, events);
   } else {
     p.hearthPile.push(card);
     effect.apply(
@@ -651,6 +674,7 @@ function playHearthAction(
         color: action.color,
       })
     );
+    applyBoardClearEffect(state, rng, effect, action.player, undefined, events);
   }
   // 炉石效果也可能弃光 UNO；胜利条件与从手中打出最后一张 UNO 完全一致。
   if (p.active && p.hand.length === 0 && state.phase !== 'gameOver') {
@@ -667,6 +691,12 @@ function playHearthAction(
     cost,
     ...(action.targets ? { targets: action.targets } : {}),
     ...(action.targetMinionId ? { targetMinionId: action.targetMinionId } : {}),
+    ...(targetedMinion
+      ? {
+          targetMinionEffectId: targetedMinion.minion.effectId,
+          targetMinionOwner: targetedMinion.owner,
+        }
+      : {}),
   };
   events.unshift(playedEvent);
   state.pendingEvents.push(...events);
@@ -694,12 +724,15 @@ function attackMinionAction(
 
   const events: GameEvent[] = [];
   const attackDamage = attacker.attack;
+  const attackerHealthBefore = attacker.health;
   let drawCount = 0;
   let discardCount = 0;
   const defender = action.targetMinionId
     ? targetPlayer.board.find((minion) => minion.id === action.targetMinionId)
     : undefined;
   if (action.targetMinionId && !defender) return { ok: false, error: '找不到目标随从' };
+  const targetHealthBefore = defender?.health;
+  const targetMinionEffectId = defender?.effectId;
   const hasTaunt = targetPlayer.board.some((minion) => minionHasTaunt(minion));
   if (hasTaunt && !(defender && minionHasTaunt(defender))) {
     return { ok: false, error: '必须先攻击嘲讽随从' };
@@ -762,6 +795,11 @@ function attackMinionAction(
     attackDamage,
     ...(defender ? { counterDamage: defender.attack } : {}),
     drawCount,
+    ...(targetMinionEffectId ? { targetMinionEffectId } : {}),
+    attackerHealthBefore,
+    attackerHealthAfter: Math.max(0, attacker.health),
+    ...(targetHealthBefore !== undefined ? { targetHealthBefore } : {}),
+    ...(defender ? { targetHealthAfter: Math.max(0, defender.health) } : {}),
     ...(discardCount > 0 ? { discardCount } : {}),
   };
   events.unshift(attackEvent);
@@ -790,8 +828,8 @@ function createEffectContext(
     source,
     events,
     rng,
-    forceUnoDraw: (player, count, reason) =>
-      resolveForcedUnoDraw(state, rng, player, count, events, reason),
+    forceUnoDraw: (player, count, reason, groupEffectId) =>
+      resolveForcedUnoDraw(state, rng, player, count, events, reason, groupEffectId),
     sourceIndex: () => {
       const minionId = extras.sourceMinionId;
       if (!minionId) return -1;
@@ -803,7 +841,7 @@ function createEffectContext(
 
 /**
  * 罚抽结算统一入口（addPenalty 只是入账）：
- * 护盾优先抵消 → 代罚随从（absorbsPenalty）承受等量伤害（过量不回流）→ 才真正抽牌。
+ * 护盾优先抵消一整次罚抽 → 代罚随从（absorbsPenalty）承受等量伤害（过量不回流）→ 才真正抽牌。
  * UNO 罚抽链、被抓 UNO、炉石罚抽效果、随从直击全部汇集到这里拦截。
  */
 function resolveForcedUnoDraw(
@@ -812,14 +850,15 @@ function resolveForcedUnoDraw(
   player: number,
   count: number,
   events: GameEvent[],
-  reason: string
+  reason: string,
+  groupEffectId?: string
 ): number {
   const target = state.players[player];
   if (!(target?.active && count > 0)) return 0;
   if (target.shield > 0) {
     target.shield -= 1;
     events.push({ type: 'penaltyPrevented', player, amount: count, reason: '护盾' });
-    state.log.push(`玩家 ${player} 的护盾抵消 ${reason}：${count} 张`);
+    state.log.push(`玩家 ${player} 的护盾抵消一整次${reason}罚抽（原本 ${count} 张）`);
     return 0;
   }
   const absorber = target.board.find((minion) => getEffect(minion.effectId)?.absorbsPenalty);
@@ -843,10 +882,44 @@ function resolveForcedUnoDraw(
     player,
     count: drawn.length,
     cardIds: drawn.map((card) => card.id),
+    ...(groupEffectId ? { groupEffectId } : {}),
   });
   state.log.push(`玩家 ${player} 因${reason}强制抽取 ${drawn.length} 张 UNO`);
   applyMercyRule(state, events);
   return drawn.length;
+}
+
+/** 声明式群体发牌：先公开全部实际目标，再逐个走统一罚抽入口结算护盾与代罚。 */
+function applyMassUnoDealEffect(
+  state: GameState,
+  rng: Rng,
+  owner: number,
+  effect: NonNullable<ReturnType<typeof getEffect>>,
+  events: GameEvent[]
+): void {
+  const deal = effect.massUnoDeal;
+  if (!deal) return;
+  const targets = state.players.flatMap((player, index) =>
+    index !== owner && player.active ? [index] : []
+  );
+  events.push({
+    type: 'massUnoDealt',
+    player: owner,
+    effectId: effect.id,
+    targets,
+    countPerTarget: deal.countPerTarget,
+  });
+  for (const target of targets) {
+    resolveForcedUnoDraw(
+      state,
+      rng,
+      target,
+      deal.countPerTarget,
+      events,
+      `${effect.name}的群体发牌效果`,
+      effect.id
+    );
+  }
 }
 
 function runMinionTrigger(
@@ -861,7 +934,8 @@ function runMinionTrigger(
     if (!state.players[player]!.board.some((entry) => entry.id === minion.id)) continue;
     const effect = getEffect(minion.effectId);
     const hook = trigger === 'turnStart' ? effect?.onTurnStart : effect?.onTurnEnd;
-    if (!hook) continue;
+    const massDeal = effect?.massUnoDeal?.trigger === trigger;
+    if (!(hook || massDeal)) continue;
     events.push({
       type: 'minionTriggered',
       player,
@@ -869,7 +943,8 @@ function runMinionTrigger(
       effectId: minion.effectId,
       trigger,
     });
-    hook(createEffectContext(state, rng, player, events, { sourceMinionId: minion.id }));
+    if (massDeal) applyMassUnoDealEffect(state, rng, player, effect, events);
+    hook?.(createEffectContext(state, rng, player, events, { sourceMinionId: minion.id }));
     if (state.phase === 'gameOver') return;
   }
 }
@@ -881,8 +956,10 @@ function runAnyTurnStartTriggers(state: GameState, rng: Rng, events: GameEvent[]
     if (!state.players[owner]!.active) continue;
     for (const minion of boards[owner]!) {
       if (!state.players[owner]!.board.some((entry) => entry.id === minion.id)) continue;
-      const hook = getEffect(minion.effectId)?.onAnyTurnStart;
-      if (!hook) continue;
+      const effect = getEffect(minion.effectId);
+      const hook = effect?.onAnyTurnStart;
+      const massDeal = effect?.massUnoDeal?.trigger === 'anyTurnStart';
+      if (!(hook || massDeal)) continue;
       events.push({
         type: 'minionTriggered',
         player: owner,
@@ -890,9 +967,82 @@ function runAnyTurnStartTriggers(state: GameState, rng: Rng, events: GameEvent[]
         effectId: minion.effectId,
         trigger: 'anyTurnStart',
       });
-      hook(createEffectContext(state, rng, owner, events, { sourceMinionId: minion.id }));
+      if (massDeal) applyMassUnoDealEffect(state, rng, owner, effect, events);
+      hook?.(createEffectContext(state, rng, owner, events, { sourceMinionId: minion.id }));
       if (state.phase === 'gameOver') return;
     }
+  }
+}
+
+function applyBoardClearEffect(
+  state: GameState,
+  rng: Rng,
+  effect: NonNullable<ReturnType<typeof getEffect>>,
+  source: number,
+  sourceMinionId: string | undefined,
+  events: GameEvent[]
+): void {
+  const clear = effect.boardClear;
+  if (!clear) return;
+  if (
+    clear.condition === 'noOtherFriendlyMinions' &&
+    state.players[source]!.board.some((minion) => minion.id !== sourceMinionId)
+  ) {
+    events.push({
+      type: 'minionsCleared',
+      player: source,
+      effectId: effect.id,
+      mode: clear.mode,
+      ...(clear.mode === 'damage' ? { damage: clear.damage ?? 0 } : {}),
+      conditionMet: false,
+      affected: [],
+      selfDrawback: clear.selfUnoDrawback ?? 0,
+      selfDrawn: 0,
+    });
+    return;
+  }
+  const candidates = state.players.flatMap((player, targetPlayer) =>
+    player.board.flatMap((minion) =>
+      clear.scope === 'allOther' && minion.id === sourceMinionId ? [] : [{ targetPlayer, minion }]
+    )
+  );
+  const affected = candidates.map(({ targetPlayer, minion }) => {
+    const beforeHealth = minion.health;
+    if (clear.mode === 'destroy') minion.health = 0;
+    else minion.health -= clear.damage ?? 0;
+    return {
+      targetPlayer,
+      minionId: minion.id,
+      effectId: minion.effectId,
+      beforeHealth,
+      afterHealth: Math.max(0, minion.health),
+      destroyed: minion.health <= 0,
+    };
+  });
+  const clearEvent: Extract<GameEvent, { type: 'minionsCleared' }> = {
+    type: 'minionsCleared',
+    player: source,
+    effectId: effect.id,
+    mode: clear.mode,
+    ...(clear.mode === 'damage' ? { damage: clear.damage ?? 0 } : {}),
+    conditionMet: true,
+    affected,
+    selfDrawback: clear.selfUnoDrawback ?? 0,
+    selfDrawn: 0,
+  };
+  events.push(clearEvent);
+  for (let player = 0; player < state.players.length; player++) {
+    destroyDeadMinions(state, rng, player, events);
+  }
+  if ((clear.selfUnoDrawback ?? 0) > 0) {
+    clearEvent.selfDrawn = resolveForcedUnoDraw(
+      state,
+      rng,
+      source,
+      clear.selfUnoDrawback!,
+      events,
+      `${effect.name}的副作用`
+    );
   }
 }
 
@@ -903,7 +1053,12 @@ function destroyDeadMinions(state: GameState, rng: Rng, player: number, events: 
   p.board = p.board.filter((minion) => minion.health > 0);
   for (const minion of dead) {
     p.hearthPile.push({ id: minion.cardId, effectId: minion.effectId });
-    events.push({ type: 'minionDestroyed', player, minionId: minion.id });
+    events.push({
+      type: 'minionDestroyed',
+      player,
+      minionId: minion.id,
+      effectId: minion.effectId,
+    });
     const effect = getEffect(minion.effectId);
     if (effect?.deathrattle) {
       events.push({ type: 'deathrattle', player, minionId: minion.id, effectId: minion.effectId });
@@ -1423,6 +1578,11 @@ function useHeroPowerAction(
     state.players[second]!.hand = secondUno;
     state.players[second]!.hearthHand = secondHearth;
     events.push({ type: 'handsRemixed', player: action.player, first, second });
+    for (const player of [first, second]) {
+      checkUnoAlert(state, player, events);
+      if (state.players[player]!.hand.length === 0) queueUnoWinCandidate(state, player);
+    }
+    settlePendingUnoWin(state, events);
   }
 
   applyMercyRule(state, events);

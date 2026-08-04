@@ -479,6 +479,27 @@ test('护盾抵消罚抽', () => {
   expect(s.players[1]!.shield).toBe(0);
 });
 
+test('UNO 加牌被护盾抵消时，公开事件仍保留真实目标和加牌结果', () => {
+  const s = makeState([
+    [
+      { color: 'red', value: 'draw2' },
+      { color: 'red', value: '1' },
+    ],
+  ]);
+  s.players[1]!.shield = 1;
+  const events = okEvents(dispatch(s, new Rng(2300), { type: 'playUno', player: 0, cardIdx: 0 }));
+  expect(s.players[1]!.pendingDraw).toBe(0);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: 'unoPlayed',
+      player: 0,
+      penaltyTarget: 1,
+      penaltyAdded: 2,
+      penaltyPrevented: true,
+    })
+  );
+});
+
 test('被抓 UNO 罚抽入账，护盾可当场抵消', () => {
   // 手牌 1 张且从未报 UNO：直接打出即被抓（pendingDraw 入账，不设 minimum）
   const plain = makeState([[{ color: 'red', value: '1' }]]);
@@ -573,6 +594,27 @@ test('余烬战狼拥有冲锋，放置后可以立即攻击', () => {
       targetPlayer: 1,
     }).ok
   ).toBe(true);
+});
+
+test('冲锋是通用属性：雷蹄先锋与流星枪骑召唤当回合都能立即攻击', () => {
+  for (const [index, effectId] of ['thunderhoofVanguard', 'meteorLancer'].entries()) {
+    const s = createGame(2, [effectId], 108 + index);
+    s.players[0]!.free = 10;
+    s.players[0]!.hearthHand = [hearth(`charge-${effectId}`, effectId)];
+    const beforeUno = s.players[0]!.hand.length;
+    okEvents(dispatch(s, new Rng(108 + index), { type: 'playHearth', player: 0, cardIdx: 0 }));
+    const minion = s.players[0]!.board[0]!;
+    expect(minion.effectId).toBe(effectId);
+    expect(minion.exhausted).toBe(false);
+    if (effectId === 'meteorLancer') expect(s.players[0]!.hand).toHaveLength(beforeUno + 2);
+    const attack = dispatch(s, new Rng(118 + index), {
+      type: 'attackMinion',
+      player: 0,
+      attackerId: minion.id,
+      targetPlayer: 1,
+    });
+    expect(attack.ok).toBe(true);
+  }
 });
 
 test('虹彩指挥家登场时可重新指定当前 UNO 颜色', () => {
@@ -708,18 +750,24 @@ test('窥镜先知查看对手四张牌，并从中拿一张、弃一张', () =>
   if (reveal?.type === 'handRevealed') {
     expect(reveal.cards).toHaveLength(4);
     expect(reveal.cards.every((card) => targetHand.includes(card.id))).toBe(true);
+    const turnBeforeConfirm = s.turn;
+    const takenId = reveal.cards[0]!.id;
+    const discardedId = reveal.cards[1]!.id;
     const resolve = okEvents(
       dispatch(s, new Rng(24), {
         type: 'resolveOracle',
         player: 0,
-        takeCardId: reveal.cards[0]!.id,
-        discardCardId: reveal.cards[1]!.id,
+        takeCardId: takenId,
+        discardCardId: discardedId,
       })
     );
     expect(resolve.some((event) => event.type === 'oracleResolved')).toBe(true);
     expect(s.players[0]!.hand).toHaveLength(sourceCount + 1);
     expect(s.players[2]!.hand).toHaveLength(targetHand.length - 2);
     expect(s.oraclePending).toBeNull();
+    expect(s.turn).toBe(turnBeforeConfirm);
+    expect(s.players[0]!.hand.some((card) => card.id === takenId)).toBe(true);
+    expect(s.players[2]!.hand.some((card) => card.id === discardedId)).toBe(false);
   }
 });
 
@@ -768,7 +816,7 @@ test('奥术档案抽四张炉石，水晶充能一费换下回合五水晶', ()
 });
 
 test('灾厄发牌官在拥有者回合开始时给所有敌人各塞三张 UNO', () => {
-  const s = createGame(3, ['calamityDealer'], 27);
+  const s = createGame(4, ['calamityDealer'], 27);
   s.players[0]!.board = [
     {
       id: 'dealer',
@@ -781,13 +829,29 @@ test('灾厄发牌官在拥有者回合开始时给所有敌人各塞三张 UNO'
       exhausted: true,
     },
   ];
-  s.turn = 2;
-  const before = [s.players[1]!.hand.length, s.players[2]!.hand.length];
-  const events = okEvents(dispatch(s, new Rng(27), { type: 'endTurn', player: 2 }));
+  s.players[2]!.active = false;
+  s.turn = 3;
+  const before = s.players.map((player) => player.hand.length);
+  const events = okEvents(dispatch(s, new Rng(27), { type: 'endTurn', player: 3 }));
   expect(s.turn).toBe(0);
-  expect(s.players[1]!.hand).toHaveLength(before[0]! + 3);
-  expect(s.players[2]!.hand).toHaveLength(before[1]! + 4);
+  expect(s.players[0]!.hand).toHaveLength(before[0]!);
+  expect(s.players[1]!.hand).toHaveLength(before[1]! + 3);
+  expect(s.players[2]!.hand).toHaveLength(before[2]!);
+  expect(s.players[3]!.hand).toHaveLength(before[3]! + 4);
   expect(events.some((event) => event.type === 'minionTriggered')).toBe(true);
+  expect(events).toContainEqual({
+    type: 'massUnoDealt',
+    player: 0,
+    effectId: 'calamityDealer',
+    targets: [1, 3],
+    countPerTarget: 3,
+  });
+  expect(
+    events
+      .filter((event) => event.type === 'drawPenalty')
+      .filter((event) => event.groupEffectId === 'calamityDealer')
+      .map((event) => event.player)
+  ).toEqual([1, 3]);
 });
 
 test('厄运司牌者在任意玩家回合开始时给所有敌人各塞两张 UNO', () => {
@@ -1744,6 +1808,25 @@ test('检察官洗混两名玩家的全部 UNO 与炉石手牌后完全随机分
   ]).not.toEqual([3, 7]);
 });
 
+test('检察官洗牌后任一参与者清空 UNO 都会立即获胜', () => {
+  for (const [seed, winner] of [
+    [1, 0],
+    [7, 1],
+  ] as const) {
+    const s = createGame(3, ['shield'], seed, {}, ['inspector', 'thug', 'cardMaster']);
+    s.players[0]!.free = 2;
+    s.players[0]!.hand = [{ id: `last-${seed}`, color: 'red', value: '1' }];
+    s.players[1]!.hand = [];
+    s.players[0]!.hearthHand = [];
+    s.players[1]!.hearthHand = [];
+    const events = okEvents(
+      dispatch(s, new Rng(seed), { type: 'useHeroPower', player: 0, targets: [0, 1] })
+    );
+    expect(s.phase).toBe('gameOver');
+    expect(events).toContainEqual({ type: 'gameOver', winner, reason: 'unoEmpty' });
+  }
+});
+
 test('赎罪斗士攻击时不伤害目标，改为拥有者随机弃掉等同攻击力的 UNO', () => {
   const s = createGame(2, ['penitentChampion'], 47);
   s.players[0]!.hand = Array.from({ length: 5 }, (_, index) => ({
@@ -2224,7 +2307,9 @@ test('战阵轮转按当前方向传递完整随从场并更新所有权', () =>
   expect(
     s.players.every((player, owner) => player.board.every((entry) => entry.owner === owner))
   ).toBe(true);
-  expect(events).toContainEqual({ type: 'minionBoardsPassed', player: 0, direction: 1 });
+  expect(events).toContainEqual(
+    expect.objectContaining({ type: 'minionBoardsPassed', player: 0, direction: 1 })
+  );
 });
 
 test('单骑易位要求显式选择两名有随从的英雄并各交换一个随从', () => {
@@ -2424,4 +2509,107 @@ test('效果赋予的嘲讽随从必须先被攻击', () => {
     targetMinionId: 'buffed',
   });
   expect(allowed.ok).toBe(true);
+});
+
+test('低费余烬横扫对称造成 2 点清场伤害，只消灭残血随从', () => {
+  const s = createGame(2, ['cinderSweep'], 2301);
+  s.players[0]!.free = 2;
+  s.players[0]!.hearthHand = [hearth('sweep', 'cinderSweep')];
+  const friendly = minion('friendly', 0);
+  const enemy = minion('enemy', 1);
+  enemy.health = 2;
+  s.players[0]!.board = [friendly];
+  s.players[1]!.board = [enemy];
+
+  const events = okEvents(
+    dispatch(s, new Rng(2302), { type: 'playHearth', player: 0, cardIdx: 0 })
+  );
+
+  expect(s.players[0]!.board[0]!.health).toBe(2);
+  expect(s.players[1]!.board).toHaveLength(0);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: 'minionsCleared',
+      effectId: 'cinderSweep',
+      mode: 'damage',
+      damage: 2,
+      selfDrawback: 0,
+    })
+  );
+});
+
+test('失稳新星造成中等全场伤害，并在清场后结算自己的罚抽副作用', () => {
+  const s = createGame(2, ['unstableNova'], 2311);
+  s.players[0]!.free = 4;
+  s.players[0]!.hearthHand = [hearth('nova', 'unstableNova')];
+  const survivor = minion('survivor', 0);
+  survivor.health = 7;
+  survivor.maxHealth = 7;
+  s.players[0]!.board = [survivor];
+  s.players[1]!.board = [minion('victim', 1)];
+  const handBefore = s.players[0]!.hand.length;
+
+  const events = okEvents(
+    dispatch(s, new Rng(2312), { type: 'playHearth', player: 0, cardIdx: 0 })
+  );
+  const clear = events.find(
+    (event): event is Extract<GameEvent, { type: 'minionsCleared' }> =>
+      event.type === 'minionsCleared'
+  );
+
+  expect(s.players[0]!.board[0]!.health).toBe(2);
+  expect(s.players[1]!.board).toHaveLength(0);
+  expect(s.players[0]!.hand).toHaveLength(handBefore + 2);
+  expect(clear).toMatchObject({ selfDrawback: 2, selfDrawn: 2 });
+});
+
+test('尘爆工兵只在没有其他己方随从时触发条件清场', () => {
+  const blocked = createGame(2, ['dustchargeSapper'], 2321);
+  blocked.players[0]!.free = 3;
+  blocked.players[0]!.hearthHand = [hearth('sapper-blocked', 'dustchargeSapper')];
+  blocked.players[0]!.board = [minion('ally', 0)];
+  blocked.players[1]!.board = [minion('enemy-blocked', 1)];
+  const blockedEvents = okEvents(
+    dispatch(blocked, new Rng(2322), { type: 'playHearth', player: 0, cardIdx: 0 })
+  );
+  expect(blocked.players[1]!.board[0]!.health).toBe(4);
+  expect(blockedEvents).toContainEqual(
+    expect.objectContaining({ type: 'minionsCleared', conditionMet: false, affected: [] })
+  );
+
+  const active = createGame(2, ['dustchargeSapper'], 2323);
+  active.players[0]!.free = 3;
+  active.players[0]!.hearthHand = [hearth('sapper-active', 'dustchargeSapper')];
+  const enemy = minion('enemy-active', 1);
+  enemy.health = 3;
+  active.players[1]!.board = [enemy];
+  const activeEvents = okEvents(
+    dispatch(active, new Rng(2324), { type: 'playHearth', player: 0, cardIdx: 0 })
+  );
+  expect(active.players[0]!.board.map((entry) => entry.effectId)).toEqual(['dustchargeSapper']);
+  expect(active.players[1]!.board).toHaveLength(0);
+  expect(activeEvents.some((event) => event.type === 'minionsCleared')).toBe(true);
+});
+
+test('高费终局坍缩与末日宣告者提供逆天清场，但承担大量 UNO 副作用', () => {
+  const collapse = createGame(2, ['finalCollapse'], 2331);
+  collapse.players[0]!.free = 8;
+  collapse.players[0]!.hearthHand = [hearth('collapse', 'finalCollapse')];
+  collapse.players[0]!.board = [minion('collapse-own', 0)];
+  collapse.players[1]!.board = [minion('collapse-enemy', 1)];
+  const collapseHand = collapse.players[0]!.hand.length;
+  okEvents(dispatch(collapse, new Rng(2332), { type: 'playHearth', player: 0, cardIdx: 0 }));
+  expect(collapse.players.every((player) => player.board.length === 0)).toBe(true);
+  expect(collapse.players[0]!.hand).toHaveLength(collapseHand + 5);
+
+  const herald = createGame(2, ['apocalypseHerald'], 2333);
+  herald.players[0]!.free = 9;
+  herald.players[0]!.hearthHand = [hearth('herald', 'apocalypseHerald')];
+  herald.players[0]!.board = [minion('herald-own', 0)];
+  herald.players[1]!.board = [minion('herald-enemy', 1)];
+  const heraldHand = herald.players[0]!.hand.length;
+  okEvents(dispatch(herald, new Rng(2334), { type: 'playHearth', player: 0, cardIdx: 0 }));
+  expect(herald.players[0]!.board.map((entry) => entry.effectId)).toEqual(['apocalypseHerald']);
+  expect(herald.players[1]!.board).toHaveLength(0);
+  expect(herald.players[0]!.hand).toHaveLength(heraldHand + 4);
 });

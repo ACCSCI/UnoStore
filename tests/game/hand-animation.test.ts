@@ -6,6 +6,7 @@ import {
   handCardLayoutProgress,
   handLayoutTransitionDurationMs,
 } from '../../src/ui/scene/HandRenderer';
+import { deckVisualNeedsRefresh } from '../../src/ui/scene/TableCenter';
 
 describe('hand collapse and expand timing', () => {
   it('uses the base travel duration for zero or one card', () => {
@@ -42,5 +43,13 @@ describe('hand collapse and expand timing', () => {
     expect(handCardLayoutProgress(timeline, 3)).toBe(0.5);
     expect(handCardLayoutProgress(timeline, 4)).toBeLessThan(0.5);
     expect(handCardLayoutProgress(timeline, 2)).toBeGreaterThan(0.5);
+  });
+});
+
+describe('table deck visual stability', () => {
+  it('keeps the loaded top-card mesh when unrelated UI state redraws', () => {
+    expect(deckVisualNeedsRefresh(30, 30)).toBe(false);
+    expect(deckVisualNeedsRefresh(30, 29)).toBe(true);
+    expect(deckVisualNeedsRefresh(0, 1)).toBe(true);
   });
 });

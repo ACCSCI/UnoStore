@@ -22,17 +22,46 @@ export function requiredOwnUnoCardCount(
   return targeting.useAllWhenAtMostCount && available <= targeting.count ? 0 : targeting.count;
 }
 
-export type HearthKeywordId = 'charge' | 'taunt' | 'battlecry' | 'deathrattle';
+export type HearthKeywordId =
+  | 'charge'
+  | 'taunt'
+  | 'battlecry'
+  | 'deathrattle'
+  | 'penaltyProxy'
+  | 'boardClear';
 
 export const HEARTH_KEYWORDS: Record<HearthKeywordId, { name: string; description: string }> = {
-  charge: { name: '冲锋', description: '该随从放置后可以立即攻击。' },
+  charge: { name: '冲锋', description: '该随从从手牌召唤后，在本回合即可立即攻击。' },
   taunt: {
     name: '嘲讽',
     description: '敌人必须先攻击该玩家的嘲讽随从，才能攻击其其他随从或英雄。',
   },
   battlecry: { name: '战吼', description: '从手牌放置该随从时立即触发。' },
   deathrattle: { name: '亡语', description: '该随从死亡时触发。' },
+  penaltyProxy: {
+    name: '代罚',
+    description: '你的英雄将要结算一整次罚抽时，由该随从承受等量伤害；过量伤害不会回到英雄。',
+  },
+  boardClear: {
+    name: '清场',
+    description: '会同时伤害或消灭多个场上随从；除非卡面另有说明，也会影响己方。',
+  },
 };
+
+/** 可复用的清场属性：由规则层统一处理伤害、死亡、亡语和副作用。 */
+export interface BoardClearEffect {
+  mode: 'damage' | 'destroy';
+  damage?: number;
+  scope: 'all' | 'allOther';
+  condition?: 'noOtherFriendlyMinions';
+  selfUnoDrawback?: number;
+}
+
+/** 可复用的群体发牌属性：从公共 UNO 牌库向所有仍在场的敌方英雄发牌。 */
+export interface MassUnoDealEffect {
+  trigger: 'turnStart' | 'turnEnd' | 'anyTurnStart';
+  countPerTarget: number;
+}
 
 /**
  * 效果上下文：effect 执行时携带的信息。
@@ -61,7 +90,7 @@ export interface EffectCtx {
   /** 效果可用的随机源（确定性） */
   rng: Rng;
   /** 统一强制抽牌入口；会结算护盾、罚抽替代随从、淘汰与公开事件。 */
-  forceUnoDraw: (player: number, count: number, reason: string) => number;
+  forceUnoDraw: (player: number, count: number, reason: string, groupEffectId?: string) => number;
 }
 
 /**
@@ -89,6 +118,12 @@ export interface HearthEffect {
   requiresColor?: boolean;
   /** 随从死亡并移入墓地后结算。 */
   deathrattle?: (ctx: EffectCtx) => void;
+  /** 显式战吼属性；无须选目标的战吼也能进入统一事件与关键词体系。 */
+  battlecry?: boolean;
+  /** 同时作用于多个随从的声明式清场效果。 */
+  boardClear?: BoardClearEffect;
+  /** 同时向所有仍在场敌方英雄发 UNO 牌的声明式持续效果。 */
+  massUnoDeal?: MassUnoDealEffect;
   /** 该随从在拥有者回合开始/结束，或任意玩家回合开始时结算的持续效果。 */
   onTurnStart?: (ctx: EffectCtx) => void;
   onTurnEnd?: (ctx: EffectCtx) => void;
@@ -101,7 +136,7 @@ export interface HearthEffect {
   discardsNumbersBelowHealthOnAttack?: boolean;
   /** 嘲讽在场时，敌方随从不能攻击其非嘲讽随从或英雄。 */
   taunt?: boolean;
-  /** 冲锋随从登场当回合即可攻击。 */
+  /** 通用冲锋属性：任意带有该属性的随从从手牌召唤后当回合即可攻击。 */
   charge?: boolean;
   /** 该随从在场时降低英雄技能费用。 */
   heroPowerCostReduction?: number;
@@ -151,9 +186,14 @@ export function effectKeywords(effect: HearthEffect | null): HearthKeywordId[] {
   const keywords: HearthKeywordId[] = [];
   if (effect.charge) keywords.push('charge');
   if (effect.taunt) keywords.push('taunt');
-  if (effect.kind === 'minion' && (effect.targeting || effect.requiresColor)) {
+  if (
+    effect.kind === 'minion' &&
+    (effect.battlecry || effect.targeting || effect.requiresColor || effect.boardClear)
+  ) {
     keywords.push('battlecry');
   }
   if (effect.deathrattle) keywords.push('deathrattle');
+  if (effect.absorbsPenalty) keywords.push('penaltyProxy');
+  if (effect.boardClear) keywords.push('boardClear');
   return keywords;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { getDeck } from '../../src/game/hearth/decks';
+import { allEffects } from '../../src/game/hearth/effects/registry';
 import { parseBattleLoadout } from '../../src/game/loadout';
 import {
   areRoomPlayersReady,
@@ -374,6 +375,18 @@ test('联机构筑拒绝不存在的牌、超量同名牌与非法英雄', () =>
   expect(parseBattleLoadout({ heroId: 'unknown', deckCardIds: valid })).toBeNull();
   expect(
     parseBattleLoadout({ heroId: 'thug', deckCardIds: [...valid, 'missing-card'] })
+  ).toBeNull();
+
+  const uniqueIds = allEffects()
+    .filter((effect) => effect.id !== 'sheepToken')
+    .map((effect) => effect.id);
+  const fiftyCards = uniqueIds.slice(0, 25).flatMap((id) => [id, id]);
+  expect(parseBattleLoadout({ heroId: 'inspector', deckCardIds: fiftyCards })).not.toBeNull();
+  expect(
+    parseBattleLoadout({
+      heroId: 'inspector',
+      deckCardIds: [...fiftyCards, uniqueIds[25]!],
+    })
   ).toBeNull();
 });
 

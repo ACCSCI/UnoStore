@@ -35,6 +35,7 @@ export class TableCenterRenderer {
   private labels = new THREE.Group();
   private deckTopMesh: THREE.Mesh | null = null;
   private deckStackMesh: THREE.Mesh | null = null;
+  private deckCount = -1;
   private discardTopMesh: THREE.Mesh | null = null;
   private displayCard: UnoCard | null = null;
   private discardTopKey: string | null = null;
@@ -65,30 +66,40 @@ export class TableCenterRenderer {
   sync(deckCount: number, discardTop: UnoCard | null, chosenColor: UnoCard['color'] = null): void {
     // 牌堆：一叠牌（按数量堆高度）
     const targetHeight = 0.1 + Math.min(deckCount, 40) * 0.007;
-    if (this.deckTopMesh) {
-      this.deckGroup.remove(this.deckTopMesh);
-      this.deckTopMesh.geometry.dispose();
-      disposeMaterial(this.deckTopMesh.material);
-    }
-    if (this.deckStackMesh) {
-      this.deckGroup.remove(this.deckStackMesh);
-      this.deckStackMesh.geometry.dispose();
-      disposeMaterial(this.deckStackMesh.material);
-      this.deckStackMesh = null;
-    }
-    if (deckCount > 0) {
-      const stack = createDeckStackMesh(targetHeight);
-      stack.position.y = targetHeight / 2;
-      stack.castShadow = true;
-      this.deckGroup.add(stack);
-      this.deckStackMesh = stack;
-      const backMesh = createBackMesh();
-      backMesh.position.y = targetHeight + 0.025;
-      backMesh.position.x = 0.012;
-      backMesh.rotation.y = 0.012;
-      backMesh.scale.setScalar(1.34);
-      this.deckGroup.add(backMesh);
-      this.deckTopMesh = backMesh;
+    if (deckVisualNeedsRefresh(this.deckCount, deckCount)) {
+      this.deckCount = deckCount;
+      if (deckCount <= 0) {
+        if (this.deckTopMesh) {
+          this.deckGroup.remove(this.deckTopMesh);
+          this.deckTopMesh.geometry.dispose();
+          disposeMaterial(this.deckTopMesh.material);
+          this.deckTopMesh = null;
+        }
+        if (this.deckStackMesh) {
+          this.deckGroup.remove(this.deckStackMesh);
+          this.deckStackMesh.geometry.dispose();
+          disposeMaterial(this.deckStackMesh.material);
+          this.deckStackMesh = null;
+        }
+      } else {
+        if (!this.deckStackMesh) {
+          this.deckStackMesh = createDeckStackMesh(targetHeight);
+          this.deckStackMesh.castShadow = true;
+          this.deckGroup.add(this.deckStackMesh);
+        } else {
+          this.deckStackMesh.geometry.dispose();
+          this.deckStackMesh.geometry = new THREE.BoxGeometry(0.83, targetHeight, 1.125);
+        }
+        this.deckStackMesh.position.y = targetHeight / 2;
+        if (!this.deckTopMesh) {
+          this.deckTopMesh = createBackMesh();
+          this.deckTopMesh.position.x = 0.012;
+          this.deckTopMesh.rotation.y = 0.012;
+          this.deckTopMesh.scale.setScalar(1.34);
+          this.deckGroup.add(this.deckTopMesh);
+        }
+        this.deckTopMesh.position.y = targetHeight + 0.025;
+      }
     }
     this.deckGroup.position.copy(DECK_POS);
     this.deckGroup.rotation.y = -0.035;
@@ -168,6 +179,11 @@ export class TableCenterRenderer {
     this.scene.remove(this.mats);
     this.scene.remove(this.labels);
   }
+}
+
+/** UI 频繁重绘时，只有牌库数量真的变化才触碰 3D 牌库资源。 */
+export function deckVisualNeedsRefresh(previousCount: number, nextCount: number): boolean {
+  return previousCount !== nextCount;
 }
 
 function disposeMaterial(material: THREE.Material | THREE.Material[]): void {

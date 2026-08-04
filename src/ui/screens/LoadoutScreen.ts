@@ -228,9 +228,17 @@ export class LoadoutScreen extends Screen {
     const name = this.root.querySelector<HTMLInputElement>('[data-role="deck-name"]');
     if (name) name.value = deck.name;
     this.deckCountEl.textContent = `${deck.cardIds.length} / ${MAX_CUSTOM_DECK_SIZE}`;
-    this.deckCountEl.classList.toggle('invalid', deck.cardIds.length < MIN_CUSTOM_DECK_SIZE);
-    if (this.saveButton)
-      this.saveButton.disabled = activeDeck(this.profile).cardIds.length < MIN_CUSTOM_DECK_SIZE;
+    const editedDeckInvalid =
+      deck.cardIds.length < MIN_CUSTOM_DECK_SIZE || deck.cardIds.length > MAX_CUSTOM_DECK_SIZE;
+    const activeDeckSize = activeDeck(this.profile).cardIds.length;
+    const activeDeckInvalid =
+      activeDeckSize < MIN_CUSTOM_DECK_SIZE || activeDeckSize > MAX_CUSTOM_DECK_SIZE;
+    this.deckCountEl.classList.toggle('invalid', editedDeckInvalid);
+    this.deckCountEl.setAttribute('aria-invalid', String(editedDeckInvalid));
+    if (this.saveButton) this.saveButton.disabled = activeDeckInvalid;
+    if (this.saveStatusEl && activeDeckInvalid) {
+      this.saveStatusEl.textContent = `当前出战牌组必须为 ${MIN_CUSTOM_DECK_SIZE}–${MAX_CUSTOM_DECK_SIZE} 张，调整后才能保存并进入对局。`;
+    }
     this.cardPoolEl.replaceChildren();
     const effects = allEffects()
       .filter((effect) => effect.id !== 'sheepToken')

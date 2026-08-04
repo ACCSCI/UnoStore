@@ -10,7 +10,7 @@ import './hearth/cards';
 
 export const LOADOUT_STORAGE_KEY = 'unostore_loadouts_v1';
 export const MIN_CUSTOM_DECK_SIZE = 10;
-export const MAX_CUSTOM_DECK_SIZE = 80;
+export const MAX_CUSTOM_DECK_SIZE = 50;
 export const MAX_CARD_COPIES = 2;
 
 export interface SavedHearthDeck {
@@ -55,9 +55,16 @@ export function loadLoadoutProfile(): LoadoutProfile {
       .filter((deck): deck is SavedHearthDeck => Boolean(deck?.id && deck.name && deck.cardIds))
       .map((deck) => {
         const id = String(deck.id);
-        const cardIds = deck.cardIds
-          .filter((cardId) => validIds.has(cardId))
-          .slice(0, MAX_CUSTOM_DECK_SIZE);
+        const validCardIds = deck.cardIds.filter((cardId) => validIds.has(cardId));
+        const starterPreset = id.startsWith('starter-')
+          ? PRESET_DECKS.find((preset) => `starter-${preset.id}` === id)
+          : undefined;
+        // 旧版官方预设有 79/80 张；升级到 50 张规则时迁移为当前官方预设。
+        // 自建牌组不静默删牌，保留原数量并在首页阻止开局，交给玩家自行调整。
+        const cardIds =
+          starterPreset && validCardIds.length > MAX_CUSTOM_DECK_SIZE
+            ? [...starterPreset.cardIds]
+            : [...validCardIds];
         if (id.startsWith('starter-')) {
           for (const effectId of HEARTH_EXPANSION_CARD_IDS) {
             const desiredCopies = HEARTH_EXPANSION_CARD_COPIES[effectId] ?? 2;
@@ -103,6 +110,18 @@ export function activeDeck(profile = loadLoadoutProfile()): SavedHearthDeck {
       cardIds: [...getDeck('combo').cardIds],
     }
   );
+}
+
+/** 首页与各对局入口共用的当前出战牌组张数校验。 */
+export function battleDeckSizeIssue(profile = loadLoadoutProfile()): string | null {
+  const count = activeDeck(profile).cardIds.length;
+  if (count < MIN_CUSTOM_DECK_SIZE) {
+    return `当前出战牌组只有 ${count} 张，至少需要 ${MIN_CUSTOM_DECK_SIZE} 张。必须先去牌库调整。`;
+  }
+  if (count > MAX_CUSTOM_DECK_SIZE) {
+    return `当前出战牌组有 ${count} 张，最多只能有 ${MAX_CUSTOM_DECK_SIZE} 张。必须先去牌库调整。`;
+  }
+  return null;
 }
 
 export function activeBattleLoadout(profile = loadLoadoutProfile()): BattleLoadout {

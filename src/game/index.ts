@@ -21,6 +21,7 @@ export { DEFAULT_HERO_ID, getHero, HEROES } from './heroes';
 export type { LoadoutProfile, SavedHearthDeck } from './loadout';
 export {
   activeDeck,
+  battleDeckSizeIssue,
   createDeckId,
   loadLoadoutProfile,
   MAX_CARD_COPIES,

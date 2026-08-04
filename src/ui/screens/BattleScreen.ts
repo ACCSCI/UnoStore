@@ -47,9 +47,10 @@ import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
   type ActivityEntry,
-  attachActivityHover,
+  appendActivityEntry,
   clearActivityHover,
   formatActivity,
+  replaceActivityEntries,
 } from './ActivityFormatter';
 import {
   type HandCountDelta,
@@ -57,8 +58,10 @@ import {
   pendingDrawHandCountDelta,
   renderHandCountLabel,
 } from './HandCountDelta';
+import { openHandRevealDialog } from './HandRevealDialog';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
+import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
 import { Screen } from './Screen';
 
 /**
@@ -354,6 +357,7 @@ export class BattleScreen extends Screen {
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
+    clearActivityHover();
     clearHeroDetailHover();
     this.view?.dispose();
     audio.stopTavernAmbience();
@@ -499,6 +503,15 @@ export class BattleScreen extends Screen {
         this.playMinionVoice(event.effectId, 'summon');
         audio.playSfx('/assets/audio/sfx/generated/minion_summon.mp3', 0.75);
         await this.view.playSummonAnimation(event.player, this.playerCount, event.effectId);
+        if (getEffect(event.effectId)?.charge) {
+          const presentation = cardPresentation(event.effectId);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            event.player,
+            null,
+            this.playerCount
+          );
+        }
       } else if (event.type === 'minionAttack') {
         this.playMinionVoice(event.attackerEffectId, 'attack');
         audio.playSfx('/assets/audio/sfx/generated/minion_attack_swing.mp3', 0.88);
@@ -514,6 +527,21 @@ export class BattleScreen extends Screen {
         audio.playSfx('/assets/audio/sfx/generated/minion_hit.mp3', 0.95);
         this.refreshUI();
         await this.view.animationPause(120);
+      } else if (event.type === 'minionsCleared') {
+        this.refreshUI();
+        const effect = getEffect(event.effectId);
+        if (effect?.kind === 'minion') {
+          const presentation = cardPresentation(event.effectId);
+          audio.playSfx(soundAsset(presentation.sound), 0.72);
+          await this.view.playCardEffectAnimation(
+            presentation.visual,
+            event.player,
+            null,
+            this.playerCount
+          );
+        } else {
+          await this.view.animationPause(80);
+        }
       } else if (
         event.type === 'battlecry' ||
         event.type === 'deathrattle' ||
@@ -524,7 +552,25 @@ export class BattleScreen extends Screen {
         event.type === 'minionsEqualized'
       ) {
         this.refreshUI();
-        await this.view.playSpellAnimation(event.player, null, this.playerCount);
+        const effectId = 'effectId' in event ? event.effectId : undefined;
+        if (
+          (event.type === 'battlecry' && getEffect(event.effectId)?.boardClear) ||
+          (event.type === 'minionTriggered' && getEffect(event.effectId)?.massUnoDeal)
+        ) {
+          await this.view.animationPause(60);
+        } else {
+          await this.view.playSpellAnimation(event.player, null, this.playerCount, effectId);
+        }
+      } else if (event.type === 'massUnoDealt') {
+        audio.playSfx('/assets/audio/sfx/generated/arcane_draw.mp3', 0.78);
+        await this.view.playMassUnoDealAnimation(
+          event.targets,
+          event.countPerTarget,
+          this.playerCount
+        );
+      } else if (event.type === 'drawPenalty' && event.groupEffectId) {
+        // 群体发牌已经同时飞向全部目标；这里只保留规则与日志事件，避免重复演出。
+        await this.view.animationPause(30);
       } else if (
         event.type === 'drawUno' ||
         event.type === 'drawPenalty' ||
@@ -552,7 +598,12 @@ export class BattleScreen extends Screen {
             takeCardId: choice.takeCardId,
             discardCardId: choice.discardCardId,
           });
-          if (resolved.ok) events.push(...resolved.events);
+          if (resolved.ok) {
+            events.push(...resolved.events);
+            // 规则已在确认动作中同步结算；立即呈现新手牌，不等待整段回合演出结束。
+            this.refreshUI();
+            this.setStatus('窥镜选择已确认并立即结算');
+          }
         }
       } else if (event.type === 'turnStart') {
         if (event.drawUno) await this.view.playDrawAnimation(event.player, this.playerCount);
@@ -1687,17 +1738,8 @@ export class BattleScreen extends Screen {
           detail: `${playerLabel(player.rouletteDrawer ?? 0)}将持续抽牌直到抽中你选择的颜色；结算后控制权交还出牌者。`,
           kind: 'roulette',
         }
-      : player.pendingDrawMin > 0
-        ? {
-            title: `罚抽威胁 +${player.pendingDraw}`,
-            detail:
-              state.turn === 0
-                ? `只能叠加 +${player.pendingDrawMin} 或更大的罚抽牌，否则结束回合接受全部罚牌。`
-                : `罚抽链正在传向你，最低需要 +${player.pendingDrawMin} 才能反击。`,
-            kind: 'penalty',
-          }
-        : null;
-    const notice = persistent ?? this.transientNotice;
+      : penaltyTurnNotice(player.pendingDraw, player.pendingDrawMin, state.turn === 0);
+    const notice = resolveTurnNotice(persistent, this.transientNotice);
     this.turnNoticeEl.className = `turn-notice${notice ? ` visible ${notice.kind}` : ''}`;
     this.turnNoticeEl.innerHTML = notice
       ? `<span class="notice-icon" aria-hidden="true">!</span><span><strong>${notice.title}</strong><small>${notice.detail}</small></span>`
@@ -1730,21 +1772,15 @@ export class BattleScreen extends Screen {
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
-    clearActivityHover();
-    this.activityLedgerEl.replaceChildren();
-    for (const entry of this.activityEntries.slice(-80)) {
-      const item = this.el('li', undefined, entry.text);
-      if (entry.hover) attachActivityHover(this.activityLedgerEl, item, entry.hover);
-      this.activityLedgerEl.append(item);
-    }
-    this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
+    replaceActivityEntries(this.activityLedgerEl, this.activityEntries);
   }
 
   private recordActivity(event: GameEvent): void {
     const entry = formatActivity(event, playerLabel);
     if (!entry) return;
     this.activityEntries.push(entry);
-    this.renderActivityLedger();
+    if (this.activityEntries.length > 80) this.activityEntries.shift();
+    if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
   }
 
   private showColorBroadcast(player: number, color: string): Promise<void> {
@@ -1790,119 +1826,16 @@ export class BattleScreen extends Screen {
     chooseTakeAndDiscard = false
   ): Promise<{ takeCardId: string; discardCardId: string } | null> {
     this.revealDialog?.remove();
-    const dialog = document.createElement('dialog');
-    dialog.className = 'hand-reveal-dialog';
-    dialog.setAttribute('aria-labelledby', 'hand-reveal-title');
-    const header = this.el('header');
-    const copy = this.el('div');
-    const title = this.el('h2', undefined, `窥镜：${playerLabel(targetPlayer)} 的手牌`);
-    title.id = 'hand-reveal-title';
-    copy.append(
-      title,
-      this.el(
-        'p',
-        undefined,
-        chooseTakeAndDiscard
-          ? `随机展示 ${cards.length} 张：选择拿走 1 张，并选择另 1 张弃掉。`
-          : `随机展示 ${cards.length} 张；确认后关闭情报。`
-      )
-    );
-    const toggle = this.btn('隐藏窥镜', () => {}, 'hand-reveal-toggle');
-    toggle.setAttribute('aria-expanded', 'true');
-    header.append(copy, toggle);
-    const cardList = this.el('div', 'hand-reveal-cards');
-    cardList.setAttribute('role', 'list');
-    let takeCardId: string | null = null;
-    let discardCardId: string | null = null;
-    const optionButtons: HTMLButtonElement[] = [];
-    const cardWrappers = new Map<string, HTMLElement>();
-    for (const card of cards) {
-      const wrapper = this.el('div', 'hand-reveal-card');
-      cardWrappers.set(card.id, wrapper);
-      const image = new Image();
-      image.src = unoCardDataURL(card as UnoCard);
-      image.alt = fmtCardFull(card);
-      image.decoding = 'async';
-      wrapper.setAttribute('role', 'listitem');
-      wrapper.appendChild(image);
-      if (chooseTakeAndDiscard) {
-        const actions = this.el('div', 'hand-reveal-card-actions');
-        const take = this.btn('拿走', () => {
-          takeCardId = card.id;
-          if (discardCardId === card.id) discardCardId = null;
-          updateChoices();
-        });
-        take.dataset.cardId = card.id;
-        take.dataset.choice = 'take';
-        const discard = this.btn('弃掉', () => {
-          discardCardId = card.id;
-          if (takeCardId === card.id) takeCardId = null;
-          updateChoices();
-        });
-        discard.dataset.cardId = card.id;
-        discard.dataset.choice = 'discard';
-        optionButtons.push(take, discard);
-        actions.append(take, discard);
-        wrapper.appendChild(actions);
-      }
-      cardList.appendChild(wrapper);
-    }
-    if (cards.length === 0) cardList.append(this.el('p', 'ledger-empty', '对方没有 UNO 手牌'));
-    toggle.onclick = () => {
-      const observing = dialog.classList.toggle('is-observing');
-      toggle.textContent = observing ? '显示窥镜' : '隐藏窥镜';
-      toggle.setAttribute('aria-expanded', String(!observing));
-      toggle.setAttribute(
-        'aria-label',
-        observing ? '重新显示窥镜决策界面' : '隐藏窥镜界面以观察牌桌'
-      );
-    };
-    const form = document.createElement('form');
-    form.method = 'dialog';
-    const confirm = this.btn(
-      chooseTakeAndDiscard ? '确认拿取与弃置' : '确认情报',
-      () => {},
-      'hand-reveal-confirm'
-    );
-    confirm.type = 'submit';
-    confirm.value = 'confirmed';
-    form.appendChild(confirm);
-    const updateChoices = (): void => {
-      for (const [cardId, wrapper] of cardWrappers) {
-        wrapper.classList.toggle('is-selected', cardId === takeCardId || cardId === discardCardId);
-      }
-      for (const button of optionButtons) {
-        const selected =
-          (button.dataset.choice === 'take' && button.dataset.cardId === takeCardId) ||
-          (button.dataset.choice === 'discard' && button.dataset.cardId === discardCardId);
-        button.classList.toggle('selected', selected);
-        button.setAttribute('aria-pressed', String(selected));
-      }
-      confirm.disabled = chooseTakeAndDiscard && !(takeCardId && discardCardId);
-    };
-    updateChoices();
-    dialog.append(header, cardList, form);
-    this.root.appendChild(dialog);
-    this.revealDialog = dialog;
-    return new Promise((resolve) => {
-      dialog.addEventListener('cancel', (event) => event.preventDefault());
-      dialog.addEventListener(
-        'close',
-        () => {
-          dialog.remove();
-          if (this.revealDialog === dialog) this.revealDialog = null;
-          resolve(
-            chooseTakeAndDiscard && takeCardId && discardCardId
-              ? { takeCardId, discardCardId }
-              : chooseTakeAndDiscard
-                ? null
-                : null
-          );
-        },
-        { once: true }
-      );
-      dialog.showModal();
-      confirm.focus();
+    const handle = openHandRevealDialog({
+      root: this.root,
+      title: `窥镜：${playerLabel(targetPlayer)} 的手牌`,
+      cards: cards as Array<Pick<UnoCard, 'id' | 'color' | 'value'>>,
+      chooseTakeAndDiscard,
+      formatCard: fmtCardFull,
+    });
+    this.revealDialog = handle.dialog;
+    return handle.result.finally(() => {
+      if (this.revealDialog === handle.dialog) this.revealDialog = null;
     });
   }
 

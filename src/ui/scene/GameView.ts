@@ -5,7 +5,7 @@ import type { HeroId } from '../../game/heroes';
 import type { UnoCard } from '../../game/uno/types';
 import { assetUrl } from '../assets/url';
 import { audio } from '../audio/AudioManager';
-import type { CardVisual } from '../effects/CardEffects';
+import { type CardVisual, cardPresentation, cardVisualMotion } from '../effects/CardEffects';
 import { createDrawCardBackMesh, loadCardBackTexture } from './CardBackRenderer';
 import { CardDetailPanel } from './CardDetailPanel';
 import type { HandInteractionMode } from './HandInteractionMode';
@@ -411,9 +411,19 @@ export class GameView {
     return combatAnimation ?? this.animationPause(100);
   }
 
-  /** 法术：施法者座位升起奥术光球并射向目标/牌桌中心。 */
-  playSpellAnimation(player: number, target: number | null, playerCount: number): Promise<void> {
-    return this.playCardEffectAnimation('arcane', player, target, playerCount);
+  /** 效果事件沿用其卡牌表现；缺少来源时才回退到奥术主题。 */
+  playSpellAnimation(
+    player: number,
+    target: number | null,
+    playerCount: number,
+    effectId?: string
+  ): Promise<void> {
+    return this.playCardEffectAnimation(
+      effectId ? cardPresentation(effectId).visual : 'arcane',
+      player,
+      target,
+      playerCount
+    );
   }
 
   /** +N：首段由上一位传递既有罚抽牌，新增部分再从公共牌堆补向目标。 */
@@ -495,6 +505,18 @@ export class GameView {
     });
   }
 
+  /** 群体发牌：同一时间从公共 UNO 牌库向所有实际目标英雄各发指定张数。 */
+  playMassUnoDealAnimation(
+    targets: number[],
+    countPerTarget: number,
+    playerCount: number
+  ): Promise<void> {
+    if (targets.length === 0) return this.animationPause(80);
+    return Promise.all(
+      targets.map((target) => this.playPenaltyDealAnimation(target, countPerTarget, playerCount))
+    ).then(() => undefined);
+  }
+
   /** 英雄技能使用可读的专属道具演出：抓牌手、弃牌与洗牌，不生成几何占位物。 */
   playHeroPowerAnimation(heroId: string, player: number, playerCount: number): Promise<void> {
     const overlay = document.createElement('div');
@@ -569,8 +591,25 @@ export class GameView {
       draw: [0xffd576, 0x3b86d4],
       transform: [0xff92df, 0x51d8ff],
       summon: [0xffd36a, 0xff8a24],
+      cinderSweep: [0xffb04a, 0xff3218],
+      unstableNova: [0xe39cff, 0x6a24ff],
+      finalCollapse: [0x9f6bff, 0x080014],
+      powderBlast: [0xffdc72, 0x8f321f],
+      apocalypse: [0xd247ff, 0x16001f],
+      thunderCharge: [0x8ff8ff, 0x147dff],
+      meteorCharge: [0xfff1ac, 0xff3b19],
     };
-    const [color] = theme[visual];
+    const [color, accent] = theme[visual];
+    const motion = cardVisualMotion(visual);
+    if (motion === 'nova') {
+      return this.playNovaEffectAnimation(visual, color, accent);
+    }
+    if (motion === 'collapse') {
+      return this.playCollapseEffectAnimation(visual, color, accent);
+    }
+    if (motion === 'charge') {
+      return this.playChargeEffectAnimation(visual, player, target, playerCount, color);
+    }
     const geometry = new THREE.PlaneGeometry(0.72, 0.72);
     const material = new THREE.MeshBasicMaterial({
       color,
@@ -593,6 +632,100 @@ export class GameView {
       mesh.rotation.z = t * Math.PI * 2;
       mesh.scale.setScalar(0.35 + charge * 0.95 + (t > 0.88 ? (t - 0.88) * 6 : 0));
       material.opacity = t < 0.9 ? 0.94 : (1 - t) * 9.4;
+    });
+  }
+
+  /** 清场：桌面中心出现横向扩散的能量环，不再复用单体投射物。 */
+  private playNovaEffectAnimation(
+    visual: Exclude<CardVisual, 'lightning'>,
+    color: number,
+    accent: number
+  ): Promise<void> {
+    const geometry = new THREE.RingGeometry(0.38, 0.7, 64);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(geometry, material);
+    ring.position.copy(tableCenterWorldPosition(0.58));
+    ring.rotation.x = -Math.PI / 2;
+    const light = new THREE.PointLight(accent, 5.5, 6);
+    light.position.copy(tableCenterWorldPosition(1));
+    this.scene.add(ring, light);
+    return this.animateTemporary(ring, visual === 'unstableNova' ? 900 : 720, (t) => {
+      const burst = 1 - (1 - t) ** 3;
+      ring.scale.setScalar(0.25 + burst * 5.4);
+      ring.rotation.z = (visual === 'powderBlast' ? -1 : 1) * t * Math.PI * 0.8;
+      material.opacity = Math.max(0, 0.95 * (1 - t));
+      light.intensity = Math.max(0, 5.5 * (1 - t));
+      if (t >= 1) this.scene.remove(light);
+    });
+  }
+
+  /** 终局类清场：巨环从全桌向中心坍缩，再在最后一刻爆闪。 */
+  private playCollapseEffectAnimation(
+    visual: Exclude<CardVisual, 'lightning'>,
+    color: number,
+    accent: number
+  ): Promise<void> {
+    const geometry = new THREE.RingGeometry(0.5, 0.82, 72);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(geometry, material);
+    ring.position.copy(tableCenterWorldPosition(0.6));
+    ring.rotation.x = -Math.PI / 2;
+    const light = new THREE.PointLight(accent, 1, 7);
+    light.position.copy(tableCenterWorldPosition(0.9));
+    this.scene.add(ring, light);
+    return this.animateTemporary(ring, visual === 'apocalypse' ? 1050 : 960, (t) => {
+      const collapse = (1 - t) ** 2;
+      ring.scale.setScalar(0.08 + collapse * 5.6);
+      ring.rotation.z = t * Math.PI * 2.5;
+      material.opacity = t < 0.82 ? 0.88 : Math.max(0, (1 - t) * 4.9);
+      light.intensity = t < 0.86 ? t * 3 : Math.max(0, (1 - t) * 42);
+      if (t >= 1) this.scene.remove(light);
+    });
+  }
+
+  /** 冲锋关键词表现：图标沿低弧高速贯入战场，方向与普通旋转法术明显区分。 */
+  private playChargeEffectAnimation(
+    visual: Exclude<CardVisual, 'lightning'>,
+    player: number,
+    target: number | null,
+    playerCount: number,
+    color: number
+  ): Promise<void> {
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      map: this.createGlyphTexture(visual),
+      transparent: true,
+      opacity: 0.96,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const streak = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 0.5), material);
+    const from = this.seatActionPosition(player, playerCount).add(new THREE.Vector3(0, 0.45, 0));
+    const to =
+      target === null
+        ? tableCenterWorldPosition(0.72)
+        : this.seatActionPosition(target, playerCount);
+    streak.position.copy(from);
+    this.scene.add(streak);
+    return this.animateTemporary(streak, 560, (t) => {
+      const travel = t * t * (3 - 2 * t);
+      streak.position.lerpVectors(from, to, travel);
+      streak.position.y += Math.sin(t * Math.PI) * 0.34;
+      streak.lookAt(this.camera.position);
+      streak.scale.set(0.45 + t * 1.55, 0.65 + Math.sin(t * Math.PI) * 0.55, 1);
+      material.opacity = t < 0.82 ? 0.96 : Math.max(0, (1 - t) * 5.3);
     });
   }
 
@@ -755,6 +888,13 @@ export class GameView {
       draw: '🂠',
       transform: '🐑',
       summon: '♟',
+      cinderSweep: '≋',
+      unstableNova: '✹',
+      finalCollapse: '◉',
+      powderBlast: '✸',
+      apocalypse: '☄',
+      thunderCharge: 'ϟ',
+      meteorCharge: '➶',
     };
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -783,7 +923,10 @@ export class GameView {
           this.scene.remove(mesh);
           mesh.geometry.dispose();
           const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          for (const material of materials) material.dispose();
+          for (const material of materials) {
+            if (material instanceof THREE.MeshBasicMaterial) material.map?.dispose();
+            material.dispose();
+          }
           resolve();
         }
       };

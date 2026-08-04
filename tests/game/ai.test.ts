@@ -136,6 +136,8 @@ test('炉石牌效果在 AI 对局中实际生效（伤害/抽牌）', () => {
   const state = createGame(2, deck.cardIds, 7);
   const rng = new Rng(7);
   const ai = new HardCombo(new Rng(42));
+  // 牌组缩短后该 seed 会在自然解冻前结束；直接给基础费用，专注验证 AI 会实际结算炉石效果。
+  for (const player of state.players) player.free = 3;
   let steps = 0;
   let effectApplied = false;
   while (state.phase !== 'gameOver' && steps < 300) {
@@ -153,4 +155,20 @@ test('炉石牌效果在 AI 对局中实际生效（伤害/抽牌）', () => {
     void before;
   }
   expect(effectApplied).toBe(true);
+});
+
+test('检察官 AI 只在自己 UNO 明显更多时洗牌，并选择手牌最少的敌人', () => {
+  const deck = getDeck('combo');
+  const state = createGame(3, deck.cardIds, 91, {}, ['inspector', 'thug', 'cardMaster']);
+  state.unoActionsLeft = 0;
+  state.players[0]!.free = 2;
+  state.players[0]!.hand = state.players[0]!.hand.slice(0, 5);
+  state.players[1]!.hand = state.players[1]!.hand.slice(0, 1);
+  state.players[2]!.hand = state.players[2]!.hand.slice(0, 4);
+  const ai = new NormalHeuristic(new Rng(91));
+
+  expect(ai.decide(state, 0)).toEqual({ type: 'useHeroPower', player: 0, targets: [0, 1] });
+
+  state.players[0]!.hand = state.players[0]!.hand.slice(0, 2);
+  expect(ai.decide(state, 0)?.type).not.toBe('useHeroPower');
 });

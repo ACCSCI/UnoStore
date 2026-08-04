@@ -5,6 +5,11 @@ interface HeroDetail {
   cost?: number;
 }
 
+export interface HeroDetailHoverController {
+  show: () => void;
+  hide: () => void;
+}
+
 let sequence = 0;
 let closeActive: (() => void) | null = null;
 
@@ -17,7 +22,10 @@ export function clearHeroDetailHover(): void {
  * 为英雄卡绑定 hover / focus 详情。
  * 使用固定定位的兼容实现，避免为 interestfor / anchor positioning 引入两套 polyfill。
  */
-export function attachHeroDetailHover(trigger: HTMLElement, getDetail: () => HeroDetail): void {
+export function attachHeroDetailHover(
+  trigger: HTMLElement,
+  getDetail: () => HeroDetail
+): HeroDetailHoverController {
   let tooltip: HTMLDivElement | null = null;
   let hideTimer: number | null = null;
   let previousDescribedBy: string | null = null;
@@ -94,4 +102,5 @@ export function attachHeroDetailHover(trigger: HTMLElement, getDetail: () => Her
   trigger.addEventListener('pointerleave', scheduleHide);
   trigger.addEventListener('focus', show);
   trigger.addEventListener('blur', scheduleHide);
+  return { show, hide };
 }

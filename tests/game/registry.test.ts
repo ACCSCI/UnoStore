@@ -5,7 +5,7 @@ import {
   getEffect,
   HEARTH_KEYWORDS,
 } from '../../src/game/hearth/effects/registry';
-import { CARD_PRESENTATION } from '../../src/ui/effects/CardEffects';
+import { CARD_PRESENTATION, cardVisualMotion } from '../../src/ui/effects/CardEffects';
 import '../../src/game/hearth/cards';
 
 test('炉石 effect 注册表完整（无效果未知）', () => {
@@ -57,6 +57,13 @@ test('炉石 effect 注册表完整（无效果未知）', () => {
     'duelOfAllegiance',
     'armyExchange',
     'chaosConscription',
+    'cinderSweep',
+    'unstableNova',
+    'finalCollapse',
+    'dustchargeSapper',
+    'apocalypseHerald',
+    'thunderhoofVanguard',
+    'meteorLancer',
   ];
   for (const id of ids) {
     const effect = getEffect(id);
@@ -86,11 +93,21 @@ test('回合触发描述必须明确是拥有者还是任意玩家的回合', ()
 
 test('随从关键词由注册表统一推导并提供可复用释义', () => {
   expect(effectKeywords(getEffect('emberWolf'))).toContain('charge');
+  expect(effectKeywords(getEffect('thunderhoofVanguard'))).toContain('charge');
+  expect(effectKeywords(getEffect('meteorLancer'))).toContain('charge');
   expect(effectKeywords(getEffect('crystalGuardian'))).toContain('taunt');
   expect(effectKeywords(getEffect('ashPhoenix'))).toContain('deathrattle');
   expect(effectKeywords(getEffect('warcryCommander'))).toContain('battlecry');
   expect(effectKeywords(getEffect('goldenCitadel'))).toContain('taunt');
+  expect(effectKeywords(getEffect('penaltyBulwark'))).toContain('penaltyProxy');
+  expect(effectKeywords(getEffect('cinderSweep'))).toContain('boardClear');
+  expect(effectKeywords(getEffect('dustchargeSapper'))).toContain('battlecry');
   expect(HEARTH_KEYWORDS.charge.description).toContain('立即攻击');
+  expect(HEARTH_KEYWORDS.penaltyProxy.name).toBe('代罚');
+  expect(getEffect('shield')?.description).toContain('抵消一整次罚抽');
+  expect(cardVisualMotion(CARD_PRESENTATION.cinderSweep!.visual)).toBe('nova');
+  expect(cardVisualMotion(CARD_PRESENTATION.finalCollapse!.visual)).toBe('collapse');
+  expect(cardVisualMotion(CARD_PRESENTATION.thunderhoofVanguard!.visual)).toBe('charge');
 });
 
 test('高费嘲讽与代罚随从拥有足够强的身材', () => {

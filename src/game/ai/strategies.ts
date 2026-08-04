@@ -87,9 +87,33 @@ function affordableHearth(state: GameState, player: number) {
         canInitiateHearthPlay(state, player, x.i) &&
         !(x.c.effectId === 'draw2' && p.hand.length <= 2) &&
         !(penaltyEffects.has(x.c.effectId) && largestEnemyHand <= 2) &&
-        !(x.c.effectId === 'steal' && largestEnemyHand <= 1)
+        !(x.c.effectId === 'steal' && largestEnemyHand <= 1) &&
+        (!x.effect.boardClear || shouldUseBoardClear(state, player, x.effect.boardClear))
     )
     .map((x) => ({ c: x.c, i: x.i, cost: hearthCardCost(x.c) }));
+}
+
+function shouldUseBoardClear(
+  state: GameState,
+  player: number,
+  clear: NonNullable<NonNullable<ReturnType<typeof getEffect>>['boardClear']>
+): boolean {
+  if (clear.condition === 'noOtherFriendlyMinions' && state.players[player]!.board.length > 0) {
+    return false;
+  }
+  const value = (owner: number): number =>
+    state.players[owner]!.board.reduce((total, minion) => {
+      if (clear.mode === 'destroy') return total + minion.attack + minion.health;
+      const damage = Math.min(clear.damage ?? 0, minion.health);
+      return total + damage + (damage >= minion.health ? minion.attack : 0);
+    }, 0);
+  const friendlyLoss = value(player);
+  const enemyGain = state.players.reduce(
+    (total, target, owner) => total + (target.active && owner !== player ? value(owner) : 0),
+    0
+  );
+  // 一张自罚 UNO 约按 2 点场面价值计；至少还要多赚 2 点，避免为小优势盲目清场。
+  return enemyGain >= friendlyLoss + (clear.selfUnoDrawback ?? 0) * 2 + 2;
 }
 
 /** 每次决策使用一个就绪随从；优先击杀能换掉的敌方随从，否则直击手牌最少的玩家。 */
@@ -286,15 +310,17 @@ export class HardCombo implements AiStrategy {
 
 function heroAction(state: GameState, player: number): GameAction | null {
   const source = state.players[player]!;
-  const targets =
+  const inspectorTarget =
     source.heroId === 'inspector'
-      ? [
-          player,
-          state.players
-            .map((entry, index) => ({ entry, index }))
-            .filter(({ entry, index }) => entry.active && index !== player)
-            .sort((a, b) => b.entry.hand.length - a.entry.hand.length)[0]?.index ?? -1,
-        ]
+      ? state.players
+          .map((entry, index) => ({ entry, index }))
+          .filter(({ entry, index }) => entry.active && index !== player)
+          .sort((a, b) => a.entry.hand.length - b.entry.hand.length || a.index - b.index)[0]
+      : undefined;
+  // 洗牌会令双方 UNO 数趋近平均值：只在自己明显更多时使用，并拉高最接近胜利的敌人。
+  const targets =
+    inspectorTarget && source.hand.length >= inspectorTarget.entry.hand.length + 2
+      ? [player, inspectorTarget.index]
       : [];
   const unoCardIds =
     source.heroId === 'cardMaster' ? source.hand.slice(0, 1).map((card) => card.id) : [];
