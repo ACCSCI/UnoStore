@@ -65,6 +65,7 @@ import { openHandRevealDialog } from './HandRevealDialog';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
+import { RouletteHandPresentation } from './RouletteHandPresentation';
 import { Screen } from './Screen';
 
 /**
@@ -95,6 +96,7 @@ export class BattleScreen extends Screen {
   private playerShieldEl: HTMLElement | null = null;
   private readonly activityEntries: ActivityEntry[] = [];
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
+  private readonly rouletteHandPresentation = new RouletteHandPresentation();
   private revealDialog: HTMLDialogElement | null = null;
   private heroEmotePopover: HTMLDivElement | null = null;
   private playerHeroPortraitEl: HTMLButtonElement | null = null;
@@ -401,6 +403,7 @@ export class BattleScreen extends Screen {
   private async afterAction(events: GameEvent[] = []): Promise<void> {
     this.actionAnimating = true;
     this.clearAnimationHandDeltas();
+    this.rouletteHandPresentation.stage(events);
     this.view?.setActionEnabled(0, false);
     this.view?.clearHandInteraction();
     try {
@@ -411,6 +414,7 @@ export class BattleScreen extends Screen {
         this.finish();
     } finally {
       this.clearAnimationHandDeltas();
+      this.rouletteHandPresentation.reset();
       this.actionAnimating = false;
       if (this.session?.phase === 'playing') this.refreshUI();
     }
@@ -424,7 +428,7 @@ export class BattleScreen extends Screen {
   private async playEventAnimations(events: GameEvent[]): Promise<void> {
     if (!this.view) return;
     for (const event of events) {
-      this.applyAnimationHandDeltas(event);
+      if (event.type !== 'rouletteCardDrawn') this.applyAnimationHandDeltas(event);
       if (event.type === 'unoPlayed') {
         const card = event.card;
         const presentation = unoPresentation(card.value);
@@ -595,6 +599,8 @@ export class BattleScreen extends Screen {
           this.view.playDrawAnimation(event.player, this.playerCount),
           this.showPublicRouletteCard(event.player, event.card, event.index),
         ]);
+        this.rouletteHandPresentation.reveal(event.player, event.card.id);
+        this.refreshUI();
       } else if (event.type === 'handRevealed' && event.player === 0) {
         const choice = await this.showHandRevealDialog(
           event.targetPlayer,
@@ -1214,6 +1220,7 @@ export class BattleScreen extends Screen {
     const s = this.session.state;
     this.syncLocalTurnDeadline();
     const p = s.players[0]!;
+    const presentedHand = this.rouletteHandPresentation.visibleHand(0, p.hand);
     this.view?.syncPuppets(s.players.map((player) => player.heroId));
     audio.setBattleMusicTier(
       battleMusicTier({
@@ -1235,6 +1242,10 @@ export class BattleScreen extends Screen {
     }
     const focusedOpponent = s.turn === 0 ? nextActiveFrom(s, 0) : s.turn;
     const opp = s.players[focusedOpponent]!;
+    const presentedOpponentUnoCount = this.rouletteHandPresentation.visibleUnoCount(
+      focusedOpponent,
+      opp.hand.length
+    );
     this.updateShieldBadge(this.playerShieldEl, p.shield);
     this.updateShieldBadge(this.opponentShieldEl, opp.shield);
     if (this.playerHeroPortraitEl) {
@@ -1274,7 +1285,7 @@ export class BattleScreen extends Screen {
     if (this.opponentCardsEl)
       renderHandCountLabel(
         this.opponentCardsEl,
-        opp.hand.length,
+        presentedOpponentUnoCount,
         opp.hearthHand.length,
         this.animationHandDeltas.get(focusedOpponent) ??
           pendingDrawHandCountDelta(focusedOpponent, opp.pendingDraw),
@@ -1328,9 +1339,15 @@ export class BattleScreen extends Screen {
       unoTargetCardId: this.unoTargetCardId,
       heroUnoSelection: this.heroUnoSelection,
     });
-    this.view?.syncHand(p.hand, p.hearthHand, interactionCards, selectedCards, handInteractionMode);
+    this.view?.syncHand(
+      presentedHand,
+      p.hearthHand,
+      interactionCards,
+      selectedCards,
+      handInteractionMode
+    );
     this.view?.syncTable(s.unoDraw.length, s.topCard, s.chosenColor);
-    this.view?.syncOpponentHand(opp.hand.length + opp.hearthHand.length);
+    this.view?.syncOpponentHand(presentedOpponentUnoCount + opp.hearthHand.length);
     const selected = p.board.find(
       (minion) => minion.id === this.selectedAttackerId && !minion.exhausted
     );
@@ -1422,7 +1439,7 @@ export class BattleScreen extends Screen {
       if (p.active) {
         renderHandCountLabel(
           this.handSummaryEl,
-          p.hand.length,
+          presentedHand.length,
           p.hearthHand.length,
           this.animationHandDeltas.get(0) ?? pendingDrawHandCountDelta(0, p.pendingDraw),
           { unoSuffix: ` / ${MERCY_HAND_LIMIT} 张淘汰` }

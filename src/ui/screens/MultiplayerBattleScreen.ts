@@ -50,6 +50,7 @@ import { openHandRevealDialog } from './HandRevealDialog';
 import { attachHeroDetailHover, clearHeroDetailHover } from './HeroDetailHover';
 import { PauseMenu } from './PauseMenu';
 import { penaltyTurnNotice, resolveTurnNotice } from './PersistentTurnNotice';
+import { RouletteHandPresentation } from './RouletteHandPresentation';
 import { Screen } from './Screen';
 
 interface PublicPlayerState {
@@ -175,6 +176,7 @@ export class MultiplayerBattleScreen extends Screen {
   private activityLedgerEl: HTMLOListElement | null = null;
   private readonly activityEntries: ActivityEntry[] = [];
   private readonly animationHandDeltas = new Map<number, HandCountDelta>();
+  private readonly rouletteHandPresentation = new RouletteHandPresentation();
   private turnNoticeEl: HTMLElement | null = null;
   private turnNoticeTimer: number | null = null;
   private transientNotice: { title: string; detail: string; kind: string } | null = null;
@@ -645,6 +647,7 @@ export class MultiplayerBattleScreen extends Screen {
         console.error('联机演出队列失败', error);
         this.actionAnimating = false;
         this.clearAnimationHandDeltas();
+        this.rouletteHandPresentation.reset();
         const latest = this.snapshot ?? queuedSnapshot;
         this.renderSnapshot(latest);
         this.showGameResult(latest);
@@ -672,6 +675,7 @@ export class MultiplayerBattleScreen extends Screen {
     if (this.snapshot && snapshot.sequence < this.snapshot.sequence) return;
     this.snapshot = snapshot;
     this.clearAnimationHandDeltas();
+    this.rouletteHandPresentation.stage(snapshot.events);
     this.actionAnimating = snapshot.events.length > 0;
     try {
       if (this.actionAnimating) {
@@ -682,6 +686,7 @@ export class MultiplayerBattleScreen extends Screen {
     } finally {
       this.actionAnimating = false;
       this.clearAnimationHandDeltas();
+      this.rouletteHandPresentation.reset();
     }
     if (this.exited) return;
     // 演出期间可能收到更晚的无事件快照；结束时始终渲染最新权威状态。
@@ -754,6 +759,14 @@ export class MultiplayerBattleScreen extends Screen {
   private renderSnapshot(snapshot: MultiplayerSnapshot): void {
     const mine = snapshot.players[snapshot.viewer];
     if (!mine) return;
+    const presentedMineHand = this.rouletteHandPresentation.visibleHand(
+      snapshot.viewer,
+      snapshot.mine.hand
+    );
+    const presentedMineUnoCount = this.rouletteHandPresentation.visibleUnoCount(
+      snapshot.viewer,
+      mine.unoCount
+    );
     this.view?.syncPuppets(
       Array.from({ length: snapshot.players.length }, (_, visualSeat) => {
         const globalSeat = (snapshot.viewer + visualSeat) % snapshot.players.length;
@@ -796,7 +809,7 @@ export class MultiplayerBattleScreen extends Screen {
     const selection = this.hearthSelection;
     const effect = selection ? getEffect(selection.effectId) : null;
     const targeting = effect ? this.effectTargeting(effect) : null;
-    let playable = new Set(snapshot.playableIds);
+    let playable = new Set(this.actionAnimating ? [] : snapshot.playableIds);
     if (selection && targeting?.type === 'ownUnoCards') {
       playable = new Set(snapshot.mine.hand.map((card) => card.id));
     } else if (selection && targeting?.type === 'giveCards') {
@@ -824,7 +837,7 @@ export class MultiplayerBattleScreen extends Screen {
       heroUnoSelection: this.heroUnoSelection,
     });
     this.view?.syncHand(
-      snapshot.mine.hand,
+      presentedMineHand,
       snapshot.mine.hearthHand,
       playable,
       selectedCardIds,
@@ -926,7 +939,7 @@ export class MultiplayerBattleScreen extends Screen {
       if (mine.active) {
         renderHandCountLabel(
           this.handSummaryEl,
-          mine.unoCount,
+          presentedMineUnoCount,
           mine.hearthCount,
           this.animationHandDeltas.get(snapshot.viewer) ??
             pendingDrawHandCountDelta(snapshot.viewer, mine.pendingDraw),
@@ -1133,6 +1146,10 @@ export class MultiplayerBattleScreen extends Screen {
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
     snapshot.players.forEach((player, index) => {
+      const presentedUnoCount = this.rouletteHandPresentation.visibleUnoCount(
+        index,
+        player.unoCount
+      );
       const visualSeat = this.visualSeat(index, snapshot);
       const seatPosition = seatScreenPosition(visualSeat, snapshot.players.length);
       const item = this.el('li', 'table-seat');
@@ -1188,7 +1205,7 @@ export class MultiplayerBattleScreen extends Screen {
       shieldBadge.textContent = player.shield > 0 ? `🛡 ${player.shield}` : '';
       portraitWrap.append(heroPortrait, shieldBadge);
       const fan = this.el('span', 'seat-hand-fan');
-      const visibleBacks = player.active ? player.unoCount + player.hearthCount : 0;
+      const visibleBacks = player.active ? presentedUnoCount + player.hearthCount : 0;
       const spacing = Math.min(0.55, 4.8 / Math.max(1, visibleBacks - 1));
       for (let card = 0; card < visibleBacks; card++) {
         const back = document.createElement('i');
@@ -1208,7 +1225,7 @@ export class MultiplayerBattleScreen extends Screen {
       if (player.active) {
         renderHandCountLabel(
           handCount,
-          player.unoCount,
+          presentedUnoCount,
           player.hearthCount,
           this.animationHandDeltas.get(index) ??
             pendingDrawHandCountDelta(index, player.pendingDraw)
@@ -1710,7 +1727,7 @@ export class MultiplayerBattleScreen extends Screen {
   ): Promise<void> {
     if (!this.view) return;
     for (const event of events) {
-      this.applyAnimationHandDeltas(event);
+      if (event.type !== 'rouletteCardDrawn') this.applyAnimationHandDeltas(event);
       const source = 'player' in event ? this.visualSeat(event.player, snapshot) : 0;
       if (event.type === 'unoPlayed') {
         const presentation = unoPresentation(event.card.value);
@@ -1873,6 +1890,8 @@ export class MultiplayerBattleScreen extends Screen {
           this.view.playDrawAnimation(source, snapshot.players.length),
           this.showPublicRouletteCard(source, event.card, event.index),
         ]);
+        this.rouletteHandPresentation.reveal(event.player, event.card.id);
+        this.renderSnapshot(this.snapshot ?? snapshot);
       } else if (event.type === 'handRevealed' && event.player === snapshot.viewer) {
         const choice = await this.showHandRevealDialog(
           event.targetPlayer,
