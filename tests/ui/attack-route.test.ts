@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 
-import { attackRouteGeometry } from '../../src/ui/scene/MinionBoard';
+import { attackRouteGeometry, combatHeroTargetSelectors } from '../../src/ui/scene/MinionBoard';
 
 test('attack route uses a visible great-circle-style arc even for vertically aligned targets', () => {
   const from = { x: 500, y: 800 };
@@ -20,4 +20,12 @@ test('attack route keeps exact attacker and target endpoints for hero and minion
   const cross =
     (to.x - from.x) * (route.control.y - from.y) - (to.y - from.y) * (route.control.x - from.x);
   expect(Math.abs(cross)).toBeGreaterThan(1);
+});
+
+test('attacks targeting the local hero prefer its visible crest over the hidden round-table seat', () => {
+  expect(combatHeroTargetSelectors(0)).toEqual([
+    '.player-hero .player-crest',
+    '.table-seat[data-seat="0"] .seat-target-button',
+  ]);
+  expect(combatHeroTargetSelectors(3)).toEqual(['.table-seat[data-seat="3"] .seat-target-button']);
 });
