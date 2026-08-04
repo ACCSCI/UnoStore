@@ -6,6 +6,7 @@ import { Rng } from '../../game/core/rng';
 import type { GameAction, GameState, HearthCard, MinionState } from '../../game/core/state';
 import {
   formatTurnClock,
+  isSameActiveTurn,
   remainingTurnSeconds,
   TURN_TIMEOUT_MS,
 } from '../../game/core/turnTimeout';
@@ -13,6 +14,7 @@ import {
   getEffect,
   type HearthTargeting,
   minionHasTaunt,
+  requiredGiveCardCount,
   requiredOwnUnoCardCount,
 } from '../../game/hearth/effects/registry';
 import { getHero, getHeroEmote, HERO_EMOTES, HEROES } from '../../game/heroes';
@@ -26,7 +28,7 @@ import { battleMusicTier } from '../audio/BattleMusicState';
 import { scheduleBattleUiIntegrity } from '../dev/BattleUiIntegrity';
 import { cardPresentation, soundAsset, unoPresentation } from '../effects/CardEffects';
 import { unoCardDataURL } from '../scene/CardRenderer';
-import { pickColor } from '../scene/ColorPicker';
+import { dismissColorPickers, pickColor } from '../scene/ColorPicker';
 import { GameView } from '../scene/GameView';
 import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
@@ -150,6 +152,7 @@ export class MultiplayerBattleScreen extends Screen {
   private lastReceivedSequence = -1;
   private presentationQueue: Promise<void> = Promise.resolve();
   private actionAnimating = false;
+  private revealDialog: HTMLDialogElement | null = null;
   private roulettePromptOpen = false;
   private selectedAttackerId: string | null = null;
   private unoTargetCardId: string | null = null;
@@ -609,6 +612,21 @@ export class MultiplayerBattleScreen extends Screen {
   private applySnapshot(raw: unknown): void {
     if (!this.isSnapshot(raw) || raw.sequence <= this.lastReceivedSequence) return;
     this.lastReceivedSequence = raw.sequence;
+    const oracleWasResolved = raw.events.some(
+      (event) => event.type === 'oracleResolved' && event.player === raw.viewer
+    );
+    const authoritativeTurnChanged =
+      this.snapshot !== null &&
+      !isSameActiveTurn(raw, this.snapshot.turn, this.snapshot.turnSerial);
+    if (authoritativeTurnChanged) {
+      this.cancelTargeting(false);
+      dismissColorPickers(this.root);
+    }
+    if (this.revealDialog?.open && (oracleWasResolved || authoritativeTurnChanged)) {
+      // A host timeout can resolve the choice while this presentation queue is
+      // waiting on the local dialog. Closing it releases the queued snapshot.
+      this.revealDialog.close('superseded');
+    }
     const socialEvents = raw.events.filter(
       (event): event is Extract<GameEvent, { type: 'heroEmote' }> => event.type === 'heroEmote'
     );
@@ -782,12 +800,15 @@ export class MultiplayerBattleScreen extends Screen {
     if (selection && targeting?.type === 'ownUnoCards') {
       playable = new Set(snapshot.mine.hand.map((card) => card.id));
     } else if (selection && targeting?.type === 'giveCards') {
-      playable = new Set([
-        ...snapshot.mine.hand.map((card) => card.id),
-        ...snapshot.mine.hearthHand
-          .filter((card) => card.id !== selection.cardId)
-          .map((card) => card.id),
-      ]);
+      playable =
+        this.giftSelectionCount(targeting, snapshot) === 0
+          ? new Set([selection.cardId])
+          : new Set([
+              ...snapshot.mine.hand.map((card) => card.id),
+              ...snapshot.mine.hearthHand
+                .filter((card) => card.id !== selection.cardId)
+                .map((card) => card.id),
+            ]);
     } else if (this.unoTargetCardId) {
       playable = new Set([this.unoTargetCardId]);
     } else if (this.heroUnoSelection) {
@@ -1057,6 +1078,7 @@ export class MultiplayerBattleScreen extends Screen {
     const events: GameEvent[] = [];
     try {
       const current = this.hostState.turn;
+      const turnSerial = this.hostState.turnSerial;
       const player = this.hostState.players[current]!;
       if (player.roulettePending) {
         const colors = ['red', 'yellow', 'green', 'blue'] as const;
@@ -1077,11 +1099,10 @@ export class MultiplayerBattleScreen extends Screen {
         });
         if (oracle.ok) events.push(...oracle.events);
       }
-      if (!events.some((event) => event.type === 'gameOver')) {
-        const timeoutPlayer = this.hostState.turn;
+      if (isSameActiveTurn(this.hostState, current, turnSerial)) {
         const ended = dispatch(this.hostState, this.hostRng, {
           type: 'endTurn',
-          player: timeoutPlayer,
+          player: current,
         });
         if (ended.ok) events.push(...ended.events);
       }
@@ -1246,7 +1267,10 @@ export class MultiplayerBattleScreen extends Screen {
     }
     return (
       player !== snapshot.viewer &&
-      (targeting?.type === 'enemyPlayer' || targeting?.type === 'giveCards')
+      (targeting?.type === 'enemyPlayer' ||
+        (targeting?.type === 'giveCards' &&
+          this.hearthSelection.selectedCardIds.size ===
+            this.giftSelectionCount(targeting, snapshot)))
     );
   }
 
@@ -1271,7 +1295,9 @@ export class MultiplayerBattleScreen extends Screen {
       const max =
         targeting?.type === 'ownUnoCards'
           ? requiredOwnUnoCardCount(targeting, snapshot.mine.hand.length)
-          : (targeting?.count ?? 0);
+          : targeting?.type === 'giveCards'
+            ? this.giftSelectionCount(targeting, snapshot)
+            : 0;
       if (this.hearthSelection.selectedCardIds.has(id))
         this.hearthSelection.selectedCardIds.delete(id);
       else if (this.hearthSelection.selectedCardIds.size < max)
@@ -1440,9 +1466,9 @@ export class MultiplayerBattleScreen extends Screen {
     }
     if (
       targeting?.type === 'giveCards' &&
-      this.hearthSelection.selectedCardIds.size !== targeting.count
+      this.hearthSelection.selectedCardIds.size !== this.giftSelectionCount(targeting, snapshot)
     ) {
-      this.setStatus(`请先选择 ${targeting.count} 张要赠送的牌`, true);
+      this.setStatus(`请先选择 ${this.giftSelectionCount(targeting, snapshot)} 张要赠送的牌`, true);
       return;
     }
     this.sendAction({
@@ -1530,11 +1556,14 @@ export class MultiplayerBattleScreen extends Screen {
           })
         );
       } else if (targeting?.type === 'giveCards') {
+        const required = this.giftSelectionCount(targeting, snapshot);
         this.targetingHudEl.append(
           this.el(
             'span',
             undefined,
-            `${effect?.name}：选择手牌 ${selected}/${targeting.count}，再点击对手`
+            required === 0
+              ? `${effect?.name}：当前可选牌不超过 ${targeting.count} 张，将自动赠送全部；点击对手`
+              : `${effect?.name}：选择手牌 ${selected}/${required}，再点击对手`
           )
         );
       } else if (targeting?.type === 'minion') {
@@ -1586,6 +1615,14 @@ export class MultiplayerBattleScreen extends Screen {
     if (this.snapshot) this.renderSnapshot(this.snapshot);
     if (had && announce) this.setStatus('已取消目标选择');
     return had;
+  }
+
+  private giftSelectionCount(
+    targeting: Extract<HearthTargeting, { type: 'giveCards' }>,
+    snapshot: MultiplayerSnapshot
+  ): number {
+    const available = snapshot.mine.hand.length + Math.max(0, snapshot.mine.hearthHand.length - 1);
+    return requiredGiveCardCount(targeting, available);
   }
 
   private async useHeroPower(): Promise<void> {
@@ -2060,13 +2097,18 @@ export class MultiplayerBattleScreen extends Screen {
     cards: Array<{ id: string; color: string | null; value: string }>,
     choose = false
   ): Promise<{ takeCardId: string; discardCardId: string } | null> {
-    return openHandRevealDialog({
+    if (this.revealDialog?.open) this.revealDialog.close('superseded');
+    const handle = openHandRevealDialog({
       root: this.root,
       title: `窥镜：玩家 ${targetPlayer + 1} 的手牌`,
       cards: cards as Array<Pick<UnoCard, 'id' | 'color' | 'value'>>,
       chooseTakeAndDiscard: choose,
       formatCard: (card) => `${card.color ?? '四色'} ${card.value}`,
-    }).result;
+    });
+    this.revealDialog = handle.dialog;
+    return handle.result.finally(() => {
+      if (this.revealDialog === handle.dialog) this.revealDialog = null;
+    });
   }
 
   private isSnapshot(value: unknown): value is MultiplayerSnapshot {
@@ -2135,6 +2177,9 @@ export class MultiplayerBattleScreen extends Screen {
     document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
     document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause?.unbind();
+    dismissColorPickers(this.root);
+    if (this.revealDialog?.open) this.revealDialog.close('screen-exit');
+    this.revealDialog?.remove();
     clearActivityHover();
     clearHeroDetailHover();
     this.view?.dispose();

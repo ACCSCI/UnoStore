@@ -108,6 +108,9 @@ export function openHandRevealDialog(options: HandRevealDialogOptions): HandReve
     chooseTakeAndDiscard ? '确认拿取与弃置' : '确认情报',
     'hand-reveal-confirm'
   );
+  // This button lives in a method="dialog" form and must submit it. The shared
+  // button helper intentionally defaults every other action to type="button".
+  confirm.type = 'submit';
 
   const updateChoices = (): void => {
     for (const [cardId, wrapper] of cardWrappers) {

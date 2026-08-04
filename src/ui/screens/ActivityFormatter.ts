@@ -26,6 +26,23 @@ export interface ActivityEntry {
   references?: ActivityReference[];
 }
 
+interface ActivityScrollMetrics {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+const ACTIVITY_SCROLL_END_THRESHOLD = 4;
+
+/** Only live-follow new records while the reader is already at the end of the ledger. */
+export function shouldFollowActivityLedger(
+  metrics: ActivityScrollMetrics,
+  threshold = ACTIVITY_SCROLL_END_THRESHOLD
+): boolean {
+  const remaining = metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop;
+  return remaining <= Math.max(0, threshold);
+}
+
 type PendingActivityReference = (
   | { kind: 'uno'; card: UnoCard }
   | { kind: 'hearth'; effectId: string; costOverride?: number }
@@ -384,6 +401,8 @@ export function appendActivityEntry(
   entry: ActivityEntry,
   limit = 80
 ): void {
+  const followNewEntries = shouldFollowActivityLedger(container);
+  const previousScrollTop = container.scrollTop;
   const item = document.createElement('li');
   item.textContent = entry.text;
   if (entry.references) attachActivityHover(container, item, entry.references);
@@ -394,7 +413,7 @@ export function appendActivityEntry(
     if (oldest.querySelector('[aria-describedby]')) clearActivityHover();
     oldest.remove();
   }
-  container.scrollTop = container.scrollHeight;
+  container.scrollTop = followNewEntries ? container.scrollHeight : previousScrollTop;
 }
 
 /** 首次进入或整局替换时重建；正常事件流应使用 appendActivityEntry。 */
@@ -403,9 +422,12 @@ export function replaceActivityEntries(
   entries: readonly ActivityEntry[],
   limit = 80
 ): void {
+  const followNewEntries = shouldFollowActivityLedger(container);
+  const previousScrollTop = container.scrollTop;
   clearActivityHover();
   container.replaceChildren();
   for (const entry of entries.slice(-limit)) appendActivityEntry(container, entry, limit);
+  container.scrollTop = followNewEntries ? container.scrollHeight : previousScrollTop;
 }
 
 function attachReferenceTooltip(

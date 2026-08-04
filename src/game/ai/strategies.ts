@@ -6,6 +6,7 @@ import {
   getEffect,
   hearthCardCost,
   minionHasTaunt,
+  requiredGiveCardCount,
   requiredOwnUnoCardCount,
 } from '../hearth/effects/registry';
 import type { AiStrategy, BossRules } from './types';
@@ -419,14 +420,17 @@ function selectedGiftCards(
   const effect = getEffect(effectId);
   if (effect?.targeting?.type !== 'giveCards') return undefined;
   const source = state.players[player]!;
-  return [
+  const candidates = [
     ...source.hand.map((card) => ({ id: card.id, priority: /^\d$/.test(card.value) ? 0 : 2 })),
     ...source.hearthHand
       .filter((card) => card.id !== sourceCardId)
       .map((card) => ({ id: card.id, priority: getEffect(card.effectId)?.cost ?? 1 })),
-  ]
+  ];
+  const required = requiredGiveCardCount(effect.targeting, candidates.length);
+  if (required === 0) return undefined;
+  return candidates
     .sort((a, b) => a.priority - b.priority)
-    .slice(0, effect.targeting.count)
+    .slice(0, required)
     .map((card) => card.id);
 }
 

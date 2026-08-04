@@ -58,7 +58,7 @@ registerEffect({
   id: 'fatefulGift',
   name: '命运馈赠',
   cost: 2,
-  description: '选择自己的 2 张手牌，交给指定一名对手。',
+  description: '将自己的 2 张手牌交给指定对手；手牌不足时自动交出全部。',
   targeting: { type: 'giveCards', count: 2 },
   apply: (ctx) => giveSelectedCards(ctx, ctx.targets![0]!),
 });
@@ -269,7 +269,7 @@ registerEffect({
   id: 'bloodboundTitan',
   name: '血契泰坦',
   cost: 5,
-  description: '战吼：选择并弃掉 2 张己方 UNO 牌。以鲜血换来压倒性的身材。',
+  description: '战吼：弃掉 2 张己方 UNO；手牌不足时自动弃掉全部。以鲜血换来压倒性的身材。',
   kind: 'minion',
   attack: 10,
   health: 10,
@@ -627,7 +627,7 @@ registerEffect({
   name: 'UNO 湮灭',
   cost: 7,
   description: '拥有超过 5 张 UNO 时选择并弃掉 5 张；5 张及以下无需选择，直接弃掉全部。',
-  targeting: { type: 'ownUnoCards', count: 5, useAllWhenAtMostCount: true },
+  targeting: { type: 'ownUnoCards', count: 5 },
   apply: (ctx) => discardSelectedUno(ctx, 'UNO 湮灭'),
 });
 

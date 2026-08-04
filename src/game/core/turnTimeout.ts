@@ -8,3 +8,14 @@ export function formatTurnClock(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`;
 }
+
+interface TurnIdentity {
+  turn: number;
+  turnSerial: number;
+  phase: string;
+}
+
+/** Mandatory timeout resolution can advance the state by itself; never end the following turn. */
+export function isSameActiveTurn(state: TurnIdentity, player: number, turnSerial: number): boolean {
+  return state.phase !== 'gameOver' && state.turn === player && state.turnSerial === turnSerial;
+}
