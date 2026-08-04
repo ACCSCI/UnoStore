@@ -52,10 +52,15 @@ function hearthReference(effectId: string, costOverride?: number): PendingActivi
 }
 
 let activeActivityTooltip: HTMLElement | null = null;
+let closeActiveActivityTooltip: (() => void) | null = null;
 let activityTooltipSequence = 0;
 
 /** 记录重绘或离开对局时移除挂在 document.body 上的牌面预览。 */
 export function clearActivityHover(): void {
+  if (closeActiveActivityTooltip) {
+    closeActiveActivityTooltip();
+    return;
+  }
   activeActivityTooltip?.remove();
   activeActivityTooltip = null;
 }
@@ -373,13 +378,68 @@ export function attachActivityHover(
   item.replaceChildren(...children);
 }
 
+/** 只追加新记录，避免事件到达时销毁鼠标仍悬停的旧记录及其详情。 */
+export function appendActivityEntry(
+  container: HTMLOListElement,
+  entry: ActivityEntry,
+  limit = 80
+): void {
+  const item = document.createElement('li');
+  item.textContent = entry.text;
+  if (entry.references) attachActivityHover(container, item, entry.references);
+  container.append(item);
+  while (container.childElementCount > limit) {
+    const oldest = container.firstElementChild;
+    if (!oldest) break;
+    if (oldest.querySelector('[aria-describedby]')) clearActivityHover();
+    oldest.remove();
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+/** 首次进入或整局替换时重建；正常事件流应使用 appendActivityEntry。 */
+export function replaceActivityEntries(
+  container: HTMLOListElement,
+  entries: readonly ActivityEntry[],
+  limit = 80
+): void {
+  clearActivityHover();
+  container.replaceChildren();
+  for (const entry of entries.slice(-limit)) appendActivityEntry(container, entry, limit);
+}
+
 function attachReferenceTooltip(
   container: HTMLElement,
   trigger: HTMLButtonElement,
   hover: ActivityReference
 ): void {
   let tooltip: HTMLElement | null = null;
+  let hideTimer: number | null = null;
+  const cancelHide = (): void => {
+    if (hideTimer === null) return;
+    window.clearTimeout(hideTimer);
+    hideTimer = null;
+  };
+  const hide = (): void => {
+    cancelHide();
+    tooltip?.remove();
+    if (activeActivityTooltip === tooltip) activeActivityTooltip = null;
+    if (closeActiveActivityTooltip === hide) closeActiveActivityTooltip = null;
+    tooltip = null;
+    trigger.removeAttribute('aria-describedby');
+    document.removeEventListener('keydown', onDocumentKeyDown);
+  };
+  const scheduleHide = (): void => {
+    cancelHide();
+    hideTimer = window.setTimeout(hide, 100);
+  };
+  const onDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    hide();
+  };
   const show = (): void => {
+    cancelHide();
     if (tooltip || !container.isConnected) return;
     clearActivityHover();
     tooltip = document.createElement('div');
@@ -418,7 +478,11 @@ function attachReferenceTooltip(
       );
     }
     tooltip.append(loading, img);
+    tooltip.addEventListener('pointerenter', cancelHide);
+    tooltip.addEventListener('pointerleave', scheduleHide);
     document.body.append(tooltip);
+    closeActiveActivityTooltip = hide;
+    document.addEventListener('keydown', onDocumentKeyDown);
     const containerRect = container.getBoundingClientRect();
     const tooltipRect = tooltip.getBoundingClientRect();
     const tooltipWidth = tooltipRect.width;
@@ -428,14 +492,8 @@ function attachReferenceTooltip(
     const fixedTop = containerRect.top - tooltipHeight / 5;
     tooltip.style.top = `${Math.max(8, Math.min(fixedTop, window.innerHeight - tooltipHeight - 8))}px`;
   };
-  const hide = (): void => {
-    tooltip?.remove();
-    if (activeActivityTooltip === tooltip) activeActivityTooltip = null;
-    tooltip = null;
-    trigger.removeAttribute('aria-describedby');
-  };
   trigger.addEventListener('pointerenter', show);
-  trigger.addEventListener('pointerleave', hide);
+  trigger.addEventListener('pointerleave', scheduleHide);
   trigger.addEventListener('focus', show);
-  trigger.addEventListener('blur', hide);
+  trigger.addEventListener('blur', scheduleHide);
 }

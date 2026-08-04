@@ -10,41 +10,48 @@ import type { HandCardEntry } from './HandRenderer';
 import { hearthCardDataURL } from './HearthCardRenderer';
 
 /** 悬停预览：所有规则均写在卡面上，因此这里只展示卡牌放大版。 */
+type DetailInterest =
+  | { type: 'card'; entry: HandCardEntry }
+  | { type: 'minion'; minion: MinionState };
+
+/** 悬停优先于点击固定；临时抑制只隐藏，不销毁用户仍然保持的查看意图。 */
+export function visibleDetailInterest<T>(
+  hovered: T | null,
+  pinned: T | null,
+  suppressed: boolean
+): T | null {
+  if (suppressed) return null;
+  return hovered ?? pinned;
+}
+
 export class CardDetailPanel {
   private el: HTMLDivElement | null = null;
   private requestVersion = 0;
+  private renderedInterestKey: string | null = null;
   private suppressed = false;
-  private pinned:
-    | { type: 'card'; entry: HandCardEntry }
-    | { type: 'minion'; minion: MinionState }
-    | null = null;
+  private hovered: DetailInterest | null = null;
+  private pinned: DetailInterest | null = null;
 
   constructor(private root: HTMLElement) {}
 
   show(entry: HandCardEntry | null): void {
-    if (this.suppressed) return;
-    if (!entry) {
-      this.restorePinnedOrHide();
-      return;
-    }
-    this.renderCard(entry);
+    this.hovered = entry ? { type: 'card', entry } : null;
+    this.renderCurrentInterest();
   }
 
   pin(entry: HandCardEntry): void {
-    if (this.suppressed) return;
     this.pinned = { type: 'card', entry };
-    this.renderCard(entry);
+    this.renderCurrentInterest();
   }
 
   pinMinion(minion: MinionState): void {
-    if (this.suppressed) return;
     this.pinned = { type: 'minion', minion };
-    this.renderMinion(minion);
+    this.renderCurrentInterest();
   }
 
   clearPinned(): void {
     this.pinned = null;
-    this.removePanel();
+    this.renderCurrentInterest();
   }
 
   private renderCard(entry: HandCardEntry): void {
@@ -82,12 +89,8 @@ export class CardDetailPanel {
   }
 
   showMinion(minion: MinionState | null): void {
-    if (this.suppressed) return;
-    if (!minion) {
-      this.restorePinnedOrHide();
-      return;
-    }
-    this.renderMinion(minion);
+    this.hovered = minion ? { type: 'minion', minion } : null;
+    this.renderCurrentInterest();
   }
 
   private renderMinion(minion: MinionState): void {
@@ -126,34 +129,50 @@ export class CardDetailPanel {
   }
 
   hide(): void {
+    this.hovered = null;
     this.pinned = null;
     this.removePanel();
   }
 
-  /** 攻击或选目标期间详情已失效：立即关闭，并阻止 hover 再次打开。 */
+  /** 攻击或选目标期间只暂时隐藏；解除后若指针仍在有效目标上则自动恢复。 */
   setSuppressed(suppressed: boolean): void {
     if (this.suppressed === suppressed) return;
     this.suppressed = suppressed;
-    if (suppressed) this.hide();
+    this.renderCurrentInterest();
   }
 
-  private restorePinnedOrHide(): void {
-    if (this.pinned?.type === 'card') {
-      this.renderCard(this.pinned.entry);
+  private renderCurrentInterest(): void {
+    const interest = visibleDetailInterest(this.hovered, this.pinned, this.suppressed);
+    if (!interest) {
+      this.removePanel();
       return;
     }
-    if (this.pinned?.type === 'minion') {
-      this.renderMinion(this.pinned.minion);
+    const interestKey = detailInterestKey(interest);
+    if (this.el?.isConnected && this.renderedInterestKey === interestKey) return;
+    this.renderedInterestKey = interestKey;
+    if (interest.type === 'card') {
+      this.renderCard(interest.entry);
       return;
     }
-    this.removePanel();
+    this.renderMinion(interest.minion);
   }
 
   private removePanel(): void {
     this.requestVersion++;
     this.el?.remove();
     this.el = null;
+    this.renderedInterestKey = null;
   }
+}
+
+function detailInterestKey(interest: DetailInterest): string {
+  if (interest.type === 'card') {
+    const color = interest.entry.uno?.color ?? '';
+    const cost = interest.entry.hearth?.costOverride ?? '';
+    return `card:${interest.entry.id}:${color}:${cost}`;
+  }
+  const { minion } = interest;
+  return `minion:${minion.id}:${minion.effectId}:${minion.attack}:${minion.health}`;
 }
 
 function createKeywordGlossary(effect: HearthEffect | null): HTMLElement | null {

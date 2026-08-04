@@ -55,6 +55,7 @@ export class MinionBoardRenderer {
   private readonly playerRow: HTMLDivElement;
   private readonly minionButtons = new Map<string, HTMLButtonElement>();
   private readonly enemyRows = new Map<number, HTMLDivElement>();
+  private hoveredMinionId: string | null = null;
   private placementPreview: HTMLSpanElement | null = null;
   private placementIndex: number | null = null;
 
@@ -85,7 +86,6 @@ export class MinionBoardRenderer {
     spellTargetSide: SpellTargetSide = null
   ): void {
     this.clearPlacementPreview();
-    this.callbacks.onHoverMinion(null);
     this.root.dataset.playerCount = String(playerCount);
     const liveMinionIds = new Set([...playerBoard, ...enemyBoard].map((minion) => minion.id));
     this.renderEnemyZones(enemyBoard, selectedAttackerId, canAct, spellTargetSide, playerCount);
@@ -105,6 +105,13 @@ export class MinionBoardRenderer {
       if (liveMinionIds.has(id)) continue;
       button.remove();
       this.minionButtons.delete(id);
+    }
+    if (this.hoveredMinionId) {
+      const hovered = [...playerBoard, ...enemyBoard].find(
+        (minion) => minion.id === this.hoveredMinionId
+      );
+      if (hovered) this.callbacks.onHoverMinion(hovered);
+      else this.clearHoveredMinion();
     }
   }
 
@@ -184,7 +191,7 @@ export class MinionBoardRenderer {
 
   remove(): void {
     this.clearPlacementPreview();
-    this.callbacks.onHoverMinion(null);
+    this.clearHoveredMinion();
     this.root.remove();
   }
 
@@ -456,19 +463,24 @@ export class MinionBoardRenderer {
         else if (side === 'player') this.callbacks.onSelectAttacker(minion.id);
         else this.callbacks.onAttackMinion(minion.id);
       };
-      if (!suppressDetails) {
-        button.onpointerenter = () => this.callbacks.onHoverMinion(minion);
-        button.onpointerleave = () => this.callbacks.onHoverMinion(null);
-        button.onfocus = () => this.callbacks.onHoverMinion(minion);
-        button.onblur = () => this.callbacks.onHoverMinion(null);
-      } else {
-        button.onpointerenter = null;
-        button.onpointerleave = null;
-        button.onfocus = null;
-        button.onblur = null;
-      }
+      button.onpointerenter = () => this.setHoveredMinion(minion);
+      button.onpointerleave = () => this.clearHoveredMinion(minion.id);
+      button.onfocus = () => this.setHoveredMinion(minion);
+      button.onblur = () => this.clearHoveredMinion(minion.id);
       row.insertBefore(button, ownerChip);
     }
+  }
+
+  private setHoveredMinion(minion: MinionState): void {
+    this.hoveredMinionId = minion.id;
+    this.callbacks.onHoverMinion(minion);
+  }
+
+  private clearHoveredMinion(expectedId?: string): void {
+    if (expectedId && this.hoveredMinionId !== expectedId) return;
+    if (this.hoveredMinionId === null) return;
+    this.hoveredMinionId = null;
+    this.callbacks.onHoverMinion(null);
   }
 
   private createMinionButton(minion: MinionState): HTMLButtonElement {

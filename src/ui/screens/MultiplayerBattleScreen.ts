@@ -32,9 +32,10 @@ import { resolveHandInteractionMode } from '../scene/HandInteractionMode';
 import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import {
   type ActivityEntry,
-  attachActivityHover,
+  appendActivityEntry,
   clearActivityHover,
   formatActivity,
+  replaceActivityEntries,
 } from './ActivityFormatter';
 import { type BattleTransport, VibeHubBattleTransport } from './BattleTransport';
 import {
@@ -1104,6 +1105,9 @@ export class MultiplayerBattleScreen extends Screen {
 
   private renderRoster(snapshot: MultiplayerSnapshot): void {
     if (!this.rosterEl) return;
+    const hoveredPlayer = this.rosterEl
+      .querySelector<HTMLElement>('.seat-target-button:hover')
+      ?.closest<HTMLElement>('.table-seat')?.dataset.player;
     clearHeroDetailHover();
     this.rosterEl.replaceChildren();
     const nextPlayer = this.nextActiveSeat(snapshot, snapshot.turn);
@@ -1134,6 +1138,7 @@ export class MultiplayerBattleScreen extends Screen {
       );
       const hero = getHero(player.heroId);
       target.tabIndex = targetable || index !== snapshot.viewer ? 0 : -1;
+      let restoreHeroDetail: (() => void) | null = null;
       if (index !== snapshot.viewer) {
         const currentCost = Math.max(
           0,
@@ -1147,7 +1152,8 @@ export class MultiplayerBattleScreen extends Screen {
           'aria-label',
           `${targetable ? '选择' : '玩家'} ${player.userName}，ID ${player.userId}，${hero.name}，技能${hero.powerName}，${currentCost}费；悬停查看说明`
         );
-        attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+        const detailHover = attachHeroDetailHover(target, () => ({ hero, cost: currentCost }));
+        if (hoveredPlayer === String(index)) restoreHeroDetail = detailHover.show;
       }
       const heroPortrait = new Image();
       heroPortrait.src = assetUrl(hero.portrait);
@@ -1201,6 +1207,7 @@ export class MultiplayerBattleScreen extends Screen {
       );
       item.append(target);
       this.rosterEl?.append(item);
+      restoreHeroDetail?.();
     });
     this.view?.bindSeatHudElements(
       Array.from(this.rosterEl.children).filter(
@@ -1980,19 +1987,13 @@ export class MultiplayerBattleScreen extends Screen {
     );
     if (!entry) return;
     this.activityEntries.push(entry);
-    this.renderActivityLedger();
+    if (this.activityEntries.length > 80) this.activityEntries.shift();
+    if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
   }
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
-    clearActivityHover();
-    this.activityLedgerEl.replaceChildren();
-    for (const entry of this.activityEntries.slice(-80)) {
-      const item = this.el('li', undefined, entry.text);
-      if (entry.references) attachActivityHover(this.activityLedgerEl, item, entry.references);
-      this.activityLedgerEl.append(item);
-    }
-    this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
+    replaceActivityEntries(this.activityLedgerEl, this.activityEntries);
   }
 
   private visualSeat(globalPlayer: number, snapshot: MultiplayerSnapshot): number {
@@ -2134,6 +2135,7 @@ export class MultiplayerBattleScreen extends Screen {
     document.removeEventListener('pointerdown', this.handleHeroEmoteLightDismiss, true);
     document.removeEventListener('contextmenu', this.handleHeroEmoteLightDismiss, true);
     this.pause?.unbind();
+    clearActivityHover();
     clearHeroDetailHover();
     this.view?.dispose();
     const net = this.transport;

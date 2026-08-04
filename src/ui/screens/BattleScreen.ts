@@ -47,9 +47,10 @@ import { seatScreenPosition, seatWorldPosition } from '../scene/SeatLayout';
 import { TutorialOverlay } from '../scene/TutorialOverlay';
 import {
   type ActivityEntry,
-  attachActivityHover,
+  appendActivityEntry,
   clearActivityHover,
   formatActivity,
+  replaceActivityEntries,
 } from './ActivityFormatter';
 import {
   type HandCountDelta,
@@ -356,6 +357,7 @@ export class BattleScreen extends Screen {
     this.revealDialog?.close();
     this.revealDialog?.remove();
     this.pause?.unbind();
+    clearActivityHover();
     clearHeroDetailHover();
     this.view?.dispose();
     audio.stopTavernAmbience();
@@ -1770,21 +1772,15 @@ export class BattleScreen extends Screen {
 
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
-    clearActivityHover();
-    this.activityLedgerEl.replaceChildren();
-    for (const entry of this.activityEntries.slice(-80)) {
-      const item = this.el('li', undefined, entry.text);
-      if (entry.references) attachActivityHover(this.activityLedgerEl, item, entry.references);
-      this.activityLedgerEl.append(item);
-    }
-    this.activityLedgerEl.scrollTop = this.activityLedgerEl.scrollHeight;
+    replaceActivityEntries(this.activityLedgerEl, this.activityEntries);
   }
 
   private recordActivity(event: GameEvent): void {
     const entry = formatActivity(event, playerLabel);
     if (!entry) return;
     this.activityEntries.push(entry);
-    this.renderActivityLedger();
+    if (this.activityEntries.length > 80) this.activityEntries.shift();
+    if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
   }
 
   private showColorBroadcast(player: number, color: string): Promise<void> {
