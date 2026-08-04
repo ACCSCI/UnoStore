@@ -407,11 +407,15 @@ export function appendActivityEntry(
   item.textContent = entry.text;
   if (entry.references) attachActivityHover(container, item, entry.references);
   container.append(item);
-  while (container.childElementCount > limit) {
-    const oldest = container.firstElementChild;
-    if (!oldest) break;
-    if (oldest.querySelector('[aria-describedby]')) clearActivityHover();
-    oldest.remove();
+  // 阅读者向上翻阅时不能删除顶部记录，否则即使 scrollTop 数值不变，
+  // 当前可见内容也会因为失去上方高度而整体位移。回到底部后再统一裁剪。
+  if (followNewEntries) {
+    while (container.childElementCount > limit) {
+      const oldest = container.firstElementChild;
+      if (!oldest) break;
+      if (oldest.querySelector('[aria-describedby]')) clearActivityHover();
+      oldest.remove();
+    }
   }
   container.scrollTop = followNewEntries ? container.scrollHeight : previousScrollTop;
 }

@@ -54,6 +54,7 @@ import {
   clearActivityHover,
   formatActivity,
   replaceActivityEntries,
+  shouldFollowActivityLedger,
 } from './ActivityFormatter';
 import {
   type HandCountDelta,
@@ -340,6 +341,7 @@ export class BattleScreen extends Screen {
     this.syncLocalTurnDeadline();
     this.turnTimeoutInterval = window.setInterval(() => this.refreshTurnTimer(), 250);
     this.activityEntries.push({ text: `对局开始 · ${this.playerCount} 人` });
+    this.renderActivityLedger();
     this.refreshUI();
     this.cancelUiIntegrityCheck = scheduleBattleUiIntegrity(this.root);
     this.showIntro();
@@ -1434,7 +1436,6 @@ export class BattleScreen extends Screen {
       button.setAttribute('aria-disabled', String(ownHeroEmote ? false : !legal));
     }
     this.refreshTargetingHud();
-    this.refreshLedger();
     if (this.handSummaryEl) {
       if (p.active) {
         renderHandCountLabel(
@@ -1825,11 +1826,6 @@ export class BattleScreen extends Screen {
     });
   }
 
-  private refreshLedger(): void {
-    if (!(this.session && this.activityLedgerEl)) return;
-    this.renderActivityLedger();
-  }
-
   private renderActivityLedger(): void {
     if (!this.activityLedgerEl) return;
     replaceActivityEntries(this.activityLedgerEl, this.activityEntries);
@@ -1838,9 +1834,12 @@ export class BattleScreen extends Screen {
   private recordActivity(event: GameEvent): void {
     const entry = formatActivity(event, playerLabel);
     if (!entry) return;
+    const readerAtEnd = !this.activityLedgerEl || shouldFollowActivityLedger(this.activityLedgerEl);
     this.activityEntries.push(entry);
-    if (this.activityEntries.length > 80) this.activityEntries.shift();
     if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
+    if (readerAtEnd) {
+      while (this.activityEntries.length > 80) this.activityEntries.shift();
+    }
   }
 
   private showColorBroadcast(player: number, color: string): Promise<void> {

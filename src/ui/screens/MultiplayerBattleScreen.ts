@@ -38,6 +38,7 @@ import {
   clearActivityHover,
   formatActivity,
   replaceActivityEntries,
+  shouldFollowActivityLedger,
 } from './ActivityFormatter';
 import { type BattleTransport, VibeHubBattleTransport } from './BattleTransport';
 import {
@@ -2042,9 +2043,12 @@ export class MultiplayerBattleScreen extends Screen {
       (player) => snapshot.players[player]?.userName ?? `玩家 ${player + 1}`
     );
     if (!entry) return;
+    const readerAtEnd = !this.activityLedgerEl || shouldFollowActivityLedger(this.activityLedgerEl);
     this.activityEntries.push(entry);
-    if (this.activityEntries.length > 80) this.activityEntries.shift();
     if (this.activityLedgerEl) appendActivityEntry(this.activityLedgerEl, entry);
+    if (readerAtEnd) {
+      while (this.activityEntries.length > 80) this.activityEntries.shift();
+    }
   }
 
   private renderActivityLedger(): void {

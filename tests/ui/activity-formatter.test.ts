@@ -1,11 +1,15 @@
 import { expect, test } from 'bun:test';
 import type { GameEvent } from '../../src/game/core/events';
 import '../../src/game/hearth/cards';
-import { formatActivity, shouldFollowActivityLedger } from '../../src/ui/screens/ActivityFormatter';
+import {
+  appendActivityEntry,
+  formatActivity,
+  shouldFollowActivityLedger,
+} from '../../src/ui/screens/ActivityFormatter';
 
 const playerLabel = (player: number): string => `玩家${player + 1}`;
 
-test('对局记录只在读者仍处于底部时跟随新内容', () => {
+test('对局记录只有读者仍处于底部时才允许跟随并裁剪顶部历史', () => {
   expect(shouldFollowActivityLedger({ scrollTop: 160, clientHeight: 40, scrollHeight: 200 })).toBe(
     true
   );
@@ -18,6 +22,74 @@ test('对局记录只在读者仍处于底部时跟随新内容', () => {
   expect(shouldFollowActivityLedger({ scrollTop: 0, clientHeight: 80, scrollHeight: 80 })).toBe(
     true
   );
+});
+
+test('读者向上翻阅时新增记录不会裁掉顶部条目或改变视口位置', () => {
+  class FakeItem {
+    textContent = '';
+    parent: FakeLedger | null = null;
+
+    querySelector(): null {
+      return null;
+    }
+
+    remove(): void {
+      this.parent?.remove(this);
+    }
+  }
+
+  class FakeLedger {
+    readonly items: FakeItem[] = [];
+    scrollTop = 100;
+    clientHeight = 40;
+
+    get scrollHeight(): number {
+      return this.items.length * 20;
+    }
+
+    get childElementCount(): number {
+      return this.items.length;
+    }
+
+    get firstElementChild(): FakeItem | null {
+      return this.items[0] ?? null;
+    }
+
+    append(item: FakeItem): void {
+      item.parent = this;
+      this.items.push(item);
+    }
+
+    remove(item: FakeItem): void {
+      const index = this.items.indexOf(item);
+      if (index >= 0) this.items.splice(index, 1);
+    }
+  }
+
+  const ledger = new FakeLedger();
+  for (let index = 0; index < 80; index++) ledger.append(new FakeItem());
+  const firstVisibleHistory = ledger.firstElementChild;
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { createElement: () => new FakeItem() },
+  });
+
+  try {
+    appendActivityEntry(ledger as unknown as HTMLOListElement, { text: '新记录' });
+    expect(ledger.childElementCount).toBe(81);
+    expect(ledger.firstElementChild).toBe(firstVisibleHistory);
+    expect(ledger.scrollTop).toBe(100);
+
+    ledger.scrollTop = ledger.scrollHeight - ledger.clientHeight;
+    appendActivityEntry(ledger as unknown as HTMLOListElement, { text: '回到底部后的记录' });
+    expect(ledger.childElementCount).toBe(80);
+    expect(ledger.firstElementChild).not.toBe(firstVisibleHistory);
+    expect(ledger.scrollTop).toBe(ledger.scrollHeight);
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  }
 });
 
 test('随从攻击记录明确显示使用者、攻击者、目标和双方结果，并支持多牌悬停', () => {
