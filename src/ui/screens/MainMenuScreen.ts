@@ -1,4 +1,4 @@
-import { activeDeck, loadLoadoutProfile } from '../../game/loadout';
+import { activeDeck, battleDeckSizeIssue, loadLoadoutProfile } from '../../game/loadout';
 import { getNet } from '../../net';
 import { vibeHubErrorMessage } from '../../net/NetworkLayer';
 import { audio } from '../audio/AudioManager';
@@ -12,6 +12,8 @@ export class MainMenuScreen extends Screen {
   private accountStatusEl: HTMLElement | null = null;
   private loginButton: HTMLButtonElement | null = null;
   private multiplayerButton: HTMLButtonElement | null = null;
+  private localBattleButtons: HTMLButtonElement[] = [];
+  private deckWarningEl: HTMLElement | null = null;
 
   override async render(): Promise<void> {
     document.title = 'UnoStore · 双卡流冒险';
@@ -65,6 +67,7 @@ export class MainMenuScreen extends Screen {
       () => new SettingsPanel(this.root).show(),
       'btn btn-quiet'
     );
+    this.localBattleButtons = [btnStory, btnLocal];
     actions.append(btnStory, btnLocal, btnRules, this.multiplayerButton, btnSettings);
     if (import.meta.env.DEV) {
       const btnSimulatedOnline = this.btn(
@@ -73,8 +76,23 @@ export class MainMenuScreen extends Screen {
         'btn btn-quiet'
       );
       btnSimulatedOnline.title = '运行真实联机牌桌、房主权威动作和脱敏快照，不连接 VibeHub';
+      this.localBattleButtons.push(btnSimulatedOnline);
       actions.append(btnSimulatedOnline);
     }
+
+    this.deckWarningEl = this.el('aside', 'menu-deck-warning');
+    this.deckWarningEl.setAttribute('role', 'alert');
+    this.deckWarningEl.setAttribute('aria-live', 'polite');
+    this.deckWarningEl.append(
+      this.el('span'),
+      this.btn(
+        '去牌库调整',
+        () => void import('./LoadoutScreen').then((m) => new m.LoadoutScreen().enter()),
+        'btn btn-quiet'
+      )
+    );
+    this.deckWarningEl.hidden = true;
+    copy.appendChild(this.deckWarningEl);
 
     const deck = this.el('div', 'menu-deck');
     deck.setAttribute('aria-hidden', 'true');
@@ -91,6 +109,7 @@ export class MainMenuScreen extends Screen {
     shell.append(copy, deck);
     wrap.appendChild(shell);
     this.root.appendChild(wrap);
+    this.refreshBattleAccess();
 
     audio.playMusic('/assets/audio/music/menu_theme.mp3');
     const net = getNet();
@@ -136,10 +155,7 @@ export class MainMenuScreen extends Screen {
       this.loginButton = this.btn('登录 VibeHub', () => void this.login(), 'btn btn-secondary');
       this.accountEl.append(this.loginButton);
     }
-    if (this.multiplayerButton) {
-      this.multiplayerButton.disabled = !user;
-      this.multiplayerButton.title = user ? '' : '登录 VibeHub 后可进入联机大厅';
-    }
+    this.refreshBattleAccess();
   }
 
   private async login(): Promise<void> {
@@ -163,12 +179,17 @@ export class MainMenuScreen extends Screen {
       this.setAccountStatus(
         conflicts > 0 ? `已处理 ${conflicts} 项存档冲突并完成同步。` : '本地与云端存档已同步。'
       );
+      this.refreshBattleAccess();
     } catch (error) {
       this.setAccountStatus(`云存档检查失败：${this.message(error)}`, true);
     }
   }
 
   private openLocalBattleDialog(simulateOnline = false): void {
+    if (battleDeckSizeIssue()) {
+      this.refreshBattleAccess();
+      return;
+    }
     const dialog = document.createElement('dialog');
     dialog.className = 'local-battle-dialog';
     dialog.setAttribute('aria-labelledby', 'local-battle-title');
@@ -239,6 +260,25 @@ export class MainMenuScreen extends Screen {
     if (!this.accountStatusEl) return;
     this.accountStatusEl.textContent = message;
     this.accountStatusEl.classList.toggle('error', error);
+  }
+
+  private refreshBattleAccess(): void {
+    const issue = battleDeckSizeIssue();
+    for (const button of this.localBattleButtons) {
+      button.disabled = issue !== null;
+      if (button.dataset.defaultTitle === undefined) button.dataset.defaultTitle = button.title;
+      button.title = issue ?? button.dataset.defaultTitle ?? '';
+    }
+    if (this.multiplayerButton) {
+      const loggedIn = Boolean(getNet().user);
+      this.multiplayerButton.disabled = issue !== null || !loggedIn;
+      this.multiplayerButton.title = issue ?? (loggedIn ? '' : '登录 VibeHub 后可进入联机大厅');
+    }
+    if (this.deckWarningEl) {
+      this.deckWarningEl.hidden = issue === null;
+      const copy = this.deckWarningEl.querySelector('span');
+      if (copy) copy.textContent = issue ?? '';
+    }
   }
 
   private message(error: unknown): string {

@@ -136,6 +136,8 @@ test('炉石牌效果在 AI 对局中实际生效（伤害/抽牌）', () => {
   const state = createGame(2, deck.cardIds, 7);
   const rng = new Rng(7);
   const ai = new HardCombo(new Rng(42));
+  // 牌组缩短后该 seed 会在自然解冻前结束；直接给基础费用，专注验证 AI 会实际结算炉石效果。
+  for (const player of state.players) player.free = 3;
   let steps = 0;
   let effectApplied = false;
   while (state.phase !== 'gameOver' && steps < 300) {
